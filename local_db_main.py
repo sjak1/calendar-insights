@@ -158,6 +158,12 @@ table_contexts = {
     use the attribute explicitly: e.g., event_date.ZONEDATE for month/day filtering; for exact UTC timestamp use
     DATE '1970-01-01' + NUMTODSINTERVAL(event_date.UTCMS/1000, 'SECOND'). Always qualify with table alias.
     This is the PRIMARY table for all event/request management and tracking.
+    CLOUD_DATE columns: EVENT_DATE, START_DATE, START_TIME, END_TIME
+    CLOUD_DATE UDT attributes:
+      - UTCMS (NUMBER epoch milliseconds UTC)
+      - ZONEID (VARCHAR2 timezone id)
+      - ZONEDATE (DATE component)
+      - ZONETIME (VARCHAR2 time component)
     """,
     
     "t_request_opportunity": """
@@ -166,6 +172,7 @@ table_contexts = {
     customer names, status, probability of close, quarter of close, 
     business development data, opportunity types, sales cycle info.
     Links to m_request_master via request_master_id. Key for revenue analysis.
+    CLOUD_DATE columns: None
     """,
     
     "t_request_agenda": """
@@ -176,6 +183,12 @@ table_contexts = {
     text_field_3 (dietary restrictions in quotes like "Allergies - list special instructions", "Kosher").
     Use LIKE patterns for searching agenda items and dietary restrictions.
     Links to m_request_master. Manages the overall agenda structure for events.
+    CLOUD_DATE columns: START_TIME, ACTIVITY_DATE, ACTIVITY_END_DATE, ACTIVITY_START_DATE, END_TIME
+    CLOUD_DATE UDT attributes:
+      - UTCMS (NUMBER epoch milliseconds UTC)
+      - ZONEID (VARCHAR2 timezone id)
+      - ZONEDATE (DATE component)
+      - ZONETIME (VARCHAR2 time component)
     """,
     
     "t_request_agenda_details": """
@@ -191,6 +204,7 @@ table_contexts = {
     text_field_4 (company notes like "AllianceIT Notes", "PayPal Notes"), text_field_5 (additional attendees). 
     Note: meeting_id and customer_company are often NULL. For text_field_3, use LIKE '%Halal%' patterns for dietary searches.
     Links to t_request_agenda and m_request_master. Rich meeting context data.
+    CLOUD_DATE columns: None
     """,
     
     "t_request_agenda_presenter": """
@@ -202,6 +216,7 @@ table_contexts = {
     text_field_2 (email addresses), text_field_3 (full job titles like "CIO - Chief Information Officer", "CISO - Chief Information Security Officer", "CRO - Chief Risk Officer", "COO - Chief Operating Officer").
     IMPORTANT: For text_field_3 searches, use LIKE '%CIO%' or '%CISO%' patterns, not exact matches.
     Links to t_request_agenda and m_request_master. Manages speaker assignments.
+    CLOUD_DATE columns: None
     """,
     
     "t_event_activity_day": """
@@ -220,6 +235,12 @@ table_contexts = {
       - For local time, wrap in FROM_TZ(..., 'UTC') AT TIME ZONE e.event_date.ZONEID.
       - Do NOT ORDER BY e.event_date (object). ORDER BY e.event_date.ZONEDATE or the computed UTC timestamp.
       - Always qualify columns with alias (e.).
+    CLOUD_DATE columns: EVENT_DATE, ARRIVAL_TS, ADJOURN_TS
+    CLOUD_DATE UDT attributes:
+      - UTCMS (NUMBER epoch milliseconds UTC)
+      - ZONEID (VARCHAR2 timezone id)
+      - ZONEDATE (DATE component)
+      - ZONETIME (VARCHAR2 time component)
     """,
     
     "m_user_role": """
@@ -227,6 +248,7 @@ table_contexts = {
     Contains: User IDs, role IDs, request assignments, category info,
     access control, user permissions, role-based access to requests.
     Links to m_request_master. Manages user access and permissions.
+    CLOUD_DATE columns: None
     """
 }
 
