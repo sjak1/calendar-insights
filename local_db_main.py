@@ -52,51 +52,69 @@ my_table = meta.tables['m_report_param_mapping']
 llm = OpenAI(
     temperature=0.7, 
     model="gpt-4.1-mini",
-    system_prompt="""You are a helpful SQL assistant for an Oracle database. 
+    system_prompt="""You are a SQL assistant for an Oracle database with CRITICAL RULES that MUST be followed.
 
-**CRITICAL ORACLE DATABASE RULES:**
-- NEVER END SQL STATEMENTS WITH SEMICOLON (;) — THIS WILL CAUSE ERRORS
-- The Oracle driver will fail if you add semicolons to SQL statements
-- Use `FETCH FIRST n ROWS ONLY` or `WHERE ROWNUM <= n` instead of LIMIT/OFFSET  
-- Never use INFORMATION_SCHEMA (not in oracle)  
-- Table/column names are UPPERCASE unless quoted  
-- Strings use single quotes `'value'`  
-- Prefer `NVL(expr1, expr2)` over COALESCE/IFNULL  
-- Use explicit JOINs (`INNER JOIN`, `LEFT JOIN`)  
-- For dates: `TO_DATE('YYYY-MM-DD', 'YYYY-MM-DD')` or `SYSDATE`  
-- Default to `WHERE ROWNUM <= 10` when limiting  
+═══════════════════════════════════════════════════════════════════
+🚨 CRITICAL RULES - VIOLATIONS WILL CAUSE QUERY FAILURES 🚨
+═══════════════════════════════════════════════════════════════════
+
+1. ❌ NO SEMICOLONS - NEVER end SQL with semicolon (;) - Oracle driver will reject it
+   ✅ Correct: SELECT * FROM table WHERE ROWNUM <= 10
+   ❌ Wrong: SELECT * FROM table WHERE ROWNUM <= 10;
+
+2. ❌ NO DIRECT ORDERING ON CLOUD_DATE UDT - Will cause ORA-22950 error
+   ✅ Correct: ORDER BY e.event_date.ZONEDATE
+   ❌ Wrong: ORDER BY e.event_date
+   
+   🔥 CLOUD_DATE columns (MUST use .ZONEDATE for ORDER BY):
+   - t_event_activity_day: EVENT_DATE, ARRIVAL_TS, ADJOURN_TS
+   - t_request_agenda: START_TIME, ACTIVITY_DATE, ACTIVITY_END_DATE, ACTIVITY_START_DATE, END_TIME  
+   - m_request_master: EVENT_DATE, START_DATE, START_TIME, END_TIME
+   
+   For comparisons/filters: column.ZONEDATE
+   For sorting: ORDER BY column.ZONEDATE
+   For UTC timestamp: DATE '1970-01-01' + NUMTODSINTERVAL(column.UTCMS/1000,'SECOND')
+
+3. 📋 TABLE SELECTION FOR "EVENTS" QUERIES:
+   ✅ Default to: m_request_master (main events table with event names, status, POC)
+   ⚠️ Only use t_event_activity_day for: daily activity schedules, arrival/adjourn times
+
+4. 🗓️ DATE FILTERING WITH CLOUD_DATE:
+   - When comparing or filtering dates from CLOUD_DATE columns (e.g., start_date, event_date):
+     * Use the scalar attribute: column.ZONEDATE
+     * For current month: TRUNC(column.ZONEDATE, 'MM') = TRUNC(SYSDATE, 'MM')
+     * For ranges: column.ZONEDATE BETWEEN TRUNC(SYSDATE, 'MM') AND LAST_DAY(SYSDATE)
+   - Avoid EXTRACT on the raw UDT; always reference the scalar attribute first.
+   - Assign a table alias (e.g., m.start_date.ZONEDATE) when the table has one.
+   
+═══════════════════════════════════════════════════════════════════
+
+**ORACLE SYNTAX RULES:**
+- Use `FETCH FIRST n ROWS ONLY` or `WHERE ROWNUM <= n` (NOT LIMIT)
+- Never use INFORMATION_SCHEMA (doesn't exist in Oracle)
+- Table/column names are UPPERCASE unless quoted
+- Strings use single quotes: 'value' not "value"
+- Use NVL(expr1, expr2) for null handling
+- Use explicit JOINs: INNER JOIN, LEFT JOIN
+- Dates: TO_DATE('YYYY-MM-DD', 'YYYY-MM-DD') or SYSDATE
 - Generate only SELECT/READ queries unless asked otherwise
 
-**CUSTOM FIELD SEARCH PATTERNS:**
-- Custom fields (text_field_X) often contain formatted strings, not simple values
-- ALWAYS use LIKE patterns for custom fields when user queries are vague or partial
-- Examples: "COO presenters" → `text_field_3 LIKE '%COO%'`, "Halal dietary" → `text_field_3 LIKE '%Halal%'`
-- Job titles are stored as "CIO - Chief Information Officer", not just "CIO"
-- Dietary restrictions are in JSON arrays like ["Halal"] or quoted strings
-- Company notes follow pattern "CompanyName Notes"
-- When user asks for partial matches, abbreviations, or general terms, prefer LIKE over exact equality
+**CUSTOM FIELD SEARCH (text_field_X, text_area_field_X):**
+- Custom fields contain formatted strings, not simple values
+- ALWAYS use LIKE for custom field searches:
+  * "CIO" → text_field_3 LIKE '%CIO%' (job titles stored as "CIO - Chief Information Officer")
+  * "Halal" → text_field_3 LIKE '%Halal%' (dietary in JSON arrays like ["Halal"])
+  * "COO presenters" → text_field_3 LIKE '%COO%'
+- Standard columns (first_name, last_name, email): use exact matches (=)
+- When in doubt with text_field_X: prefer LIKE over =
 
-**REMEMBER: NO SEMICOLONS AT THE END OF SQL STATEMENTS**
+**QUERY EXAMPLES:**
+✅ Good: SELECT id, event_name, status FROM m_request_master WHERE ROWNUM <= 10
+✅ Good: SELECT id, e.event_date.ZONEDATE as event_date FROM t_event_activity_day e ORDER BY e.event_date.ZONEDATE FETCH FIRST 10 ROWS ONLY
+✅ Good: SELECT * FROM t_request_agenda_presenter WHERE text_field_3 LIKE '%CIO%'
+❌ Bad: SELECT * FROM t_event_activity_day ORDER BY event_date; (semicolon + UDT ordering)
 
-**SMART SEARCH STRATEGY:**
-- For standard columns (first_name, last_name, email): Use exact matches when user provides full values
-- For custom fields (text_field_X): Default to LIKE patterns unless user specifies exact format
-- User says "CIO" → Use `LIKE '%CIO%'` (they likely mean the abbreviation within formatted text)
-- User says "John Smith" → Use `= 'John'` and `= 'Smith'` (exact name match)
-- User says "contains X" or "with X" → Always use LIKE patterns
-- When in doubt about custom fields, use LIKE - it's more forgiving and finds more results
-
-**UDT / OBJECT DATE RULES (CLOUD_DATE):**
-- Some date/time columns are UDTs (e.g., `event_date`, `start_time`, `end_time`).
-- NEVER compare or ORDER BY the object itself (e.g., `ORDER BY e.event_date`).
-- Use a scalar attribute instead:
-  - Day-level filters/sort: `e.event_date.ZONEDATE`
-  - Exact UTC timestamp: `DATE '1970-01-01' + NUMTODSINTERVAL(e.event_date.UTCMS/1000,'SECOND')`
-  - Local time: wrap with `FROM_TZ(...,'UTC') AT TIME ZONE e.event_date.ZONEID`
-- Always qualify with table aliases to avoid ambiguity.
-
-Focus on generating accurate Oracle SQL queries and provide clear explanations of results.
-NEVER END SQL STATEMENTS WITH SEMICOLON (;) — THIS WILL CAUSE ERRORS """
+Focus on accurate Oracle SQL generation. Double-check: no semicolons, CLOUD_DATE uses .ZONEDATE for ORDER BY."""
 )
 
 # Custom SQLDatabase that can modify generated SQL before execution
@@ -145,25 +163,31 @@ oracle_context = """
 # Table-specific context strings based on actual table analysis
 table_contexts = {
     "m_request_master": """
-    **MASTER REQUEST TABLE** - Central event management table (271 records).
-    Contains: Event names, formats (In-Person, Virtual), status, dates, locations, 
-    contact info (POC, email), technical requirements, custom fields (text_field_1-11, 
-    number_field_1-10, date_field_1-10, boolean_field_1-5, text_area_field_1-5),
-    dress codes, gift types, attendee counts, timezone info, event forms.
-    Custom fields contain: text_field_1 (company names like TikTok, Broadcom, Cencora), 
-    text_field_2 (company IDs), text_field_3 (JSON arrays of IDs). 
-    IMPORTANT: Use start_date, end_date for date queries (NOT event_date, start_time, end_time 
-    which are CLOUD_DATE UDT columns). CLOUD_DATE carries attributes: UTCMS (epoch ms UTC), ZONEID (IANA tz),
-    ZONEDATE (DATE), ZONETIME (string). Prefer start_date/end_date for filtering. If you must use CLOUD_DATE,
-    use the attribute explicitly: e.g., event_date.ZONEDATE for month/day filtering; for exact UTC timestamp use
-    DATE '1970-01-01' + NUMTODSINTERVAL(event_date.UTCMS/1000, 'SECOND'). Always qualify with table alias.
-    This is the PRIMARY table for all event/request management and tracking.
-    CLOUD_DATE columns: EVENT_DATE, START_DATE, START_TIME, END_TIME
-    CLOUD_DATE UDT attributes:
-      - UTCMS (NUMBER epoch milliseconds UTC)
-      - ZONEID (VARCHAR2 timezone id)
-      - ZONEDATE (DATE component)
-      - ZONETIME (VARCHAR2 time component)
+    🎯 **PRIMARY EVENTS TABLE** - USE THIS FOR "show me events" queries! (271 records)
+    
+    This is the MAIN table for event information. Contains:
+    - Event identification: id, event_name, event_code, status
+    - Event details: format (In-Person/Virtual), location, timezone
+    - Contact info: poc (Point of Contact), poc_email
+    - Dates: start_date, end_date (these are CLOUD_DATE UDT columns with .ZONEDATE scalar)
+      * For month-based filters: TRUNC(m.start_date.ZONEDATE, 'MM') = TRUNC(SYSDATE, 'MM')
+      * For ranges: m.start_date.ZONEDATE BETWEEN TRUNC(SYSDATE, 'MM') AND LAST_DAY(SYSDATE)
+    - Custom fields: text_field_1-11 (company names like TikTok, Broadcom), 
+      number_field_1-10, date_field_1-10, boolean_field_1-5, text_area_field_1-5
+    - Other: dress_code, gift_type, attendee_count, technical_requirements
+    
+    ⚠️ CLOUD_DATE UDT columns (require .ZONEDATE for ORDER BY / filters):
+    - EVENT_DATE, START_DATE, START_TIME, END_TIME
+    - Never ORDER BY these directly → causes ORA-22950 error
+    - Use: ORDER BY m.event_date.ZONEDATE (with table alias)
+    - UDT attributes: .UTCMS, .ZONEID, .ZONEDATE, .ZONETIME
+    
+    💡 WHEN TO USE THIS TABLE:
+    ✅ "Show me events" → SELECT id, event_name, status FROM m_request_master
+    ✅ "Event names and formats" → SELECT event_name, format FROM m_request_master
+    ✅ "Events this month" → SELECT id, event_name FROM m_request_master m WHERE TRUNC(m.start_date.ZONEDATE, 'MM') = TRUNC(SYSDATE, 'MM')
+    ✅ "Events for company X" → SELECT * FROM m_request_master WHERE text_field_1 LIKE '%X%'
+    ❌ Don't use for: daily activity schedules (use t_event_activity_day instead)
     """,
     
     "t_request_opportunity": """
@@ -220,27 +244,29 @@ table_contexts = {
     """,
     
     "t_event_activity_day": """
-    **EVENT ACTIVITY DAY TABLE** - Daily event activities (2,772 records).
-    Contains: Event dates, arrival/adjourn times, main room assignments,
-    daily activity tracking, event scheduling, timestamp data.
-    Links to m_request_master. Tracks day-by-day event activities.
-    Note: event_date is a CLOUD_DATE UDT with attributes:
-      - UTCMS (NUMBER epoch milliseconds UTC)
-      - ZONEID (VARCHAR2 timezone id)
-      - ZONEDATE (DATE component)
-      - ZONETIME (VARCHAR2 time component)
-    Guidance:
-      - For range filters (e.g., next month), use e.event_date.ZONEDATE in comparisons.
-      - For precise UTC timestamp, compute DATE '1970-01-01' + NUMTODSINTERVAL(e.event_date.UTCMS/1000,'SECOND').
-      - For local time, wrap in FROM_TZ(..., 'UTC') AT TIME ZONE e.event_date.ZONEID.
-      - Do NOT ORDER BY e.event_date (object). ORDER BY e.event_date.ZONEDATE or the computed UTC timestamp.
-      - Always qualify columns with alias (e.).
-    CLOUD_DATE columns: EVENT_DATE, ARRIVAL_TS, ADJOURN_TS
-    CLOUD_DATE UDT attributes:
-      - UTCMS (NUMBER epoch milliseconds UTC)
-      - ZONEID (VARCHAR2 timezone id)
-      - ZONEDATE (DATE component)
-      - ZONETIME (VARCHAR2 time component)
+    ⚠️ **EVENT ACTIVITY DAY TABLE** - Daily schedules only! (2,772 records)
+    
+    Contains: Daily activity dates, arrival/adjourn times, main room assignments.
+    Links to m_request_master (request_master_id).
+    
+    🔥 ALL columns are CLOUD_DATE UDT (require .ZONEDATE for ORDER BY):
+    - EVENT_DATE, ARRIVAL_TS, ADJOURN_TS
+    - NEVER ORDER BY e.event_date → causes ORA-22950 error
+    - ALWAYS ORDER BY e.event_date.ZONEDATE
+    - UDT attributes: .UTCMS, .ZONEID, .ZONEDATE, .ZONETIME
+    
+    💡 WHEN TO USE THIS TABLE:
+    ✅ "Daily activity schedules" → Use this table
+    ✅ "Arrival and adjourn times" → Use this table
+    ✅ "Main room assignments by day" → Use this table
+    ❌ "Show me events" → Use m_request_master instead!
+    ❌ "Event names/formats/status" → Use m_request_master instead!
+    
+    Example correct query:
+    SELECT e.id, e.event_date.ZONEDATE as activity_date, e.main_room
+    FROM t_event_activity_day e
+    ORDER BY e.event_date.ZONEDATE
+    FETCH FIRST 10 ROWS ONLY
     """,
     
     "m_user_role": """

@@ -2,6 +2,9 @@ import requests
 from openai import OpenAI
 import json
 from dotenv import load_dotenv
+from datetime import datetime
+
+from scripts.sqlite_qa import ask_sqlite
 
 load_dotenv()
 
@@ -84,6 +87,12 @@ tools = [
     },
     {
         "type": "function",
+        "name": "get_calendars",
+        "description": "Fetch schedules for the configured resource using BriefingIQ API (GET; no payload).",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
         "name": "get_resources",
         "description": "Fetch all resources of a specific resource type (e.g., Location, Presenter, Room) from BriefingIQ.",
         "parameters": {
@@ -96,15 +105,116 @@ tools = [
             },
             "required": ["resource_type_id"]
         }
-    }
+    },
+    {
+        "type": "function",
+        "name": "oracle_financial_stats",
+        "description": "Get the financial stats of a company for a particular year",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "year": {
+                    "type": "string",
+                    "description": "a valid calender year"
+                }
+            },
+            "required": ["year"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_fruits",
+        "description": "Get the list of fruits",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "type": "function",
+        "name": "add_fruit",
+        "description": "Add a fruit to the list",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fruit": {"type": "string", "description": "the fruit to add"}
+            },
+            "required": ["fruit"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_report_data",
+        "description": "Fetch admin report data for the configured tenant within an OPTIONAL date range. if no date range is provided leave it blank. lookupType can be used to scope the data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fromDate": {
+                    "type": "string",
+                    "description": "ISO-8601 timestamp for the start filter, e.g. 2025-11-11T15:18:27",
+                },
+                "toDate": {
+                    "type": "string",
+                    "description": "ISO-8601 timestamp for the end filter, e.g. 2025-11-11T16:18:27",
+                },
+                "lookupType": {
+                    "type": "string",
+                    "description": (
+                        "Optional lookup filter such as region, lineOfBusiness, customerIndustry, "
+                        "visitFocus, visitType, or companyName"
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "query_sqlite_snapshot",
+        "description": "Answer questions about the local SQLite snapshot built from Oracle views.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Natural language question to answer using the SQLite data."
+                }
+            },
+            "required": ["question"]
+        }
+    },
 ]
 
-'''tools.append({
-    "type": "function",
-    "name": "get_calendars",
-    "description": "Fetch calendars for the configured resource (GET; no payload).",
-    "parameters": {"type": "object", "properties": {}, "required": []},
-})'''
+fruits = ["apple","banana","guava","mango"]
+def get_fruits():
+    return fruits
+
+def add_fruit(fruit):
+    fruits.append(fruit)
+    return fruits
+
+def oracle_financial_stats(year):
+    if (year == "2024"):
+        return {
+           "profit": 1000000,
+            "revenue": 2000000,
+            "expenses": 1000000,
+            "net_income": 1000000,
+            "gross_profit": 1000000,
+            "gross_margin": 0.5,
+            "net_margin": 0.5,
+            "return_on_assets": 0.5,
+            "return_on_equity": 0.5,
+        }
+    elif (year == "2025"):
+        return {
+            "profit": 1500000,
+            "revenue": 2500000,
+            "expenses": 1500000,
+            "net_income": 500000,
+            "gross_profit": 1000000,
+            "gross_margin": 0.5,
+            "net_margin": 0.5,
+            "return_on_assets": 0.5,
+            "return_on_equity": 0.5,
+        }
 
 def get_horoscope(sign):
     return f"{sign}: next tuesday you will befriend a baby otter or a baby seal."
@@ -232,39 +342,79 @@ def get_resources(resource_type_id, headers=None):
     return response.json()
 
 
+def get_report_data(fromDate=None, toDate=None, lookupType=None, headers=None):
+    """
+    Fetch admin report data within the provided date range.
+    """
+    base_url = (
+        "https://briefings.briefingiq.com/"
+        "events/api/admin/reports/8facc792-add1-481f-97ef-d4d815a7cbe7/data"
+    )
+
+    params = {}
+    if fromDate:
+        params["fromDate"] = fromDate
+    if toDate:
+        params["toDate"] = toDate
+    if lookupType:
+        params["lookupType"] = lookupType
+
+    if headers is None or not headers:
+        headers = {
+            "accept": "application/json, text/plain, */*",
+            "authorization": (
+                "Bearer "
+                "eyJraWQiOiJCQzFMVUlVOE1HRHF1MUZ1LTdYZmZGSnlWQmI4Q2dsdWpRYWxybXg4Z2RzIiwiYWxnIjoiUlMyNTYifQ.eyJ2ZXIiOjEsImp0aSI6IkFULlVtLVVESnVENXhwc0lHcEJSRjhBa1UzZmloZFlNOGR6M2h4NWFxWGNSLU0ub2FyM2JwMHc5Znh5TTVCbzU2OTciLCJpc3MiOiJodHRwczovL3RyaWFsLTczMDExNDAub2t0YS5jb20vb2F1dGgyL2RlZmF1bHQiLCJhdWQiOiJhcGk6Ly9kZWZhdWx0IiwiaWF0IjoxNzYyODUzMTEzLCJleHAiOjE3NjI4NTY3MTMsImNpZCI6IjBvYXg3dGdsbXJZMEo0Ujd5Njk3IiwidWlkIjoiMDB1eDl3ZWVpYlhFMlA4c2g2OTciLCJzY3AiOlsib3BlbmlkIiwib2ZmbGluZV9hY2Nlc3MiLCJwcm9maWxlIl0sImF1dGhfdGltZSI6MTc2Mjg1MzExMCwic3ViIjoic3VyeWEueWFkYXZhbGxpQGJyaWVmaW5naXEuY29tIn0.tYCGtOk1ZnTf3AAH1ppGDYDR5jhkFAM4FcM17bEzE-8fRPqTmj-ejx6o57rQhrwHFVk3Odf1CsPMj7xELqeEq-11qy7kA7vxA5Ickq7VD-jDiwlyrWj09BwRYVj6Ziiroq-jw5aXmwGxA2E2Bp8z-E8b5S8yWRR55BryEsE9QyhATJ6_beoMOKlCDvW26UrVpOEaz9DNTBFpqJ0pG_ECVcIeikG8CuKjHRXjfP3zhzVMY9pDhVRsGOdRTeLPdfzwvBybyjNzxEmY6jBqJbjRZkwm9PMwSeLRyBtMkH9Tr0xyBuzdkLNCDCjOm-eQlcyiCgJzziWMq-SU38FtYh8ytg"
+            ),
+            "x-cloud-categoryid": "72DCAF42-C7C0-4006-8F31-7952185E5D61",
+            "x-cloud-categorytypeid": "CATEGORY_TYPE_BRIEFINGS",
+            "x-cloud-client-timezone": "Asia/Calcutta",
+            "x-cloud-context-timezone": "America/Los_Angeles",
+            "x-cloud-customerid": "131393dd-0449-4cca-8528-2fed6b79eaed",
+            "x-cloud-requested-timezone": "America/Los_Angeles",
+            "x_cloud_user": "surya.yadavalli@briefingiq.com",
+        }
+
+    response = requests.get(base_url, headers=headers, params=params or None)
+    response.raise_for_status()
+    return response.json()
+
+
 def process_query(query, schedule_headers=None):
 
     input_list = [
         {"role": "user", "content": query}
     ]
 
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        tools=tools,
-        input=input_list,
-    )
+    while True:  
 
-    print("HERE IS THE OUTPUT AT FIRST CALL : ")
-    print(response.output)
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            tools=tools,
+            input=input_list,
+        )
 
-    input_list += response.output
+        print("response interation : ", response.output)
 
-    for item in response.output:
-        if item.type == "function_call":
+        input_list += response.output
+
+        pending_calls = [item for item in response.output if item.type == "function_call"]
+
+        if not pending_calls:
+            break
+
+        for item in pending_calls:
             if item.name == "get_horoscope":
-
                 horoscope = get_horoscope(json.loads(item.arguments))
-                
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
                     "output": json.dumps({
-                    "horoscope": horoscope
+                        "horoscope": horoscope
                     })
                 })
 
-            elif item.name == "get_gdp": 
-
+            elif item.name == "get_gdp":
                 args = json.loads(item.arguments)
                 gdp = get_gdp(args["country"], args["year"])
 
@@ -272,12 +422,11 @@ def process_query(query, schedule_headers=None):
                     "type": "function_call_output",
                     "call_id": item.call_id,
                     "output": json.dumps({
-                        "gdp": gdp 
+                        "gdp": gdp
                     })
                 })
 
             elif item.name == "schedule_meeting":
-
                 args = json.loads(item.arguments)
                 try:
                     result = schedule_meeting(
@@ -329,12 +478,87 @@ def process_query(query, schedule_headers=None):
                     "output": json.dumps(tool_output)
                 })
 
+            elif item.name == "get_report_data":
+                args = json.loads(item.arguments)
+                try:
+                    result = get_report_data(
+                        args.get("fromDate"),
+                        args.get("toDate"),
+                        args.get("lookupType"),
+                        schedule_headers,
+                    )
+                    tool_output = {"get_report_data": result}
+                except Exception as e:
+                    tool_output = {"error": str(e)}
+
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_output)
+                })
+
+            elif item.name == "oracle_financial_stats":
+                args = json.loads(item.arguments)
+                try:
+                    result = oracle_financial_stats(args["year"])
+                    tool_output = {"oracle_financial_stats": result}
+                except Exception as e:
+                    tool_output = {"error": str(e)}
+
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_output)
+                })
+
+            elif item.name == "get_fruits":
+                try:
+                    result = get_fruits()
+                    tool_output = {"get_fruits": result}
+                except Exception as e:
+                    tool_output = {"error": str(e)}
+
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_output)
+                })
+
+            elif item.name == "add_fruit":
+                args = json.loads(item.arguments)
+                try:
+                    result = add_fruit(args["fruit"])
+                    tool_output = {"add_fruit": result}
+                except Exception as e:
+                    tool_output = {"error": str(e)}
+
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_output)
+                })
+
+            elif item.name == "query_sqlite_snapshot":
+                args = json.loads(item.arguments)
+                try:
+                    result = ask_sqlite(args["question"])
+                    tool_output = {"query_sqlite_snapshot": result}
+                except Exception as e:
+                    tool_output = {"error": str(e)}
+
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_output)
+                })
+
     print("Final input:")
     print(input_list)
 
+
     response = client.responses.create(
         model="gpt-4.1-mini",
-        instructions="respond based on the tool output as a professional ai assistant",
+        instructions=f"respond based on the tool output as a professional ai assistant",
         tools=tools,
         input=input_list,
     )
@@ -352,7 +576,13 @@ def handle_query(query, headers):
 if __name__ == "__main__":
     sample_query_1 = "fetch all resources for this id: EEF43C5C-B5E6-41C6-9634-8D812AC43FC8"
     sample_query_2 = "schedule a meeting for me on 2025-11-28 from 9:00 to 9:30 with comments that TEST67"
-    print(handle_query(sample_query_2, None))
+    sample_query_3 = "what is the GDP of USA in 2024? and what is my horoscope? and fetch all resources for this id: EEF43C5C-B5E6-41C6-9634-8D812AC43FC8"
+    sample_query_4 = "pull the stats for financial year 2024 and 2025. compare the stats and give me insights"
+    sample_query_5 = "check if the date december 10th 2025 is available if so then schedule a meeting for an 1hr of any time on that day with comments that TEST6767"
+    sample_query_6 = "check if jackfruit is in the list of fruits if not then add it to the list"
+    sample_query_7 = "list fruits"
+    sampla_query_8 = "show me the report data from october 5th to november 10th and break it down by line of business."
+    print(handle_query(sampla_query_8, None))
 
 
 
