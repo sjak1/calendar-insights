@@ -7,3 +7,6 @@ venv
 /package
 ./package
 package
+# Log files
+logs/
+*.log

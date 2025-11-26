@@ -4,3 +4,6 @@ requests
 openai
 python-dotenv
 pydantic
+pydantic-core
+sqlalchemy
+oracledb

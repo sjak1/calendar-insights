@@ -4,6 +4,11 @@ from fastapi.responses import FileResponse
 from get_gdp import handle_query
 from pydantic import BaseModel
 import os
+from logging_config import setup_logging, get_logger
+
+# Setup logging for FastAPI
+setup_logging()
+logger = get_logger(__name__)
 
 app = FastAPI()
 
@@ -19,6 +24,7 @@ class QueryPayload(BaseModel):
 @app.get("/")
 async def root():
     """Serve the UI"""
+    logger.info("Root endpoint accessed")
     static_file = os.path.join(static_dir, "index.html")
     if os.path.exists(static_file):
         return FileResponse(static_file)
@@ -28,5 +34,11 @@ async def root():
 async def process_query(payload: QueryPayload):
     query = payload.query
     headers = payload.headers
-    result = handle_query(query, headers)
-    return {"message": result}
+    logger.info(f"Processing query: {query[:100]}...")  # Log first 100 chars
+    try:
+        result = handle_query(query, headers)
+        logger.info("Query processed successfully")
+        return {"message": result}
+    except Exception as e:
+        logger.error(f"Error processing query: {e}", exc_info=True)
+        raise

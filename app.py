@@ -1,7 +1,9 @@
 from flask import Flask, request, render_template_string
 from local_db_main import query_engine
+from logging_config import get_logger
 
 app = Flask(__name__)
+logger = get_logger(__name__)
 
 PAGE = """
 <!doctype html>
@@ -64,16 +66,20 @@ def home():
             try:
                 # Append a short guard instruction to avoid semicolons in generated SQL
                 q_guarded = q + "\n\nNote: Do NOT end SQL statements with a semicolon (;) — driver will error."
-                print(q_guarded)
+                logger.info(f"Processing query: {q}")
                 resp = query_engine.query(q_guarded)
                 answer_text = str(resp)
-                print(answer_text)
+                logger.info(f"Query response received, length: {len(answer_text)} characters")
                 try:
                     meta = getattr(resp, "metadata", None) or {}
                     sql_text = meta.get("sql_query") or meta.get("sql") or None
-                except Exception:
+                    if sql_text:
+                        logger.debug(f"Generated SQL: {sql_text}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract SQL metadata: {e}")
                     sql_text = None
             except Exception as e:
+                logger.error(f"Error processing query: {e}", exc_info=True)
                 error_text = str(e)
         else:
             error_text = "Please enter a question."

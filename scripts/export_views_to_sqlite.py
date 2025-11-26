@@ -16,7 +16,7 @@ import pathlib
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 import oracledb  # type: ignore
 from sqlalchemy import create_engine, text
@@ -34,29 +34,62 @@ VIEWS = [
 ischema_names.setdefault("CLOUD_DATE", Date)
 
 
-def normalize_value(value: Any) -> Any:
+def _normalize_cloud_date(column_name: str, value: oracledb.DbObject) -> Tuple[Any, Dict[str, Any]]:
+    """Normalize Oracle CLOUD_DATE objects to friendlier SQLite values."""
+    extras: Dict[str, Any] = {}
+    zonedate = getattr(value, "ZONEDATE", None)
+    zonetime = getattr(value, "ZONETIME", None)
+    zoneid = getattr(value, "ZONEID", None)
+    utcms = getattr(value, "UTCMS", None)
+
+    lower_name = column_name.lower()
+    base: Union[str, None] = None
+
+    if zonedate:
+        date_str = zonedate.date().isoformat() if isinstance(zonedate, datetime) else zonedate.isoformat()
+        extras[f"{column_name}_date"] = date_str
+        if base is None:
+            if lower_name.endswith("date"):
+                base = date_str
+
+    if zonetime:
+        extras[f"{column_name}_time"] = zonetime
+        if base is None and lower_name.endswith("time"):
+            base = zonetime
+
+    if zoneid:
+        extras[f"{column_name}_zone"] = zoneid
+
+    if utcms is not None:
+        try:
+            extras[f"{column_name}_utcms"] = int(utcms)
+        except (TypeError, ValueError):
+            extras[f"{column_name}_utcms"] = utcms
+
+    if base is None:
+        parts = []
+        if zonedate:
+            parts.append(zonedate.isoformat())
+        if zonetime:
+            parts.append(zonetime)
+        base = "T".join(parts) if parts else None
+
+    return base, extras
+
+
+def normalize_value(column_name: str, value: Any) -> Tuple[Any, Dict[str, Any]]:
     """Convert Oracle-specific values into types SQLite can store."""
     if isinstance(value, oracledb.DbObject):
-        zonedate = getattr(value, "ZONEDATE", None)
-        zonetime = getattr(value, "ZONETIME", None)
-        zoneid = getattr(value, "ZONEID", None)
-        if zonedate:
-            base = zonedate.isoformat()
-            if zonetime:
-                base = f"{base}T{zonetime}"
-            if zoneid:
-                return f"{base} [{zoneid}]"
-            return base
-        return None
+        return _normalize_cloud_date(column_name, value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return value.isoformat(), {}
     if isinstance(value, date):
-        return value.isoformat()
+        return value.isoformat(), {}
     if isinstance(value, Decimal):
-        return float(value)
+        return float(value), {}
     if isinstance(value, bool):
-        return int(value)
-    return value
+        return int(value), {}
+    return value, {}
 
 
 def infer_sqlite_type(values: Iterable[Any]) -> str:
@@ -77,13 +110,24 @@ def infer_sqlite_type(values: Iterable[Any]) -> str:
 def fetch_view_rows(engine, view_name: str) -> Tuple[List[str], List[Dict[str, Any]]]:
     with engine.connect() as conn:
         result = conn.execute(text(f"SELECT * FROM {view_name}"))
-        columns = list(result.keys())
+        base_columns = list(result.keys())
+        extra_columns: List[str] = []
         rows = []
         for row in result:
-            normalized = {
-                key: normalize_value(value) for key, value in row._mapping.items()
-            }
+            normalized: Dict[str, Any] = {}
+            for key, value in row._mapping.items():
+                base_value, extras = normalize_value(key, value)
+                normalized[key] = base_value
+                for extra_key, extra_value in extras.items():
+                    normalized[extra_key] = extra_value
+                    if extra_key not in extra_columns:
+                        extra_columns.append(extra_key)
             rows.append(normalized)
+        columns = base_columns + extra_columns
+        # ensure every row has all columns
+        for row in rows:
+            for column in columns:
+                row.setdefault(column, None)
         return columns, rows
 
 

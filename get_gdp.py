@@ -2,13 +2,35 @@ import requests
 from openai import OpenAI
 import json
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, date
 
 from scripts.sqlite_qa import ask_sqlite
+from logging_config import get_logger
 
 load_dotenv()
 
 client = OpenAI()
+logger = get_logger(__name__)
+
+
+def json_dumps_safe(obj):
+    """
+    Safely serialize objects to JSON, converting datetime and date objects to ISO format strings.
+    Handles datetime/date objects and other non-serializable types that may come from database queries.
+    """
+    def default_serializer(o):
+        if isinstance(o, (datetime, date)):
+            return o.isoformat()
+        # Try to use model_dump if it's a Pydantic model
+        if hasattr(o, 'model_dump'):
+            return o.model_dump()
+        # Try to convert to dict if it has __dict__
+        if hasattr(o, '__dict__'):
+            return o.__dict__
+        # Handle other non-serializable types
+        return str(o)
+    
+    return json.dumps(obj, default=default_serializer)
 
 tools = [
     {
@@ -85,90 +107,83 @@ tools = [
             ]
         }
     },
+    # commented out because it is not used
+    #{
+    #    "type": "function",
+    #    "name": "get_calendars",
+    #    "description": "Fetch schedules for the configured resource using BriefingIQ API (GET; no payload).",
+    #    "parameters": {"type": "object", "properties": {}, "required": []},
+    #},
+    #{
+     #   "type": "function",
+      #  "name": "get_resources",
+       # "description": "Fetch all resources of a specific resource type (e.g., Location, Presenter, Room) from BriefingIQ.",
+       # "parameters": {
+        #    "type": "object",
+        #    "properties": {
+        #        "resource_type_id": {
+        #            "type": "string",
+        #            "description": "The unique ID of the resource type. Common IDs: EEF43C5C-B5E6-41C6-9634-8D812AC43FC8 (Location), f57aea4f-dc69-475b-b02d-96259c216699 (Presenter), EAC8F953-99D0-43DF-8E15-CA03F21EA92D (Room)"
+        #        }
+        #    },
+        #    "required": ["resource_type_id"]
+        #}
+    #},
+    #{
+    #    "type": "function",
+    #    "name": "oracle_financial_stats",
+    #    "description": "Get the financial stats of a company for a particular year",
+    #    "parameters": {
+    #        "type": "object",
+    #        "properties": {
+    #        "year": {
+    #            "type": "string",
+    #            "description": "a valid calender year"
+    #        }
+    #    },
+    #    "required": ["year"]
+    #}
+    #{
+    #    "type": "function",
+    #    "name": "add_fruit",
+    #    "description": "Add a fruit to the list",
+    #    "parameters": {
+    #        "type": "object",
+    #        "properties": {
+    #            "fruit": {"type": "string", "description": "the fruit to add"}
+    #        },
+    #        "required": ["fruit"]
+    #    }
+    #},
+    #{
+    #    "type": "function",
+    #    "name": "get_report_data",
+    #    "description": "Fetch admin report data for the configured tenant within an OPTIONAL date range. if no date range is provided leave it blank. lookupType can be used to scope the data.",
+    #    "parameters": {
+    #        "type": "object",
+    #        "properties": {
+    #            "fromDate": {
+    #                "type": "string",
+    #                "description": "ISO-8601 timestamp for the start filter, e.g. 2025-11-11T15:18:27",
+    #            },
+    #            "toDate": {
+    #                "type": "string",
+    #                "description": "ISO-8601 timestamp for the end filter, e.g. 2025-11-11T16:18:27",
+    #            },
+    #            "lookupType": {
+    #                "type": "string",
+    #                "description": (
+    #                    "Optional lookup filter such as region, lineOfBusiness, customerIndustry, "
+    #                    "visitFocus, visitType, or companyName"
+    #                ),
+    #            },
     {
         "type": "function",
-        "name": "get_calendars",
-        "description": "Fetch schedules for the configured resource using BriefingIQ API (GET; no payload).",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
-        "name": "get_resources",
-        "description": "Fetch all resources of a specific resource type (e.g., Location, Presenter, Room) from BriefingIQ.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "resource_type_id": {
-                    "type": "string",
-                    "description": "The unique ID of the resource type. Common IDs: EEF43C5C-B5E6-41C6-9634-8D812AC43FC8 (Location), f57aea4f-dc69-475b-b02d-96259c216699 (Presenter), EAC8F953-99D0-43DF-8E15-CA03F21EA92D (Room)"
-                }
-            },
-            "required": ["resource_type_id"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "oracle_financial_stats",
-        "description": "Get the financial stats of a company for a particular year",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "year": {
-                    "type": "string",
-                    "description": "a valid calender year"
-                }
-            },
-            "required": ["year"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_fruits",
-        "description": "Get the list of fruits",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
-        "name": "add_fruit",
-        "description": "Add a fruit to the list",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "fruit": {"type": "string", "description": "the fruit to add"}
-            },
-            "required": ["fruit"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_report_data",
-        "description": "Fetch admin report data for the configured tenant within an OPTIONAL date range. if no date range is provided leave it blank. lookupType can be used to scope the data.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "fromDate": {
-                    "type": "string",
-                    "description": "ISO-8601 timestamp for the start filter, e.g. 2025-11-11T15:18:27",
-                },
-                "toDate": {
-                    "type": "string",
-                    "description": "ISO-8601 timestamp for the end filter, e.g. 2025-11-11T16:18:27",
-                },
-                "lookupType": {
-                    "type": "string",
-                    "description": (
-                        "Optional lookup filter such as region, lineOfBusiness, customerIndustry, "
-                        "visitFocus, visitType, or companyName"
-                    ),
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
-        "name": "query_sqlite_snapshot",
-        "description": "Answer questions about the local SQLite snapshot built from Oracle views.",
+        "name": "query_database",
+        "description": (
+            "Use this when the user asks about meeting operations, attendees, or opportunity metrics. "
+            "It queries oracle db"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -380,13 +395,83 @@ def get_report_data(fromDate=None, toDate=None, lookupType=None, headers=None):
     return response.json()
 
 
-def process_query(query, schedule_headers=None):
+def format_response_as_markdown(response_text: str, input_list: list) -> str:
+    """
+    Format the response text as markdown, enhancing it with tables from SQL results.
+    """
+    formatted = response_text
+    
+    # Look for SQL query results in the input_list and format them as tables
+    for item in input_list:
+        # Handle both dict and Pydantic model objects
+        if hasattr(item, 'model_dump'):
+            # Pydantic model - convert to dict
+            item_dict = item.model_dump()
+        elif isinstance(item, dict):
+            # Already a dict
+            item_dict = item
+        else:
+            # Skip if we can't convert
+            continue
+        
+        if item_dict.get("type") == "function_call_output" and "output" in item_dict:
+            try:
+                output_data = json.loads(item_dict["output"])
+                if "query_database" in output_data:
+                    db_result = output_data["query_database"]
+                    if isinstance(db_result, dict) and "rows" in db_result and db_result["rows"]:
+                        rows = db_result["rows"]
+                        columns = db_result.get("columns", [])
+                        
+                        if rows and columns:
+                            # Create markdown table
+                            table_lines = []
+                            # Header
+                            table_lines.append("| " + " | ".join(columns) + " |")
+                            table_lines.append("| " + " | ".join(["---"] * len(columns)) + " |")
+                            # Rows (limit to 50 rows for readability)
+                            for row in rows[:50]:
+                                row_values = []
+                                for col in columns:
+                                    value = row.get(col, "")
+                                    # Convert to string and escape pipe characters
+                                    value_str = str(value) if value is not None else ""
+                                    value_str = value_str.replace("|", "\\|").replace("\n", " ")
+                                    # Truncate long values
+                                    if len(value_str) > 100:
+                                        value_str = value_str[:97] + "..."
+                                    row_values.append(value_str)
+                                table_lines.append("| " + " | ".join(row_values) + " |")
+                            
+                            if len(rows) > 50:
+                                table_lines.append(f"\n*Showing 50 of {len(rows)} rows*")
+                            
+                            table_md = "\n".join(table_lines)
+                            
+                            # Insert table after the response if it's not already there
+                            if table_md not in formatted:
+                                formatted += f"\n\n### Query Results\n\n{table_md}"
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # Skip if we can't parse the output
+                continue
+    
+    return formatted
 
+
+def process_query(query, schedule_headers=None):
+    logger.info(f"Starting process_query with query: {query[:100]}...")
     input_list = [
         {"role": "user", "content": query}
     ]
 
-    while True:  
+    iteration_count = 0
+    while True:
+        iteration_count += 1
+        logger.info(f"\n{'='*60}")
+        logger.info(f"ITERATION {iteration_count}")
+        logger.info(f"{'='*60}")
+        logger.info(f"Input to API:")
+        logger.info(f"{json_dumps_safe(input_list)}")
 
         response = client.responses.create(
             model="gpt-4.1-mini",
@@ -394,40 +479,43 @@ def process_query(query, schedule_headers=None):
             input=input_list,
         )
 
-        print("response interation : ", response.output)
+        logger.info(f"Raw API Response Output:")
+        logger.info(f"{json_dumps_safe(response.output)}")
 
         input_list += response.output
 
         pending_calls = [item for item in response.output if item.type == "function_call"]
 
         if not pending_calls:
+            logger.debug("No pending function calls, breaking loop")
             break
 
+        logger.info(f"Processing {len(pending_calls)} function call(s)")
         for item in pending_calls:
+            args = json.loads(item.arguments) if item.arguments else {}
+            logger.info(f"→ Calling function: {item.name} with args: {json.dumps(args, indent=2)}")
+            
             if item.name == "get_horoscope":
-                horoscope = get_horoscope(json.loads(item.arguments))
+                horoscope = get_horoscope(args)
+                output = {"horoscope": horoscope}
+                logger.info(f"✓ {item.name} returned: {json.dumps(output, indent=2)}")
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps({
-                        "horoscope": horoscope
-                    })
+                    "output": json_dumps_safe(output)
                 })
 
             elif item.name == "get_gdp":
-                args = json.loads(item.arguments)
                 gdp = get_gdp(args["country"], args["year"])
-
+                output = {"gdp": gdp}
+                logger.info(f"✓ {item.name} returned: {json.dumps(output, indent=2)}")
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps({
-                        "gdp": gdp
-                    })
+                    "output": json_dumps_safe(output)
                 })
 
             elif item.name == "schedule_meeting":
-                args = json.loads(item.arguments)
                 try:
                     result = schedule_meeting(
                         args["calendarFromDateIso"],
@@ -439,47 +527,60 @@ def process_query(query, schedule_headers=None):
                         schedule_headers,
                     )
                     tool_output = {"schedule_meeting": result}
+                    logger.info(f"✓ {item.name} returned: {json.dumps(tool_output, indent=2)}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "get_calendars":
                 try:
                     result = get_calendars()
                     tool_output = {"get_calendars": result}
+                    # Truncate large outputs for readability
+                    output_str = json.dumps(tool_output, indent=2)
+                    if len(output_str) > 500:
+                        logger.info(f"✓ {item.name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)")
+                    else:
+                        logger.info(f"✓ {item.name} returned: {output_str}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "get_resources":
-                args = json.loads(item.arguments)
                 try:
                     result = get_resources(
                         args["resource_type_id"],
                         schedule_headers
                     )
                     tool_output = {"get_resources": result}
+                    output_str = json.dumps(tool_output, indent=2)
+                    if len(output_str) > 500:
+                        logger.info(f"✓ {item.name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)")
+                    else:
+                        logger.info(f"✓ {item.name} returned: {output_str}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "get_report_data":
-                args = json.loads(item.arguments)
                 try:
                     result = get_report_data(
                         args.get("fromDate"),
@@ -488,85 +589,140 @@ def process_query(query, schedule_headers=None):
                         schedule_headers,
                     )
                     tool_output = {"get_report_data": result}
+                    output_str = json.dumps(tool_output, indent=2)
+                    if len(output_str) > 500:
+                        logger.info(f"✓ {item.name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)")
+                    else:
+                        logger.info(f"✓ {item.name} returned: {output_str}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "oracle_financial_stats":
-                args = json.loads(item.arguments)
                 try:
                     result = oracle_financial_stats(args["year"])
                     tool_output = {"oracle_financial_stats": result}
+                    logger.info(f"✓ {item.name} returned: {json.dumps(tool_output, indent=2)}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "get_fruits":
                 try:
                     result = get_fruits()
                     tool_output = {"get_fruits": result}
+                    logger.info(f"✓ {item.name} returned: {json.dumps(tool_output, indent=2)}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
             elif item.name == "add_fruit":
-                args = json.loads(item.arguments)
                 try:
                     result = add_fruit(args["fruit"])
                     tool_output = {"add_fruit": result}
+                    logger.info(f"✓ {item.name} returned: {json.dumps(tool_output, indent=2)}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
-            elif item.name == "query_sqlite_snapshot":
-                args = json.loads(item.arguments)
+            elif item.name == "query_database":
                 try:
                     result = ask_sqlite(args["question"])
-                    tool_output = {"query_sqlite_snapshot": result}
+                    tool_output = {"query_database": result}
+                    output_str = json.dumps(tool_output, indent=2, default=str)
+                    if len(output_str) > 1000:
+                        logger.info(f"✓ {item.name} returned: {output_str[:1000]}... (truncated, {len(output_str)} chars total)")
+                    else:
+                        logger.info(f"✓ {item.name} returned: {output_str}")
                 except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
                     tool_output = {"error": str(e)}
 
                 input_list.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": json.dumps(tool_output)
+                    "output": json_dumps_safe(tool_output)
                 })
 
-    print("Final input:")
-    print(input_list)
-
+    logger.info(f"\n{'='*60}")
+    logger.info(f"FINAL API CALL")
+    logger.info(f"{'='*60}")
+    logger.info(f"Final input list sent to API:")
+    logger.info(f"{json_dumps_safe(input_list)}")
+    logger.info(f"Completed {iteration_count} iteration(s), generating final response")
 
     response = client.responses.create(
         model="gpt-4.1-mini",
-        instructions=f"respond based on the tool output as a professional ai assistant",
-        tools=tools,
+        instructions="""You are a helpful assistant that explains query results to users. 
+
+CRITICAL: You MUST format ALL responses using markdown syntax. Your response will be rendered as markdown, so use proper markdown formatting:
+
+1. **Headers**: Use ## for main sections, ### for subsections
+   Example: ## GDP Information
+
+2. **Bold text**: Use **text** for emphasis on important numbers or facts
+   Example: The GDP is **$29,167.78 billion**
+
+3. **Lists**: Use - for bullet points or 1. 2. 3. for numbered lists
+   Example:
+   - GDP Growth: 2.8%
+   - GDP per capita: $86,601.28
+
+4. **Tables**: Use markdown table syntax for structured data
+   Example:
+   | Country | Year | GDP |
+   |---------|------|-----|
+   | USA | 2024 | $29,167.78B |
+
+5. **Code blocks**: Use ``` for SQL queries or code snippets
+   Example: ```sql
+   SELECT * FROM table
+   ```
+
+6. **Numbers and statistics**: Always use **bold** for key numbers and metrics
+
+ALWAYS format your response with proper markdown. Do NOT return plain text. Use headers, bold text, lists, and tables to make the response well-structured and readable.""",
         input=input_list,
     )
 
-    print("Final output:")
-    print(response.model_dump_json(indent=2))
-    print("\n" + response.output_text)
-    return response.output_text
+    logger.info(f"\n{'='*60}")
+    logger.info(f"FINAL OUTPUT")
+    logger.info(f"{'='*60}")
+    logger.info(f"Raw API Response (full):")
+    logger.info(f"{response.model_dump_json(indent=2)}")
+    logger.info(f"\nFinal Output Text:")
+    logger.info(f"{response.output_text}")
+    logger.info(f"{'='*60}\n")
+    
+    # Format response as markdown
+    formatted_response = format_response_as_markdown(response.output_text, input_list)
+    
+    logger.info(f"Query processed successfully, response length: {len(formatted_response)} characters")
+    return formatted_response
 
 
 def handle_query(query, headers):
@@ -581,8 +737,38 @@ if __name__ == "__main__":
     sample_query_5 = "check if the date december 10th 2025 is available if so then schedule a meeting for an 1hr of any time on that day with comments that TEST6767"
     sample_query_6 = "check if jackfruit is in the list of fruits if not then add it to the list"
     sample_query_7 = "list fruits"
-    sampla_query_8 = "show me the report data from october 5th to november 10th and break it down by line of business."
-    print(handle_query(sampla_query_8, None))
+    sample_query_8 = "show me the report data from october 5th to november 10th and break it down by line of business."
+    sample_query_9 = "how many meetings are submitted this month ?"
+    sample_query_10 = "chcek if ibm visit on dec 14 has all presenters assigned"
+    sample_query_11 = "how many meeting are submitted this month and last month compare?"
+    
+    # Database query prompts - Operations & Meeting Queries (based on actual DB data)
+    db_query_1 = "How many events does Nvidia have compared to Apple?"
+    db_query_2 = "What is the breakdown of events by region? Show me how many events are in EMEA, North America, LAD, and JAPAC."
+    db_query_3 = "Which events are assigned to Robert Smith and what are the customer names and start dates?"
+    db_query_4 = "How many events are there per line of business? Show me the count for NACI, Marketing, CAGBU, and Glueck."
+    db_query_5 = "List all events scheduled for November 2025 with their customer names, regions, and tech managers."
+    
+    # Database query prompts - Attendee Analysis Queries (based on actual DB data)
+    db_query_6 = "Show me how many decision makers each company has. Which companies have the most decision makers in their events?"
+    db_query_7 = "Show me all attendees for Barclays events, including their names, whether they are decision makers, influencers, or technical, and if they are remote or in-person."
+    db_query_8 = "What is the breakdown of attendees by remote versus in-person? Show me the total count for each."
+    db_query_9 = "Find all events where there are no decision makers in the attendee list. Show the customer name and event ID."
+    db_query_10 = "How many attendees are Internal versus External across all events?"
+    
+    # Database query prompts - Revenue & Opportunity Queries (based on actual DB data)
+    db_query_11 = "What is the total closed opportunity revenue across all events? Also show the average, minimum, and maximum."
+    db_query_12 = "Show me all opportunities with probability of close greater than 75%. Include customer name and the probability percentage."
+    db_query_13 = "What is the closed opportunity revenue for each company? Show me which companies have the highest revenue."
+    db_query_14 = "How many opportunities have closed revenue between $300,000 and $500,000? Show the customer names and revenue amounts."
+    
+    # Database query prompts - Complex Multi-View Queries (based on actual DB data)
+    db_query_15 = "Give me a complete analysis for Ford Motor: show all their events with dates, total attendees, number of decision makers, remote vs in-person count, and any associated revenue or opportunity data."
+    
+    logger.info("Running test query")
+    result = handle_query(db_query_15, None)
+    logger.info(f"Test query result: {result[:200]}...")  # Log first 200 chars
+
 
 
 
