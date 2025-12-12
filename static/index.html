@@ -296,6 +296,16 @@
     <script>
         const API_URL = '/process_query';
         
+        // Session management: get or create session ID
+        function getSessionId() {
+            let sessionId = localStorage.getItem('chat_session_id');
+            if (!sessionId) {
+                sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                localStorage.setItem('chat_session_id', sessionId);
+            }
+            return sessionId;
+        }
+        
         function addMessage(content, type = 'assistant') {
             const chatContainer = document.getElementById('chatContainer');
             const messageDiv = document.createElement('div');
@@ -355,6 +365,7 @@
             addLoadingIndicator();
             
             try {
+                const sessionId = getSessionId();
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: {
@@ -362,7 +373,8 @@
                     },
                     body: JSON.stringify({
                         query: query,
-                        headers: {}
+                        headers: {},
+                        session_id: sessionId
                     })
                 });
                 
@@ -374,6 +386,11 @@
                 
                 const data = await response.json();
                 addMessage(data.message, 'assistant');
+                
+                // Update session ID if server returned a new one
+                if (data.session_id && data.session_id !== sessionId) {
+                    localStorage.setItem('chat_session_id', data.session_id);
+                }
                 
             } catch (error) {
                 removeLoadingIndicator();

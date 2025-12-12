@@ -3,6 +3,7 @@ from openai import OpenAI
 import json
 from dotenv import load_dotenv
 from datetime import datetime, date
+import uuid
 
 from scripts.sqlite_qa import ask_sqlite
 from logging_config import get_logger
@@ -11,6 +12,10 @@ load_dotenv()
 
 client = OpenAI()
 logger = get_logger(__name__)
+
+# In-memory session storage: {session_id: [list of messages]}
+# Each message is a dict with role and content
+chat_sessions = {}
 
 
 def json_dumps_safe(obj):
@@ -33,21 +38,6 @@ def json_dumps_safe(obj):
     return json.dumps(obj, default=default_serializer)
 
 tools = [
-    {
-        "type": "function",
-        "name": "get_horoscope",
-        "description": "get today's horoscope for an astrological sign.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sign": {
-                    "type": "string",
-                    "description": "an astrological sign like taurus or aquarius",
-                },
-            },
-            "required": ["sign"],
-        },
-    },
     {
         "type": "function",
         "name": "get_gdp",
@@ -193,6 +183,50 @@ tools = [
                 }
             },
             "required": ["question"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "format_chart",
+        "description": (
+            "Format data as a Highcharts configuration for visualization. "
+            "Use when user asks for charts, graphs, bar charts, pie charts, or visual representations of data. "
+            "Call this AFTER getting data from query_database if user wants visualization."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["bar", "column", "line", "pie", "area"],
+                    "description": "Type of chart to generate"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Chart title"
+                },
+                "x_axis_data": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Labels for x-axis (categories)"
+                },
+                "series_data": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "data": {"type": "array", "items": {"type": "number"}}
+                        }
+                    },
+                    "description": "Data series for the chart"
+                },
+                "y_axis_title": {
+                    "type": "string",
+                    "description": "Y-axis label (optional)"
+                }
+            },
+            "required": ["chart_type", "title", "x_axis_data", "series_data"]
         }
     },
 ]
@@ -395,6 +429,108 @@ def get_report_data(fromDate=None, toDate=None, lookupType=None, headers=None):
     return response.json()
 
 
+def format_chart(chart_type, title, x_axis_data, series_data, y_axis_title=None):
+    """
+    Generate Highcharts configuration JSON for frontend rendering.
+    
+    Args:
+        chart_type: Type of chart (bar, column, line, pie, area)
+        title: Chart title
+        x_axis_data: List of category labels for x-axis
+        series_data: List of series objects with 'name' and 'data' keys
+        y_axis_title: Optional y-axis label
+    
+    Returns:
+        Dict with type='highcharts' and config for frontend to render
+    
+    Reference: https://api.highcharts.com/highcharts/
+    """
+    # Base config following Highcharts API structure
+    highcharts_config = {
+        "chart": {
+            "type": chart_type
+        },
+        "title": {
+            "text": title
+        },
+        "xAxis": {
+            "categories": x_axis_data,
+            "crosshair": True
+        },
+        "yAxis": {
+            "min": 0,
+            "title": {
+                "text": y_axis_title or "Value"
+            }
+        },
+        "tooltip": {
+            "shared": True
+        },
+        "series": series_data,
+        "plotOptions": {},
+        "legend": {
+            "enabled": len(series_data) > 1 if series_data else False
+        },
+        "credits": {
+            "enabled": False
+        }
+    }
+    
+    # Chart-type specific plotOptions
+    if chart_type in ["bar", "column"]:
+        highcharts_config["plotOptions"][chart_type] = {
+            "dataLabels": {
+                "enabled": True
+            },
+            "borderRadius": 3
+        }
+    elif chart_type == "line":
+        highcharts_config["plotOptions"]["line"] = {
+            "dataLabels": {
+                "enabled": True
+            },
+            "marker": {
+                "enabled": True
+            }
+        }
+    elif chart_type == "area":
+        highcharts_config["plotOptions"]["area"] = {
+            "fillOpacity": 0.5
+        }
+    elif chart_type == "pie":
+        # Pie charts need data in {name, y} format per Highcharts spec
+        if series_data and len(series_data) > 0:
+            pie_data = []
+            for i, category in enumerate(x_axis_data):
+                value = series_data[0]["data"][i] if i < len(series_data[0]["data"]) else 0
+                pie_data.append({"name": category, "y": value})
+            highcharts_config["series"] = [{
+                "name": series_data[0].get("name", "Data"),
+                "colorByPoint": True,
+                "data": pie_data
+            }]
+        # Pie charts don't use xAxis
+        highcharts_config.pop("xAxis", None)
+        highcharts_config["plotOptions"]["pie"] = {
+            "allowPointSelect": True,
+            "cursor": "pointer",
+            "dataLabels": {
+                "enabled": True,
+                "format": "<b>{point.name}</b>: {point.y}"
+            },
+            "showInLegend": True
+        }
+        highcharts_config["legend"]["enabled"] = True
+        highcharts_config["tooltip"] = {
+            "pointFormat": "<b>{point.y}</b> ({point.percentage:.1f}%)"
+        }
+    
+    return {
+        "type": "highcharts",
+        "config": highcharts_config
+    }
+
+
 def format_response_as_markdown(response_text: str, input_list: list) -> str:
     """
     Format the response text as markdown, enhancing it with tables from SQL results.
@@ -458,11 +594,28 @@ def format_response_as_markdown(response_text: str, input_list: list) -> str:
     return formatted
 
 
-def process_query(query, schedule_headers=None):
-    logger.info(f"Starting process_query with query: {query[:100]}...")
-    input_list = [
-        {"role": "user", "content": query}
-    ]
+def process_query(query, schedule_headers=None, session_id=None):
+    logger.info(f"Starting process_query with query: {query[:100]}... (session_id: {session_id})")
+    
+    # Get or create session
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        logger.info(f"Generated new session_id: {session_id}")
+    
+    # Initialize session if it doesn't exist
+    if session_id not in chat_sessions:
+        chat_sessions[session_id] = []
+        logger.info(f"Created new chat session: {session_id}")
+    
+    # Get conversation history for this session
+    conversation_history = chat_sessions[session_id]
+    
+    # Build input_list: start with conversation history, then add new query
+    input_list = conversation_history.copy()
+    input_list.append({"role": "user", "content": query})
+
+    # Track chart data if format_chart is called
+    chart_data = None
 
     iteration_count = 0
     while True:
@@ -477,6 +630,46 @@ def process_query(query, schedule_headers=None):
             model="gpt-4.1-mini",
             tools=tools,
             input=input_list,
+            instructions="""
+            You are a Senior business analyst and scheduling expert. You are given a user query. 
+
+            CRITICAL TOOL RULES:
+            - If the query is about meetings, attendees, schedules, or opportunity metrics, you MUST call the `query_database` tool. Do NOT answer directly. 
+            - For other queries (like GDP or general info), use the appropriate tool (`get_gdp` or `schedule_meeting`) if needed. 
+            - Do NOT invent answers; always rely on tools when relevant.
+            
+            CHART/VISUALIZATION RULES:
+            - If the user asks for a chart, graph, bar chart, pie chart, or any visualization:
+              1. First call `query_database` to get the data
+              2. Then call `format_chart` with the retrieved data to generate a Highcharts config
+            - Choose appropriate chart types:
+              - bar/column: for comparing categories
+              - line: for trends over time
+              - pie: for showing parts of a whole
+              - area: for cumulative data over time
+            - Extract x_axis_data (category labels) and series_data (numeric values) from query results
+
+            MARKDOWN RULES:
+            - return the final response in markdown format.
+            - When returning raw tool outputs or function call results, do NOT use markdown. Keep it JSON/plain text for internal processing. 
+            - When formatting in markdown, follow these rules:
+                1. **Headers**: Use ## for main sections, ### for subsections
+                Example: ## GDP Information
+                2. **Bold text**: Use **text** for emphasis on key numbers
+                Example: The GDP is **$29,167.78 billion**
+                3. **Lists**: Use - for bullet points or 1. 2. 3. for numbered lists
+                Example:
+                - GDP Growth: 2.8%
+                - GDP per capita: $86,601.28
+                4. **Code blocks**: Use ``` for SQL or code snippets
+                Example: ```sql
+                SELECT * FROM table
+                ```
+                5. **Numbers and statistics**: Always bold key metrics
+
+            ALWAYS ensure your final response is clear, concise, and only uses markdown where appropriate for readability. Never markdown tool outputs.
+            """
+            ,
         )
 
         logger.info(f"Raw API Response Output:")
@@ -488,7 +681,67 @@ def process_query(query, schedule_headers=None):
 
         if not pending_calls:
             logger.debug("No pending function calls, breaking loop")
-            break
+            # Extract the final response text from the last iteration
+            final_response_text = ""
+            if hasattr(response, 'output_text'):
+                final_response_text = response.output_text
+            else:
+                # Fallback: extract from output messages
+                for item in reversed(response.output):
+                    if hasattr(item, 'content') and item.content:
+                        for content_item in item.content:
+                            if hasattr(content_item, 'text'):
+                                final_response_text = content_item.text
+                                break
+                        if final_response_text:
+                            break
+                    elif hasattr(item, 'type') and item.type == "message":
+                        if hasattr(item, 'content') and isinstance(item.content, list):
+                            for content_item in item.content:
+                                if isinstance(content_item, dict) and content_item.get("type") == "output_text":
+                                    final_response_text = content_item.get("text", "")
+                                    break
+                        if final_response_text:
+                            break
+            
+            logger.info(f"\n{'='*60}")
+            logger.info(f"FINAL OUTPUT")
+            logger.info(f"{'='*60}")
+            logger.info(f"Final Output Text:")
+            logger.info(f"{final_response_text}")
+            if chart_data:
+                logger.info(f"Chart Data: {chart_data.get('type', 'unknown')} chart included")
+            logger.info(f"{'='*60}\n")
+            
+            # Format response as markdown (adds SQL tables if needed)
+            #formatted_response = format_response_as_markdown(final_response_text, input_list)
+            
+            # Update conversation history: add user query and assistant response
+            # Only keep last 20 messages to prevent context from growing too large
+            chat_sessions[session_id].append({"role": "user", "content": query})
+            chat_sessions[session_id].append({"role": "assistant", "content": final_response_text})
+            
+            # Trim to last 20 messages (10 exchanges)
+            if len(chat_sessions[session_id]) > 20:
+                chat_sessions[session_id] = chat_sessions[session_id][-20:]
+                logger.info(f"Trimmed conversation history for session {session_id}")
+            
+            logger.info(f"Query processed successfully, response length: {len(final_response_text)} characters")
+            logger.info(f"Session {session_id} now has {len(chat_sessions[session_id])} messages in history")
+            
+            # Return response with optional chart data
+            # If chart_data exists, return dict with both text and chart
+            # Otherwise return just the text for backward compatibility
+            if chart_data:
+                return {
+                    "text": final_response_text,
+                    "chart": chart_data,  # Contains {type: "highcharts", config: {...}}
+                    "type": "chart",
+                }
+            return {
+                "text": final_response_text,
+                "type": "text",
+            }
 
         logger.info(f"Processing {len(pending_calls)} function call(s)")
         for item in pending_calls:
@@ -668,65 +921,32 @@ def process_query(query, schedule_headers=None):
                     "output": json_dumps_safe(tool_output)
                 })
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"FINAL API CALL")
-    logger.info(f"{'='*60}")
-    logger.info(f"Final input list sent to API:")
-    logger.info(f"{json_dumps_safe(input_list)}")
-    logger.info(f"Completed {iteration_count} iteration(s), generating final response")
+            elif item.name == "format_chart":
+                try:
+                    result = format_chart(
+                        args["chart_type"],
+                        args["title"],
+                        args["x_axis_data"],
+                        args["series_data"],
+                        args.get("y_axis_title")
+                    )
+                    tool_output = {"format_chart": result}
+                    # Store chart data for return
+                    chart_data = result
+                    logger.info(f"✓ {item.name} returned Highcharts config for '{args['chart_type']}' chart")
+                except Exception as e:
+                    logger.error(f"✗ Error in {item.name}: {e}", exc_info=True)
+                    tool_output = {"error": str(e)}
 
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        instructions="""You are a helpful assistant that explains query results to users. 
-
-CRITICAL: You MUST format ALL responses using markdown syntax. Your response will be rendered as markdown, so use proper markdown formatting:
-
-1. **Headers**: Use ## for main sections, ### for subsections
-   Example: ## GDP Information
-
-2. **Bold text**: Use **text** for emphasis on important numbers or facts
-   Example: The GDP is **$29,167.78 billion**
-
-3. **Lists**: Use - for bullet points or 1. 2. 3. for numbered lists
-   Example:
-   - GDP Growth: 2.8%
-   - GDP per capita: $86,601.28
-
-4. **Tables**: Use markdown table syntax for structured data
-   Example:
-   | Country | Year | GDP |
-   |---------|------|-----|
-   | USA | 2024 | $29,167.78B |
-
-5. **Code blocks**: Use ``` for SQL queries or code snippets
-   Example: ```sql
-   SELECT * FROM table
-   ```
-
-6. **Numbers and statistics**: Always use **bold** for key numbers and metrics
-
-ALWAYS format your response with proper markdown. Do NOT return plain text. Use headers, bold text, lists, and tables to make the response well-structured and readable.""",
-        input=input_list,
-    )
-
-    logger.info(f"\n{'='*60}")
-    logger.info(f"FINAL OUTPUT")
-    logger.info(f"{'='*60}")
-    logger.info(f"Raw API Response (full):")
-    logger.info(f"{response.model_dump_json(indent=2)}")
-    logger.info(f"\nFinal Output Text:")
-    logger.info(f"{response.output_text}")
-    logger.info(f"{'='*60}\n")
-    
-    # Format response as markdown
-    formatted_response = format_response_as_markdown(response.output_text, input_list)
-    
-    logger.info(f"Query processed successfully, response length: {len(formatted_response)} characters")
-    return formatted_response
+                input_list.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json_dumps_safe(tool_output)
+                })
 
 
-def handle_query(query, headers):
-    return process_query(query, headers)
+def handle_query(query, headers, session_id=None):
+    return process_query(query, headers, session_id=session_id)
 
 
 if __name__ == "__main__":
@@ -764,6 +984,11 @@ if __name__ == "__main__":
     
     # Database query prompts - Complex Multi-View Queries (based on actual DB data)
     db_query_15 = "Give me a complete analysis for Ford Motor: show all their events with dates, total attendees, number of decision makers, remote vs in-person count, and any associated revenue or opportunity data."
+    
+    # Chart/Visualization query prompts
+    chart_query_1 = "Show me the number of decision makers per company as a bar chart"
+    chart_query_2 = "Create a pie chart showing the breakdown of events by region"
+    chart_query_3 = "Show me a column chart comparing the number of events per line of business"
     
     logger.info("Running test query")
     result = handle_query(db_query_15, None)

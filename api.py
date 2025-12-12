@@ -20,6 +20,7 @@ if os.path.exists(static_dir):
 class QueryPayload(BaseModel):
     query: str
     headers: dict
+    session_id: str = None  # Optional session ID for chat context
 
 @app.get("/")
 async def root():
@@ -34,11 +35,12 @@ async def root():
 async def process_query(payload: QueryPayload):
     query = payload.query
     headers = payload.headers
-    logger.info(f"Processing query: {query[:100]}...")  # Log first 100 chars
+    session_id = payload.session_id
+    logger.info(f"Processing query: {query[:100]}... (session_id: {session_id})")  # Log first 100 chars
     try:
-        result = handle_query(query, headers)
+        result = handle_query(query, headers, session_id=session_id)
         logger.info("Query processed successfully")
-        return {"message": result}
+        return {"message": result, "session_id": session_id}
     except Exception as e:
         logger.error(f"Error processing query: {e}", exc_info=True)
         raise

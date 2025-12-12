@@ -8,6 +8,7 @@ from openai import OpenAI
 from sqlalchemy import create_engine, inspect, text
 import sys
 import os
+import datetime
 
 # Add parent directory to path for logging_config import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,7 +40,7 @@ VIEW_CONTEXTS: Dict[str, str] = {
     "VW_OPERATIONS_REPORT": """
  **OPERATIONS REPORT VIEW** — Operations snapshot for events.
 - Event metadata: EVENTID, CUSTOMERNAME, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
-- Scheduling: STARTDATEMS, STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS, ACTENDTIMEMS (epoch ms values).
+- Scheduling: STARTDATEMS, STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS( Use this for "meetings today", "meetings this week", etc.), ACTENDTIMEMS (epoch ms values).
 - Logistics & ownership: REQUESTEREMAIL, ORACLEHOSTNAME/EMAIL/CELLPHONE, TECHMANAGER,
   BACKUPTECHMANAGER, BRIEFINGMANAGER, PROGRAM, COSTCENTER.
 - Other descriptors: FORMTYPE, PILLARS, ACCOUNTTYPE, LINEOFBUSINESS, VISITFOCUS, REGION, TIER.
@@ -75,11 +76,17 @@ BASE_ORACLE_RULES = """
 CRITICAL ORACLE SQL RULES
 - NEVER end statements with a semicolon.
 - Use FETCH FIRST n ROWS ONLY or WHERE ROWNUM <= n (no LIMIT).
-- For date filters, convert epoch ms columns to DATE first:
-  DATE '1970-01-01' + NUMTODSINTERVAL(column/1000, 'SECOND')
-- Example: TRUNC(DATE '1970-01-01' + NUMTODSINTERVAL(startdatems/1000,'SECOND')) = TRUNC(SYSDATE)
+- for epoch-ms → date conversion, never use numtodsinterval bc it explodes on large values.
+  instead do:
+    date '1970-01-01' + (epoch_ms/1000)/86400
+- example month filter:
+    trunc(date '1970-01-01' + (startdatems/1000)/86400, 'mm') = trunc(sysdate, 'mm')
+- use ACTSTARTTIMEMS and ACTENDTIMEMS for "meetings today", "meetings this week", etc.
 - Strings use single quotes.
 - Only generate SELECT queries.
+- Case-insensitive substring search: use lower(column) like '%term%' to catch variations in casing/spelling
+   example: where lower(customername) like '%grand hotel%' 
+            or lower(companyname) like '%grand hotel%'
 """
 
 
@@ -97,6 +104,7 @@ def _call_llm(messages: List[Dict[str, str]]) -> str:
             model="gpt-4.1-mini",
             input=messages,
             text={"format": {"type": "json_object"}},
+            instructions="todays date is " + datetime.datetime.now().strftime("%Y-%m-%d")
         )
         return response.output_text
 
