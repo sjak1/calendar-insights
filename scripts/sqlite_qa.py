@@ -40,22 +40,23 @@ VIEW_CONTEXTS: Dict[str, str] = {
     "VW_OPERATIONS_REPORT": """
  **OPERATIONS REPORT VIEW** — Operations snapshot for events.
 - Event metadata: EVENTID, CUSTOMERNAME, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
-- Scheduling: STARTDATEMS, STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS( Use this for "meetings today", "meetings this week", etc.), ACTENDTIMEMS (epoch ms values).
+- Scheduling: STARTDATEMS (actual start date of the event - the first date it started; for a company with 6 meetings throughout the week, they all share the same STARTDATEMS), STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS (use this for accurate meeting times - for "meetings today", "meetings this week", counts, or any time-based queries), ACTENDTIMEMS (epoch ms values).
+  IMPORTANT: STARTDATEMS represents the event's initial start date. If you query for "meetings tomorrow" using STARTDATEMS, it might show no meetings even when meetings are happening, because all meetings in a multi-day event share the same STARTDATEMS. Always use ACTSTARTTIMEMS for time-based queries and counts to get accurate results.
 - Logistics & ownership: REQUESTEREMAIL, ORACLEHOSTNAME/EMAIL/CELLPHONE, TECHMANAGER,
   BACKUPTECHMANAGER, BRIEFINGMANAGER, PROGRAM, COSTCENTER.
-- Other descriptors: FORMTYPE, PILLARS, ACCOUNTTYPE, LINEOFBUSINESS, VISITFOCUS, REGION, TIER.
-- Convert epoch ms to DATE before compare/order: DATE '1970-01-01' + NUMTODSINTERVAL(startdatems/1000,'SECOND').
-  Example for today: TRUNC(DATE '1970-01-01' + NUMTODSINTERVAL(startdatems/1000,'SECOND')) = TRUNC(SYSDATE).
+- Other descriptors: FORMTYPE, PILLARS, ACCOUNTTYPE, LINEOFBUSINESS, VISITFOCUS, REGION, TIER, STATE (Hold,Waitlist,Confirmed,Cancelled,Cancellation Requested).
+- Convert epoch ms to DATE before compare/order: DATE '1970-01-01' + NUMTODSINTERVAL(actstarttimems/1000,'SECOND').
+  Example for today: TRUNC(DATE '1970-01-01' + NUMTODSINTERVAL(actstarttimems/1000,'SECOND')) = TRUNC(SYSDATE).
 
 Use for operational details and high-level event summaries.
 """,
     "VW_ATTENDEE_REPORT": """
 **ATTENDEE REPORT VIEW** — Attendee roster per event.
 - Event metadata: EVENTID, CUSTOMERNAME, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
-- Scheduling info via epoch milliseconds: STARTDATEMS, STARTTIMEMS, ENDTIMEMS.
+- Scheduling info via epoch milliseconds: STARTDATEMS, STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS (use for "meetings today", "meetings this week", etc.), ACTENDTIMEMS.
 - Attendee attributes: ATTENDEETYPE, ISREMOTE, TRANSLATOR, DECISIONMAKER(Yes, No), INFLUENCER(Yes, No), ISTECHNICAL(Yes, No).
 - Personal/contact info: FIRSTNAME, LASTNAME, EMAIL, PREFIX, BUSINESSTITLE, CHIEFOFFICERTITLE, COMPANY.
-- Convert ms values to DATE before comparing to SYSDATE / ranges.
+- Convert ms values to DATE before comparing to SYSDATE / ranges. Use ACTSTARTTIMEMS for "today" or "this week" queries.
 
 Use for attendee lists, roles, remote/in-person breakdowns.
 """,
@@ -79,9 +80,13 @@ CRITICAL ORACLE SQL RULES
 - for epoch-ms → date conversion, never use numtodsinterval bc it explodes on large values.
   instead do:
     date '1970-01-01' + (epoch_ms/1000)/86400
-- example month filter:
-    trunc(date '1970-01-01' + (startdatems/1000)/86400, 'mm') = trunc(sysdate, 'mm')
-- use ACTSTARTTIMEMS and ACTENDTIMEMS for "meetings today", "meetings this week", etc.
+- example month filter (for scheduled dates):
+    trunc(date '1970-01-01' + (actstarttimems/1000)/86400, 'mm') = trunc(sysdate, 'mm')
+- example for "meetings today" or "meetings this week" (use actual start time):
+    trunc(date '1970-01-01' + (actstarttimems/1000)/86400) = trunc(sysdate)
+- CRITICAL: Always use ACTSTARTTIMEMS and ACTENDTIMEMS for time-based queries (today, this week, counts, etc.). 
+  STARTDATEMS is the event's initial start date - all meetings in a multi-day event share the same STARTDATEMS, 
+  so using it for date filters will give incorrect results. ACTSTARTTIMEMS is accurate for when meetings actually occur.
 - Strings use single quotes.
 - Only generate SELECT queries.
 - Case-insensitive substring search: use lower(column) like '%term%' to catch variations in casing/spelling

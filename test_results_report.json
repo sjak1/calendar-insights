@@ -1,0 +1,332 @@
+{
+  "summary": {
+    "total": 40,
+    "passed": 0,
+    "failed": 40,
+    "success_rate": 0.0,
+    "timestamp": "2025-12-05T10:38:54.040058"
+  },
+  "working_queries": [],
+  "failed_queries": [
+    {
+      "name": "Basic Event Count",
+      "query": "How many events are in the database?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:33.618371"
+    },
+    {
+      "name": "Events This Month",
+      "query": "How many events are scheduled for this month?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:34.127647"
+    },
+    {
+      "name": "Events Last Month",
+      "query": "How many events were scheduled last month?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:34.637937"
+    },
+    {
+      "name": "Nvidia vs Apple Events",
+      "query": "How many events does Nvidia have compared to Apple?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:35.148064"
+    },
+    {
+      "name": "Top Companies by Events",
+      "query": "Which companies have the most events? Show me the top 10.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:35.661455"
+    },
+    {
+      "name": "IBM Event Details",
+      "query": "Show me all events for IBM with their dates and regions.",
+      "success": false,
+      "elapsed_time": 0.01,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:36.176360"
+    },
+    {
+      "name": "Ford Motor Complete Analysis",
+      "query": "Give me a complete analysis for Ford Motor: show all their events with dates, total attendees, number of decision makers, remote vs in-person count, and any associated revenue or opportunity data.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:36.691786"
+    },
+    {
+      "name": "Events by Region",
+      "query": "What is the breakdown of events by region? Show me how many events are in EMEA, North America, LAD, and JAPAC.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:37.202488"
+    },
+    {
+      "name": "EMEA Events",
+      "query": "List all events in the EMEA region with customer names and dates.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:37.714580"
+    },
+    {
+      "name": "North America Events Count",
+      "query": "How many events are scheduled in North America?",
+      "success": false,
+      "elapsed_time": 0.01,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:38.230542"
+    },
+    {
+      "name": "Events by Line of Business",
+      "query": "How many events are there per line of business? Show me the count for NACI, Marketing, CAGBU, and Glueck.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:38.745671"
+    },
+    {
+      "name": "NACI Events",
+      "query": "Show me all NACI line of business events.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:39.252112"
+    },
+    {
+      "name": "Robert Smith Events",
+      "query": "Which events are assigned to Robert Smith and what are the customer names and start dates?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:39.761401"
+    },
+    {
+      "name": "Tech Manager Assignments",
+      "query": "Show me all events grouped by tech manager with counts.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:40.268498"
+    },
+    {
+      "name": "Events Without Tech Manager",
+      "query": "Find all events that don't have a tech manager assigned.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:40.777372"
+    },
+    {
+      "name": "Decision Makers by Company",
+      "query": "Show me how many decision makers each company has. Which companies have the most decision makers in their events?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:41.287692"
+    },
+    {
+      "name": "Barclays Attendee Details",
+      "query": "Show me all attendees for Barclays events, including their names, whether they are decision makers, influencers, or technical, and if they are remote or in-person.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:41.796409"
+    },
+    {
+      "name": "Remote vs In-Person Breakdown",
+      "query": "What is the breakdown of attendees by remote versus in-person? Show me the total count for each.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:42.305014"
+    },
+    {
+      "name": "Events Without Decision Makers",
+      "query": "Find all events where there are no decision makers in the attendee list. Show the customer name and event ID.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:42.817100"
+    },
+    {
+      "name": "Internal vs External Attendees",
+      "query": "How many attendees are Internal versus External across all events?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:43.326775"
+    },
+    {
+      "name": "Total Attendees Count",
+      "query": "What is the total number of attendees across all events?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:43.834755"
+    },
+    {
+      "name": "Average Attendees per Event",
+      "query": "What is the average number of attendees per event?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:44.346225"
+    },
+    {
+      "name": "Total Closed Opportunity Revenue",
+      "query": "What is the total closed opportunity revenue across all events? Also show the average, minimum, and maximum.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:44.860026"
+    },
+    {
+      "name": "High Probability Opportunities",
+      "query": "Show me all opportunities with probability of close greater than 75%. Include customer name and the probability percentage.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:45.368506"
+    },
+    {
+      "name": "Revenue by Company",
+      "query": "What is the closed opportunity revenue for each company? Show me which companies have the highest revenue.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:45.874730"
+    },
+    {
+      "name": "Mid-Range Revenue Opportunities",
+      "query": "How many opportunities have closed revenue between $300,000 and $500,000? Show the customer names and revenue amounts.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:46.386599"
+    },
+    {
+      "name": "Revenue by Region",
+      "query": "What is the total opportunity revenue broken down by region?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:46.896724"
+    },
+    {
+      "name": "Open vs Closed Opportunities",
+      "query": "How many opportunities are open versus closed? Show counts and total revenue for each.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:47.407822"
+    },
+    {
+      "name": "November 2025 Events",
+      "query": "List all events scheduled for November 2025 with their customer names, regions, and tech managers.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:47.917723"
+    },
+    {
+      "name": "Events This Week",
+      "query": "Show me all events scheduled for this week.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:48.425301"
+    },
+    {
+      "name": "Upcoming Events Next 30 Days",
+      "query": "What events are coming up in the next 30 days?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:48.937079"
+    },
+    {
+      "name": "Events in December",
+      "query": "How many events are scheduled for December 2025?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:49.443930"
+    },
+    {
+      "name": "Events with Attendees and Revenue",
+      "query": "Show me events that have both attendees and revenue data. Include customer name, attendee count, decision maker count, and total revenue.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:49.950137"
+    },
+    {
+      "name": "High-Value Events Analysis",
+      "query": "Find all events with closed revenue over $1 million. Show customer name, revenue, number of attendees, and how many are decision makers.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:50.462936"
+    },
+    {
+      "name": "Events by Tier",
+      "query": "Break down events by tier (Tier 1, Tier 2, etc.) and show counts.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:50.986269"
+    },
+    {
+      "name": "Visit Focus Breakdown",
+      "query": "What are the different visit focus types and how many events are there for each?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:51.493550"
+    },
+    {
+      "name": "Account Type Distribution",
+      "query": "Show me the distribution of events by account type.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:52.002727"
+    },
+    {
+      "name": "Pillars Analysis",
+      "query": "What are the different pillars and how many events are associated with each?",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:52.510962"
+    },
+    {
+      "name": "Month-over-Month Comparison",
+      "query": "Compare the number of events from this month to last month.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:53.021694"
+    },
+    {
+      "name": "Regional Event Comparison",
+      "query": "Which region has the most events and which has the least? Show the comparison.",
+      "success": false,
+      "elapsed_time": 0.0,
+      "error": "'OpenAI' object has no attribute 'responses'",
+      "timestamp": "2025-12-05T10:38:53.532137"
+    }
+  ]
+}

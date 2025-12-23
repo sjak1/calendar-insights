@@ -9,4 +9,7 @@ venv
 package
 # Log files
 logs/
-*.log
+*.log__pycache__/
+__pycache__/
+*.pyc
+.DS_Store

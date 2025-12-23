@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BriefingIQ AI Assistant</title>
+    <script src="https://code.highcharts.com/highcharts.js"></script>
     <style>
         * {
             margin: 0;
@@ -306,16 +307,45 @@
             return sessionId;
         }
         
-        function addMessage(content, type = 'assistant') {
+        function addMessage(content, type = 'assistant', chartData = null) {
             const chatContainer = document.getElementById('chatContainer');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${type}`;
             
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
-            contentDiv.textContent = content;
+            
+            // Handle text content (convert markdown-like formatting to HTML)
+            if (typeof content === 'string') {
+                // Simple markdown-like formatting
+                let html = content
+                    .replace(/## (.*)/g, '<h3>$1</h3>')
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\n/g, '<br>');
+                contentDiv.innerHTML = html;
+            } else {
+                contentDiv.textContent = String(content);
+            }
             
             messageDiv.appendChild(contentDiv);
+            
+            // Add chart if present
+            if (chartData && chartData.type === 'highcharts' && chartData.config) {
+                const chartContainer = document.createElement('div');
+                chartContainer.id = 'chart-' + Date.now();
+                chartContainer.style.width = '100%';
+                chartContainer.style.height = '400px';
+                chartContainer.style.marginTop = '10px';
+                messageDiv.appendChild(chartContainer);
+                
+                // Render Highcharts chart
+                if (typeof Highcharts !== 'undefined') {
+                    Highcharts.chart(chartContainer.id, chartData.config);
+                } else {
+                    chartContainer.innerHTML = '<p style="color: red;">Highcharts library not loaded. Please include Highcharts.js</p>';
+                }
+            }
+            
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
@@ -385,7 +415,23 @@
                 }
                 
                 const data = await response.json();
-                addMessage(data.message, 'assistant');
+                
+                // Handle response format: can be string or object with text/chart
+                let messageText = '';
+                let chartData = null;
+                
+                if (typeof data.message === 'string') {
+                    // Simple text response
+                    messageText = data.message;
+                } else if (data.message && typeof data.message === 'object') {
+                    // Object response (chart or structured)
+                    messageText = data.message.text || data.message.message || JSON.stringify(data.message);
+                    chartData = data.message.chart || null;
+                } else {
+                    messageText = String(data.message);
+                }
+                
+                addMessage(messageText, 'assistant', chartData);
                 
                 // Update session ID if server returned a new one
                 if (data.session_id && data.session_id !== sessionId) {
