@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from get_gdp import handle_query
+from query_processor import handle_query
 from pydantic import BaseModel
 import os
 from logging_config import setup_logging, get_logger

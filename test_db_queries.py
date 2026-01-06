@@ -5,7 +5,7 @@ Tests various query types and tracks success/failure rates
 
 import json
 from datetime import datetime
-from get_gdp import handle_query
+from query_processor import handle_query
 from logging_config import get_logger
 
 logger = get_logger(__name__)

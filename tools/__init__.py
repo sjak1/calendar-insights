@@ -10,12 +10,6 @@ from tools.briefingiq_api import (
     get_report_data,
 )
 from tools.chart import format_chart
-from tools.utils import (
-    get_fruits,
-    add_fruit,
-    oracle_financial_stats,
-    get_horoscope,
-)
 from tools.agenda_generator import generate_agenda
 
 __all__ = [
@@ -26,9 +20,5 @@ __all__ = [
     "get_resources",
     "get_report_data",
     "format_chart",
-    "get_fruits",
-    "add_fruit",
-    "oracle_financial_stats",
-    "get_horoscope",
     "generate_agenda",
 ]

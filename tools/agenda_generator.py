@@ -29,7 +29,7 @@ engine = create_engine(ORACLE_CONNECTION_URI)
 
 def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    Fetch all relevant meeting context data using fixed SQL queries.
+    Fetch all relevant meeting context data using parameterized SQL queries.
     """
     context = {
         "meeting_details": None,
@@ -39,20 +39,20 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
     }
     
     with engine.connect() as conn:
-        # Build WHERE clause
+        # Build parameterized WHERE clause
         if event_id:
-            where_clause = f"EVENTID = '{event_id}'"
-            company_where = f"EVENTID = '{event_id}'"
+            where_clause = "EVENTID = :event_id"
+            params = {"event_id": event_id}
         elif company_name:
-            where_clause = f"LOWER(CUSTOMERNAME) LIKE '%{company_name.lower()}%'"
-            company_where = where_clause
+            where_clause = "LOWER(CUSTOMERNAME) LIKE :company_pattern"
+            params = {"company_pattern": f"%{company_name.lower()}%"}
         else:
             logger.error("Either event_id or company_name must be provided")
             return context
         
-        # 1. Get meeting details
-        logger.info(f"Fetching meeting details...")
-        meeting_query = f"""
+        # 1. Get meeting details (latest meeting first by start date)
+        logger.info("Fetching meeting details...")
+        meeting_query = text(f"""
             SELECT 
                 EVENTID,
                 CUSTOMERNAME,
@@ -68,9 +68,10 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
                 TIER
             FROM VW_OPERATIONS_REPORT 
             WHERE {where_clause}
-            AND ROWNUM = 1
-        """
-        result = conn.execute(text(meeting_query))
+            ORDER BY DATE '1970-01-01' + (STARTDATEMS/1000)/86400 DESC
+            FETCH FIRST 1 ROW ONLY
+        """)
+        result = conn.execute(meeting_query, params)
         row = result.fetchone()
         
         if row:
@@ -92,12 +93,12 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
             actual_event_id = row[0]
             logger.info(f"Found meeting for: {actual_company}")
         else:
-            logger.warning(f"No meeting found for criteria")
+            logger.warning("No meeting found for criteria")
             return context
         
-        # 2. Get attendees for this event
-        logger.info(f"Fetching attendees...")
-        attendee_query = f"""
+        # 2. Get attendees for this event (parameterized)
+        logger.info("Fetching attendees...")
+        attendee_query = text("""
             SELECT 
                 FIRSTNAME || ' ' || LASTNAME as full_name,
                 BUSINESSTITLE,
@@ -108,10 +109,10 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
                 ATTENDEETYPE,
                 ISREMOTE
             FROM VW_ATTENDEE_REPORT 
-            WHERE EVENTID = '{actual_event_id}'
+            WHERE EVENTID = :event_id
             AND ROWNUM <= 20
-        """
-        result = conn.execute(text(attendee_query))
+        """)
+        result = conn.execute(attendee_query, {"event_id": actual_event_id})
         for row in result:
             context["attendees"].append({
                 "name": row[0],
@@ -125,9 +126,9 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
             })
         logger.info(f"Found {len(context['attendees'])} attendees")
         
-        # 3. Get previous meetings for same company
+        # 3. Get previous meetings for same company (parameterized)
         logger.info(f"Fetching previous meetings for {actual_company}...")
-        previous_query = f"""
+        previous_query = text("""
             SELECT DISTINCT
                 EVENTID,
                 TO_CHAR(DATE '1970-01-01' + (STARTDATEMS/1000)/86400, 'YYYY-MM-DD') as meeting_date,
@@ -136,12 +137,12 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
                 PILLARS,
                 MEETINGOBJECTIVE
             FROM VW_OPERATIONS_REPORT 
-            WHERE CUSTOMERNAME = '{actual_company}'
-            AND EVENTID != '{actual_event_id}'
+            WHERE CUSTOMERNAME = :company_name
+            AND EVENTID != :event_id
             ORDER BY meeting_date DESC
             FETCH FIRST 5 ROWS ONLY
-        """
-        result = conn.execute(text(previous_query))
+        """)
+        result = conn.execute(previous_query, {"company_name": actual_company, "event_id": actual_event_id})
         for row in result:
             context["previous_meetings"].append({
                 "event_id": row[0],
@@ -153,13 +154,12 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
             })
         logger.info(f"Found {len(context['previous_meetings'])} previous meetings")
         
-        # 4. Get similar briefings (same industry + similar visit focus)
+        # 4. Get similar briefings (same industry) - parameterized
         industry = context["meeting_details"]["industry"]
-        visit_focus = context["meeting_details"]["visit_focus"]
         
         if industry:
             logger.info(f"Fetching similar briefings in {industry} industry...")
-            similar_query = f"""
+            similar_query = text("""
                 SELECT DISTINCT
                     CUSTOMERNAME,
                     CUSTOMERINDUSTRY,
@@ -167,11 +167,11 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
                     SALESPLAY,
                     PILLARS
                 FROM VW_OPERATIONS_REPORT 
-                WHERE CUSTOMERINDUSTRY = '{industry}'
-                AND CUSTOMERNAME != '{actual_company}'
+                WHERE CUSTOMERINDUSTRY = :industry
+                AND CUSTOMERNAME != :company_name
                 AND ROWNUM <= 5
-            """
-            result = conn.execute(text(similar_query))
+            """)
+            result = conn.execute(similar_query, {"industry": industry, "company_name": actual_company})
             for row in result:
                 context["similar_briefings"].append({
                     "company": row[0],

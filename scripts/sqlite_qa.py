@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 ORACLE_CONNECTION_URI = (
     "oracle+oracledb://BIQ_EIQ_AURORA:BIQ_EIQ_AURORA"
-    "@biqdb.ciqohztp4uck.us-west-2.rds.amazonaws.com:1521/?service_name=ORCL"
+    "@biq-read.ciqohztp4uck.us-west-2.rds.amazonaws.com:1521/?service_name=ORCL"
 )
 
 engine = create_engine(ORACLE_CONNECTION_URI)
@@ -39,7 +39,7 @@ VIEW_NAMES = [
 VIEW_CONTEXTS: Dict[str, str] = {
     "VW_OPERATIONS_REPORT": """
  **OPERATIONS REPORT VIEW** — Operations snapshot for events.
-- Event metadata: EVENTID, CUSTOMERNAME, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
+- Event metadata: EVENTID, CUSTOMERNAME, EVENTLOCATION, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
 - Scheduling: STARTDATEMS (actual start date of the event - the first date it started; for a company with 6 meetings throughout the week, they all share the same STARTDATEMS), STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS (use this for accurate meeting times - for "meetings today", "meetings this week", counts, or any time-based queries), ACTENDTIMEMS (epoch ms values).
   IMPORTANT: STARTDATEMS represents the event's initial start date. If you query for "meetings tomorrow" using STARTDATEMS, it might show no meetings even when meetings are happening, because all meetings in a multi-day event share the same STARTDATEMS. Always use ACTSTARTTIMEMS for time-based queries and counts to get accurate results.
 - Logistics & ownership: REQUESTEREMAIL, ORACLEHOSTNAME/EMAIL/CELLPHONE, TECHMANAGER,
@@ -52,7 +52,7 @@ Use for operational details and high-level event summaries.
 """,
     "VW_ATTENDEE_REPORT": """
 **ATTENDEE REPORT VIEW** — Attendee roster per event.
-- Event metadata: EVENTID, CUSTOMERNAME, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
+- Event metadata: EVENTID, CUSTOMERNAME, EVENTLOCATION, PRIMARYOPPORTUNITY, SECONDARYOPPORTUNITY.
 - Scheduling info via epoch milliseconds: STARTDATEMS, STARTTIMEMS, ENDTIMEMS, ACTSTARTTIMEMS (use for "meetings today", "meetings this week", etc.), ACTENDTIMEMS.
 - Attendee attributes: ATTENDEETYPE, ISREMOTE, TRANSLATOR, DECISIONMAKER(Yes, No), INFLUENCER(Yes, No), ISTECHNICAL(Yes, No).
 - Personal/contact info: FIRSTNAME, LASTNAME, EMAIL, PREFIX, BUSINESSTITLE, CHIEFOFFICERTITLE, COMPANY.

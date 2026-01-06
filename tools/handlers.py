@@ -11,10 +11,6 @@ from tools import (
     get_resources,
     get_report_data,
     format_chart,
-    get_fruits,
-    add_fruit,
-    oracle_financial_stats,
-    get_horoscope,
     generate_agenda,
 )
 from utils.json_utils import json_dumps_safe
@@ -35,13 +31,7 @@ def execute_tool(tool_name, args, schedule_headers=None):
         Dict with tool output or error
     """
     try:
-        if tool_name == "get_horoscope":
-            result = get_horoscope(args)
-            output = {"horoscope": result}
-            logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
-            return output
-
-        elif tool_name == "get_gdp":
+        if tool_name == "get_gdp":
             result = get_gdp(args["country"], args["year"])
             output = {"gdp": result}
             logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
@@ -94,24 +84,6 @@ def execute_tool(tool_name, args, schedule_headers=None):
                 logger.info(f"✓ {tool_name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)")
             else:
                 logger.info(f"✓ {tool_name} returned: {output_str}")
-            return output
-
-        elif tool_name == "oracle_financial_stats":
-            result = oracle_financial_stats(args["year"])
-            output = {"oracle_financial_stats": result}
-            logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
-            return output
-
-        elif tool_name == "get_fruits":
-            result = get_fruits()
-            output = {"get_fruits": result}
-            logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
-            return output
-
-        elif tool_name == "add_fruit":
-            result = add_fruit(args["fruit"])
-            output = {"add_fruit": result}
-            logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
             return output
 
         elif tool_name == "query_database":

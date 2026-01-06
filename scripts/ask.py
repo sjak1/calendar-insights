@@ -1,5 +1,5 @@
 from sqlite_qa import ask_sqlite
-import get_gdp
+import query_processor
 
 questions = [
     "Give me the names of the executives attending today ?",
@@ -11,4 +11,4 @@ questions = [
 
 for question in questions:
     print(question)
-    print(get_gdp.handle_query(question, None))
+    print(query_processor.handle_query(question, None))
