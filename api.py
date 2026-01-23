@@ -36,9 +36,14 @@ async def process_query(payload: QueryPayload):
     query = payload.query
     headers = payload.headers
     session_id = payload.session_id
-    logger.info(f"Processing query: {query[:100]}... (session_id: {session_id})")  # Log first 100 chars
+    
+    # Extract event_id from headers (for context-aware agenda generation)
+    # Header key can be lowercase or mixed case depending on client
+    event_id = headers.get("x-cloud-eventid") or headers.get("X-Cloud-Eventid")
+    
+    logger.info(f"Processing query: {query[:100]}... (session_id: {session_id}, event_id: {event_id})")
     try:
-        result = handle_query(query, headers, session_id=session_id)
+        result = handle_query(query, headers, session_id=session_id, event_id=event_id)
         logger.info("Query processed successfully")
         return {"message": result, "session_id": session_id}
     except Exception as e:

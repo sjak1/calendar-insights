@@ -64,7 +64,7 @@ ALWAYS ensure your final response is clear, concise, and only uses markdown wher
 """
 
 
-def process_query(query, schedule_headers=None, session_id=None):
+def process_query(query, schedule_headers=None, session_id=None, event_id=None):
     """
     Process a user query through the AI assistant with tool calling.
     
@@ -72,11 +72,12 @@ def process_query(query, schedule_headers=None, session_id=None):
         query: User's query string
         schedule_headers: Optional headers for BriefingIQ API calls
         session_id: Optional session ID for conversation context
+        event_id: Optional event ID from header (for context-aware operations)
     
     Returns:
         Dict with response text and optional chart data
     """
-    logger.info(f"Starting process_query with query: {query[:100]}... (session_id: {session_id})")
+    logger.info(f"Starting process_query with query: {query[:100]}... (session_id: {session_id}, event_id: {event_id})")
     
     # Get or create session
     session_id = get_or_create_session(session_id)
@@ -158,9 +159,9 @@ def process_query(query, schedule_headers=None, session_id=None):
 
         logger.info(f"Processing {len(pending_calls)} function call(s)")
         
-        # Process all function calls
+        # Process all function calls (pass event_id for context-aware operations)
         function_outputs, returned_chart_data = process_function_calls(
-            pending_calls, schedule_headers
+            pending_calls, schedule_headers, context_event_id=event_id
         )
         
         # Update chart_data if format_chart was called
@@ -171,9 +172,9 @@ def process_query(query, schedule_headers=None, session_id=None):
         input_list.extend(function_outputs)
 
 
-def handle_query(query, headers, session_id=None):
+def handle_query(query, headers, session_id=None, event_id=None):
     """Entry point for handling queries."""
-    return process_query(query, headers, session_id=session_id)
+    return process_query(query, headers, session_id=session_id, event_id=event_id)
 
 
 if __name__ == "__main__":

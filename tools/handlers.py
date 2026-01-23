@@ -18,7 +18,7 @@ from utils.json_utils import json_dumps_safe
 logger = get_logger(__name__)
 
 
-def execute_tool(tool_name, args, schedule_headers=None):
+def execute_tool(tool_name, args, schedule_headers=None, context_event_id=None):
     """
     Execute a tool function and return the output.
     
@@ -26,6 +26,7 @@ def execute_tool(tool_name, args, schedule_headers=None):
         tool_name: Name of the tool to execute
         args: Arguments for the tool
         schedule_headers: Optional headers for BriefingIQ API calls
+        context_event_id: Optional event ID from header (for context-aware operations)
     
     Returns:
         Dict with tool output or error
@@ -109,8 +110,13 @@ def execute_tool(tool_name, args, schedule_headers=None):
             return output, result  # Return both output and chart_data
 
         elif tool_name == "generate_agenda":
+            # Priority: context_event_id (from header) > args.event_id (from LLM)
+            effective_event_id = context_event_id or args.get("event_id")
+            if context_event_id:
+                logger.info(f"Using event_id from header: {context_event_id}")
+            
             result = generate_agenda(
-                event_id=args.get("event_id"),
+                event_id=effective_event_id,
                 company_name=args.get("company_name")
             )
             output = {"generate_agenda": result}
@@ -131,9 +137,14 @@ def execute_tool(tool_name, args, schedule_headers=None):
         return {"error": str(e)}
 
 
-def process_function_calls(pending_calls, schedule_headers=None):
+def process_function_calls(pending_calls, schedule_headers=None, context_event_id=None):
     """
     Process a list of function calls and return results.
+    
+    Args:
+        pending_calls: List of function calls to process
+        schedule_headers: Optional headers for BriefingIQ API calls
+        context_event_id: Optional event ID from header (for context-aware operations)
     
     Returns:
         Tuple of (function_call_outputs, chart_data)
@@ -147,7 +158,7 @@ def process_function_calls(pending_calls, schedule_headers=None):
         args_str = json.dumps(args, indent=2, ensure_ascii=False)
         logger.info(f"→ Calling function: {item.name} with args:\n{args_str}")
 
-        result = execute_tool(item.name, args, schedule_headers)
+        result = execute_tool(item.name, args, schedule_headers, context_event_id=context_event_id)
 
         # Handle format_chart special case (returns tuple)
         if item.name == "format_chart" and isinstance(result, tuple):
