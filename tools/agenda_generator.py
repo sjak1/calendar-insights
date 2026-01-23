@@ -34,7 +34,7 @@ except ImportError:
 # ============================================================================
 
 class OraclePresenter(BaseModel):
-    """Oracle presenter information."""
+    """Presenter information."""
     name: str = Field(description="Full name of the presenter")
     title: str = Field(description="Job title of the presenter")
 
@@ -88,7 +88,7 @@ class GeneratedAgenda(BaseModel):
     
     # Presenters
     oracle_presenters: List[OraclePresenter] = Field(
-        description="List of Oracle presenters"
+        description="List of presenters for the briefing"
     )
     
     # Attendee summary
@@ -125,7 +125,58 @@ ORACLE_CONNECTION_URI = (
 engine = create_engine(ORACLE_CONNECTION_URI)
 
 # Default EBD path for testing (set to None in production)
-DEFAULT_EBD_PATH = str(Path(__file__).parent.parent / "EBD_Apple_FILLED.pptx")
+DEFAULT_EBD_PATH = str(Path(__file__).parent.parent / "documents" / "ebd" / "EBD_Apple_FILLED.pptx")
+
+
+# ============================================================================
+# UUID TO NUMERIC ID RESOLVER
+# ============================================================================
+
+def _resolve_event_id(event_id: Optional[str]) -> Optional[str]:
+    """
+    Resolve event_id to numeric format.
+    
+    Handles both:
+    - UUID format from frontend headers (e.g., 'BD496D83-0DF0-4E5A-B12F-F61E51D2ACFF')
+    - Numeric format from database (e.g., '731318059084')
+    
+    Args:
+        event_id: Event ID in either UUID or numeric format
+        
+    Returns:
+        Numeric event ID string, or None if not found
+    """
+    if not event_id:
+        return None
+    
+    # Already numeric - return as-is
+    if event_id.isdigit():
+        return event_id
+    
+    # Check if it looks like a UUID (contains dashes, 36 chars)
+    if '-' in event_id and len(event_id) == 36:
+        logger.info(f"Resolving UUID to numeric ID: {event_id}")
+        try:
+            with engine.connect() as conn:
+                query = text("""
+                    SELECT id FROM m_request_master 
+                    WHERE UPPER(unique_id) = UPPER(:uuid)
+                """)
+                result = conn.execute(query, {"uuid": event_id})
+                row = result.fetchone()
+                if row:
+                    numeric_id = str(row[0])
+                    logger.info(f"Resolved UUID {event_id} → {numeric_id}")
+                    return numeric_id
+                else:
+                    logger.warning(f"UUID not found in database: {event_id}")
+                    return None
+        except Exception as e:
+            logger.error(f"Error resolving UUID: {e}")
+            return None
+    
+    # Unknown format - try to use as-is
+    return event_id
 
 
 # ============================================================================
@@ -248,15 +299,41 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
         if event_id:
             where_clause = "EVENTID = :event_id"
             params = {"event_id": event_id}
+            order_by = "DATE '1970-01-01' + (STARTDATEMS/1000)/86400 DESC"
         elif company_name:
-            where_clause = "LOWER(CUSTOMERNAME) LIKE :company_pattern"
-            params = {"company_pattern": f"%{company_name.lower()}%"}
+            # Try exact match first, then fall back to partial match
+            # When multiple matches, prioritize companies with more complete data
+            exact_name = company_name.lower().strip()
+            where_clause = "LOWER(CUSTOMERNAME) = :exact_name OR LOWER(CUSTOMERNAME) LIKE :company_pattern"
+            params = {
+                "exact_name": exact_name,
+                "company_pattern": f"%{exact_name}%"
+            }
+            # Priority: 1) Exact match, 2) Has industry, 3) Has visit_focus, 4) Most recent
+            order_by = """CASE WHEN LOWER(CUSTOMERNAME) = :exact_name THEN 0 ELSE 1 END,
+                CASE WHEN CUSTOMERINDUSTRY IS NOT NULL THEN 0 ELSE 1 END,
+                CASE WHEN VISITFOCUS IS NOT NULL THEN 0 ELSE 1 END,
+                DATE '1970-01-01' + (STARTDATEMS/1000)/86400 DESC"""
         else:
             logger.error("Either event_id or company_name must be provided")
             return context
         
-        # 1. Get meeting details (latest meeting first by start date)
+        # 1. Get meeting details (prioritize exact matches, then by data completeness)
         logger.info("Fetching meeting details...")
+        
+        # Check for ambiguous matches when using company_name
+        if company_name:
+            count_query = text(f"""
+                SELECT COUNT(DISTINCT CUSTOMERNAME)
+                FROM VW_OPERATIONS_REPORT 
+                WHERE {where_clause}
+            """)
+            count_result = conn.execute(count_query, params)
+            match_count = count_result.fetchone()[0]
+            if match_count > 1:
+                logger.warning(f"⚠️  Ambiguous match: '{company_name}' matches {match_count} companies. "
+                              f"Selecting best match based on data completeness.")
+        
         meeting_query = text(f"""
             SELECT 
                 EVENTID,
@@ -273,7 +350,7 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
                 TIER
             FROM VW_OPERATIONS_REPORT 
             WHERE {where_clause}
-            ORDER BY DATE '1970-01-01' + (STARTDATEMS/1000)/86400 DESC
+            ORDER BY {order_by}
             FETCH FIRST 1 ROW ONLY
         """)
         result = conn.execute(meeting_query, params)
@@ -404,10 +481,10 @@ def _parse_json_field(value: str) -> Any:
 
 def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
     """
-    Extract structured context from an EBD PowerPoint file.
+    Extract context from an EBD file (PPTX or PDF).
     
     Args:
-        ebd_path: Path to the EBD PPTX file
+        ebd_path: Path to the EBD file (PPTX or PDF)
         
     Returns:
         Dict with extracted EBD fields
@@ -424,15 +501,25 @@ def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
         return ebd_context
     
     try:
-        extracted = extract_pptx_content(ebd_path)
-        formatted_text = format_extracted_content(extracted)
-        
-        ebd_context["raw_text"] = formatted_text
-        ebd_context["has_ebd"] = True
-        ebd_context["slide_count"] = extracted["slide_count"]
-        ebd_context["table_count"] = len(extracted["tables"])
-        
-        logger.info(f"Extracted EBD: {extracted['slide_count']} slides, {len(extracted['tables'])} tables")
+        # Check file extension
+        if ebd_path.lower().endswith('.pdf'):
+            # Extract from PDF
+            extracted_text = _extract_pdf_text(ebd_path)
+            if extracted_text:
+                ebd_context["raw_text"] = extracted_text
+                ebd_context["has_ebd"] = True
+                logger.info(f"Extracted {len(extracted_text)} chars from PDF")
+        else:
+            # Extract from PPTX
+            extracted = extract_pptx_content(ebd_path)
+            formatted_text = format_extracted_content(extracted)
+            
+            ebd_context["raw_text"] = formatted_text
+            ebd_context["has_ebd"] = True
+            ebd_context["slide_count"] = extracted["slide_count"]
+            ebd_context["table_count"] = len(extracted.get("tables", []))
+            
+            logger.info(f"Extracted EBD: {extracted['slide_count']} slides, {len(extracted.get('tables', []))} tables")
         
     except Exception as e:
         logger.error(f"Error extracting EBD: {e}", exc_info=True)
@@ -470,47 +557,44 @@ def _generate_agenda_with_llm(
     remote_attendees = [a for a in attendees if a.get("remote")]
     external_attendees = [a for a in attendees if a.get("type") == "External"]
     
-    # Build EBD section if available
+    # Build document context section if available (document-agnostic approach)
     ebd_section = ""
     if ebd_context and ebd_context.get("has_ebd"):
         ebd_section = f"""
 
-## EXECUTIVE BRIEFING DOCUMENT (EBD) - RICH CONTEXT
+## ADDITIONAL DOCUMENT CONTEXT
 
-The following is extracted from the Executive Briefing Document submitted with this engagement request.
-This contains CRITICAL information including:
-- Detailed business challenges and pain points (with $$ impact)
-- Customer expectations and desired outcomes
-- CEO/IT strategy and vision
-- Oracle talking points (MUST be incorporated into sessions)
-- Individual attendee perspectives and concerns
-- Account status and potential derailers
-- Customer references to mention
-- Oracle presenter names (USE THESE instead of placeholders)
+The following content was extracted from an attached document. This document MAY contain useful information such as:
+- Business challenges or pain points
+- Financial figures or metrics
+- Presenter/speaker names and titles
+- Customer references or case studies
+- Meeting objectives or talking points
+- Attendee information or concerns
 
---- BEGIN EBD CONTENT ---
-{ebd_context.get('raw_text', 'No EBD content available')}
---- END EBD CONTENT ---
+**NOTE**: The document format may vary - extract and use any relevant information you find. If certain information is not present, that's fine - use placeholders or skip those fields.
 
-CRITICAL REQUIREMENTS:
+--- BEGIN DOCUMENT CONTENT ---
+{ebd_context.get('raw_text', 'No content available')}
+--- END DOCUMENT CONTENT ---
 
-1. **USE SPECIFIC $ FIGURES**: Include exact dollar amounts from business challenges (e.g., "$50M inefficient spend") in key_metrics fields.
+GUIDELINES FOR USING DOCUMENT CONTENT:
 
-2. **NAME CUSTOMER REFERENCES**: Use actual company names from EBD (e.g., Nike, Starbucks) in customer_reference fields.
+1. **Financial Figures**: IF any dollar amounts, percentages, or metrics are mentioned, include them in key_metrics fields.
 
-3. **ADDRESS ATTENDEE CONCERNS**: If attendee perspectives mention concerns, address them in attendee_consideration fields.
+2. **Customer References**: IF any company names or case studies are mentioned, use them in customer_reference fields.
 
-4. **ACCOUNT DERAILERS**: Include derailer handling in strategic_notes.
+3. **Presenter Names**: IF presenter/speaker names are mentioned, use them. Otherwise, use placeholders like 'TBD - Solutions Architect'.
 
-5. **USE REAL PRESENTER NAMES**: Extract actual Oracle presenter names from EBD for each session.
+4. **Attendee Concerns**: IF any attendee perspectives or concerns are mentioned, address them in attendee_consideration fields.
 
-6. **VARY SESSION FORMATS**: Mix of Presentation, Demo, Roundtable, Working Session.
+5. **Challenges/Objectives**: IF business challenges or meeting objectives are mentioned, incorporate them into session themes.
 
-7. **ORACLE TALKING POINTS**: Each talking point should become a dedicated session.
+6. **Be Flexible**: Don't force information that isn't there. If the document doesn't contain certain data, simply omit those optional fields or use generic placeholders.
 """
     
     # Build prompt for structured output
-    prompt = f"""Generate a professional EBC agenda based on this data:
+    prompt = f"""Generate a professional executive briefing agenda based on this data:
 
 ## MEETING CONTEXT
 
@@ -551,9 +635,10 @@ External: {len(external_attendees)}
 4. Address visit focus: {meeting.get('visit_focus')}
 5. Incorporate sales plays: {meeting.get('sales_plays')}
 6. Use hybrid format if remote attendees ({len(remote_attendees)} remote)
-{"7. USE ACTUAL PRESENTER NAMES from EBD - no placeholders!" if ebd_context and ebd_context.get("has_ebd") else "7. Use placeholder presenter names like 'TBD - Oracle Solutions Architect'"}
-{"8. Include specific $ figures in key_metrics" if ebd_context and ebd_context.get("has_ebd") else ""}
-{"9. Name customer references explicitly" if ebd_context and ebd_context.get("has_ebd") else ""}
+7. Vary session formats (Presentation, Demo, Roundtable, Working Session)
+{"8. If document contains presenter names, use them. Otherwise use placeholders like 'TBD - Solutions Architect'" if ebd_context and ebd_context.get("has_ebd") else "8. Use placeholder presenter names like 'TBD - Solutions Architect'"}
+{"9. If document contains financial figures or metrics, include them in key_metrics" if ebd_context and ebd_context.get("has_ebd") else ""}
+{"10. If document contains customer references, use them in customer_reference fields" if ebd_context and ebd_context.get("has_ebd") else ""}
 
 Fill in ALL fields in the structured output. For attendee counts, use:
 - total_attendees: {len(attendees)}
@@ -566,17 +651,19 @@ Fill in ALL fields in the structured output. For attendee counts, use:
     
     # Build system message
     if ebd_context and ebd_context.get("has_ebd"):
-        system_msg = """You are an expert EBC agenda creator. Generate highly personalized agendas.
+        system_msg = """You are an expert executive briefing agenda creator. Generate personalized agendas based on meeting context and any available document content.
 
-STRICT RULES with EBD:
-- Use actual presenter names from EBD
-- Include specific $ figures in key_metrics
-- Name customer references explicitly  
-- Address attendee concerns in attendee_consideration
-- Note derailers in strategic_notes
-- Vary session formats"""
+GUIDELINES when document content is available:
+- Extract and use any relevant information found in the document
+- IF presenter names are found, use them; otherwise use placeholders
+- IF financial figures are found, include them in key_metrics
+- IF customer references are found, use them in customer_reference fields
+- IF attendee concerns are mentioned, address them in attendee_consideration
+- Don't assume the document has a specific structure - be flexible
+- It's OK to leave optional fields empty if information isn't available
+- Vary session formats (Presentation, Demo, Roundtable, Working Session)"""
     else:
-        system_msg = "You are an expert EBC agenda creator. Create professional, tailored executive briefing agendas."
+        system_msg = "You are an expert executive briefing agenda creator. Create professional, tailored agendas that address meeting objectives and attendee needs."
     
     # Use structured output parsing
     response = client.beta.chat.completions.parse(
@@ -614,7 +701,7 @@ def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
     lines.append("")
     
     # Presenters
-    lines.append("## Oracle Presenters")
+    lines.append("## Presenters")
     for presenter in agenda.oracle_presenters:
         lines.append(f"- {presenter.name}, {presenter.title}")
     lines.append("")
@@ -682,7 +769,7 @@ def generate_agenda(
     event_id: Optional[str] = None, 
     company_name: Optional[str] = None,
     ebd_path: Optional[str] = None,
-    use_default_ebd: bool = True,
+    use_default_ebd: bool = False,  # Only use default for explicit testing
     fetch_ebd_from_db: bool = True,  # Fetch EBD from VW_EVENT_DOCUMENT_REPORT
     output_format: Literal["structured", "markdown", "both"] = "both"
 ) -> Dict[str, Any]:
@@ -711,6 +798,10 @@ def generate_agenda(
         - sessions: List of session dicts for easy access
         - ebd_source: "database", "local_file", or None
     """
+    # Resolve event_id (handles UUID → numeric conversion)
+    if event_id:
+        event_id = _resolve_event_id(event_id)
+    
     logger.info(f"Starting agenda generation - event_id: {event_id}, company_name: {company_name}")
     
     if not event_id and not company_name:
@@ -734,6 +825,21 @@ def generate_agenda(
             }
         
         actual_event_id = context["meeting_details"]["event_id"]
+        meeting = context["meeting_details"]
+        attendees = context["attendees"]
+        
+        # Validate data quality - warn if critical fields are missing
+        missing_fields = []
+        if not meeting.get("industry"):
+            missing_fields.append("industry")
+        if not meeting.get("visit_focus"):
+            missing_fields.append("visit_focus")
+        if len(attendees) == 0:
+            missing_fields.append("attendees")
+        
+        if missing_fields:
+            logger.warning(f"⚠️  Missing critical data for {meeting.get('company_name')}: {', '.join(missing_fields)}. "
+                          f"Generated agenda may contain placeholder/hallucinated content.")
         
         # Step 2: Try to get EBD - priority: DB > local file > default
         ebd_context = None
