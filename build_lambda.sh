@@ -14,10 +14,12 @@ docker run --rm --platform linux/amd64 \
   -c "pip install -r requirements.txt -t /var/task/build"
 
 echo "📋 copying source..."
-cp api.py get_gdp.py lambda_handler.py build/
+cp api.py query_processor.py lambda_handler.py logging_config.py session_manager.py build/
 mkdir -p build/scripts
 cp scripts/sqlite_qa.py build/scripts/
 [ -f scripts/__init__.py ] && cp scripts/__init__.py build/scripts/ || touch build/scripts/__init__.py
+cp -r tools/ build/
+cp -r utils/ build/
 
 echo "📦 zipping..."
 cd build

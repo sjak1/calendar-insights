@@ -5,10 +5,14 @@ import json
 from datetime import datetime, date
 
 
-def json_dumps_safe(obj):
+def json_dumps_safe(obj, indent=None):
     """
     Safely serialize objects to JSON, converting datetime and date objects to ISO format strings.
     Handles datetime/date objects and other non-serializable types that may come from database queries.
+    
+    Args:
+        obj: Object to serialize
+        indent: Number of spaces for indentation (None for compact, 2 for pretty)
     """
     def default_serializer(o):
         if isinstance(o, (datetime, date)):
@@ -22,4 +26,4 @@ def json_dumps_safe(obj):
         # Handle other non-serializable types
         return str(o)
     
-    return json.dumps(obj, default=default_serializer)
+    return json.dumps(obj, default=default_serializer, indent=indent, ensure_ascii=False)

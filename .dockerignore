@@ -6,13 +6,12 @@
 !Dockerfile
 !requirements.txt
 !api.py
-!get_gdp.py
+!query_processor.py
 !lambda_handler.py
 !logging_config.py
+!session_manager.py
 !scripts/**
+!tools/**
+!utils/**
 !static/**
-
-# Keep build/deploy scripts out of the image
-!build_and_deploy.sh
-
 

@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Query System - Architecture</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .diagram-section {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .diagram-section h2 {
+            color: #1e40af;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .flow-description {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .flow-description h3 {
+            color: #856404;
+            margin-bottom: 10px;
+        }
+
+        .flow-description ol, .flow-description ul {
+            margin-left: 20px;
+            color: #856404;
+        }
+
+        .flow-description li {
+            margin: 8px 0;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .info-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid #1e40af;
+        }
+
+        .info-card h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .info-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .info-card li {
+            padding: 5px 0;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .info-card li:before {
+            content: "→ ";
+            color: #1e40af;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+
+        table th {
+            background: #1e40af;
+            color: white;
+            padding: 12px;
+            text-align: left;
+        }
+
+        table td {
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+
+        table tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗄️ SQL Query System Architecture</h1>
+            <p>LlamaIndex + Oracle Database + AI-Powered Queries</p>
+        </div>
+
+        <!-- Main Flow -->
+        <div class="diagram-section">
+            <h2>📊 System Flow - Step by Step</h2>
+            <div class="mermaid">
+graph TD
+    A["👤 STEP 1: User<br/>Natural Language Query<br/>Show me COO presenters"]
+    B["🧠 STEP 2: LlamaIndex<br/>SQLTableRetrieverQueryEngine"]
+    C["🔍 STEP 3: Vector Search<br/>Find Relevant Tables<br/>Search 7 table schemas"]
+    
+    D{"STEP 4: Which Table(s)?"}
+    
+    T1["📋 t_request_agenda_presenter"]
+    T2["📅 m_request_master"]
+    T3["🎯 t_request_agenda"]
+    T4["💼 t_request_opportunity"]
+    T5["📝 t_request_agenda_details"]
+    T6["📆 t_event_activity_day"]
+    T7["👥 m_user_role"]
+    
+    E["🤖 STEP 5: OpenAI GPT-4.1-mini<br/>Generate Oracle SQL<br/>+ Table Context"]
+    
+    F["✏️ STEP 6: Modify SQL<br/>Strip semicolons<br/>Fix Oracle syntax"]
+    
+    G["🗄️ STEP 7: Execute Query<br/>Oracle Database (AWS RDS)"]
+    
+    H["📦 STEP 8: Get Results<br/>Raw data from DB"]
+    
+    I["🤖 STEP 9: GPT Formats<br/>Natural language response"]
+    
+    J["💬 STEP 10: Return to User<br/>Here are the COO presenters..."]
+    
+    A --> B
+    B --> C
+    C --> D
+    D -->|Presenters?| T1
+    D -->|Events?| T2
+    D -->|Agenda?| T3
+    D -->|Revenue?| T4
+    D -->|Details?| T5
+    D -->|Activities?| T6
+    D -->|Users?| T7
+    T1 --> E
+    E --> F
+    F --> G
+    G --> H
+    H --> I
+    I --> J
+    
+    style A fill:#1e40af,stroke:#333,stroke-width:3px,color:#fff
+    style B fill:#0891b2,stroke:#333,stroke-width:3px,color:#fff
+    style C fill:#6366f1,stroke:#333,stroke-width:3px,color:#fff
+    style D fill:#f59e0b,stroke:#333,stroke-width:3px,color:#fff
+    style E fill:#8b5cf6,stroke:#333,stroke-width:3px,color:#fff
+    style F fill:#059669,stroke:#333,stroke-width:3px,color:#fff
+    style G fill:#dc2626,stroke:#333,stroke-width:3px,color:#fff
+    style H fill:#0d9488,stroke:#333,stroke-width:3px,color:#fff
+    style I fill:#8b5cf6,stroke:#333,stroke-width:3px,color:#fff
+    style J fill:#0891b2,stroke:#333,stroke-width:3px,color:#fff
+    style T1 fill:#6366f1,stroke:#333,stroke-width:2px,color:#fff
+    style T2 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+    style T3 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+    style T4 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+    style T5 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+    style T6 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+    style T7 fill:#e5e7eb,stroke:#9ca3af,stroke-width:1px,color:#6b7280
+            </div>
+
+            <div class="flow-description">
+                <h3>🎯 How It Works:</h3>
+                <ol>
+                    <li><strong>User asks:</strong> "Show me all COO presenters" (natural language)</li>
+                    <li><strong>LlamaIndex receives:</strong> Query goes to SQLTableRetrieverQueryEngine</li>
+                    <li><strong>Vector search:</strong> Embeds query and searches 7 table schemas for relevance</li>
+                    <li><strong>Table selection:</strong> Picks most relevant table (e.g., t_request_agenda_presenter)</li>
+                    <li><strong>SQL generation:</strong> GPT reads table context + Oracle rules → generates SQL</li>
+                    <li><strong>SQL modification:</strong> Strips semicolons, fixes Oracle-specific syntax</li>
+                    <li><strong>Execute:</strong> Runs query on Oracle database (AWS RDS)</li>
+                    <li><strong>Get results:</strong> Raw data returned from database</li>
+                    <li><strong>Format response:</strong> GPT converts data to natural language</li>
+                    <li><strong>Return:</strong> User gets readable answer</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- Database Tables -->
+        <div class="diagram-section">
+            <h2>🗄️ Oracle Database - 7 Tables</h2>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Table Name</th>
+                        <th>Purpose</th>
+                        <th>Records</th>
+                        <th>Key Fields</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>m_request_master</strong></td>
+                        <td>📋 Master event/request table</td>
+                        <td>271</td>
+                        <td>event_name, status, dates, locations, POC</td>
+                    </tr>
+                    <tr>
+                        <td><strong>t_request_agenda_presenter</strong></td>
+                        <td>👥 Presenters/speakers</td>
+                        <td>12,725</td>
+                        <td>first_name, last_name, title, email, text_field_3 (job titles like "COO")</td>
+                    </tr>
+                    <tr>
+                        <td><strong>t_request_agenda</strong></td>
+                        <td>📅 Event agenda structure</td>
+                        <td>7,559</td>
+                        <td>agenda items, schedule, dietary restrictions</td>
+                    </tr>
+                    <tr>
+                        <td><strong>t_request_agenda_details</strong></td>
+                        <td>📝 Detailed meeting info</td>
+                        <td>7,695</td>
+                        <td>host info, account, industry, attendees, custom fields</td>
+                    </tr>
+                    <tr>
+                        <td><strong>t_request_opportunity</strong></td>
+                        <td>💼 Sales opportunities</td>
+                        <td>31,020</td>
+                        <td>revenue, customer, status, probability</td>
+                    </tr>
+                    <tr>
+                        <td><strong>t_event_activity_day</strong></td>
+                        <td>📆 Daily activities</td>
+                        <td>2,772</td>
+                        <td>event_date, arrival/adjourn times, rooms</td>
+                    </tr>
+                    <tr>
+                        <td><strong>m_user_role</strong></td>
+                        <td>👤 User permissions</td>
+                        <td>2,051</td>
+                        <td>user_id, role_id, access control</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Example Query Flow -->
+        <div class="diagram-section">
+            <h2>💡 Example: "Show me COO presenters"</h2>
+            
+            <div class="mermaid">
+graph LR
+    A["User Query:<br/>Show me COO presenters"] --> B["Vector Search:<br/>Finds t_request_agenda_presenter<br/>similarity score: 0.89"]
+    B --> C["GPT Reads Context:<br/>text_field_3 contains job titles<br/>Use LIKE '%COO%' pattern"]
+    C --> D["Generated SQL:<br/>SELECT first_name, last_name, text_field_3<br/>FROM t_request_agenda_presenter<br/>WHERE text_field_3 LIKE '%COO%'"]
+    D --> E["Strip Semicolon:<br/>Remove ; if present"]
+    E --> F["Execute on Oracle:<br/>Returns 15 rows"]
+    F --> G["GPT Formats:<br/>Here are the COO presenters:<br/>1. John Smith - COO<br/>2. Jane Doe - COO"]
+    
+    style A fill:#1e40af,stroke:#333,stroke-width:2px,color:#fff
+    style B fill:#6366f1,stroke:#333,stroke-width:2px,color:#fff
+    style C fill:#8b5cf6,stroke:#333,stroke-width:2px,color:#fff
+    style D fill:#059669,stroke:#333,stroke-width:2px,color:#fff
+    style E fill:#f59e0b,stroke:#333,stroke-width:2px,color:#fff
+    style F fill:#dc2626,stroke:#333,stroke-width:2px,color:#fff
+    style G fill:#0891b2,stroke:#333,stroke-width:2px,color:#fff
+            </div>
+
+            <div class="flow-description" style="background: #e7f9f5;">
+                <h3>🔍 Query Examples:</h3>
+                <table>
+                    <tr>
+                        <td><strong>User Query</strong></td>
+                        <td><strong>Selected Table</strong></td>
+                        <td><strong>Generated SQL Pattern</strong></td>
+                    </tr>
+                    <tr>
+                        <td>"Show COO presenters"</td>
+                        <td>t_request_agenda_presenter</td>
+                        <td><code>WHERE text_field_3 LIKE '%COO%'</code></td>
+                    </tr>
+                    <tr>
+                        <td>"Events next month"</td>
+                        <td>m_request_master</td>
+                        <td><code>WHERE start_date BETWEEN ... AND ...</code></td>
+                    </tr>
+                    <tr>
+                        <td>"Halal dietary restrictions"</td>
+                        <td>t_request_agenda_details</td>
+                        <td><code>WHERE text_field_3 LIKE '%Halal%'</code></td>
+                    </tr>
+                    <tr>
+                        <td>"Revenue from TikTok"</td>
+                        <td>t_request_opportunity</td>
+                        <td><code>WHERE customer_name LIKE '%TikTok%'</code></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tech Stack -->
+        <div class="diagram-section">
+            <h2>💻 Technology Stack</h2>
+            
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>🧠 AI/ML Layer</h3>
+                    <ul>
+                        <li>LlamaIndex (Query Engine)</li>
+                        <li>OpenAI GPT-4.1-mini</li>
+                        <li>OpenAI Embeddings (text-embedding-3-small)</li>
+                        <li>Vector Search</li>
+                    </ul>
+                </div>
+                
+                <div class="info-card">
+                    <h3>🗄️ Database Layer</h3>
+                    <ul>
+                        <li>Oracle Database (AWS RDS)</li>
+                        <li>SQLAlchemy ORM</li>
+                        <li>oracledb Driver</li>
+                        <li>7 Tables (62K+ records)</li>
+                    </ul>
+                </div>
+                
+                <div class="info-card">
+                    <h3>🔧 Core Components</h3>
+                    <ul>
+                        <li>SQLTableRetrieverQueryEngine</li>
+                        <li>ObjectIndex (Table Schemas)</li>
+                        <li>VectorStoreIndex</li>
+                        <li>Custom SQL Modifier</li>
+                    </ul>
+                </div>
+                
+                <div class="info-card">
+                    <h3>⚙️ Special Features</h3>
+                    <ul>
+                        <li>Auto semicolon removal</li>
+                        <li>Oracle syntax fixes</li>
+                        <li>CLOUD_DATE UDT handling</li>
+                        <li>LIKE pattern matching</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Oracle-Specific Rules -->
+        <div class="diagram-section">
+            <h2>⚠️ Oracle Database Special Rules</h2>
+            
+            <div class="flow-description">
+                <h3>🔴 Critical Rules (Enforced by System):</h3>
+                <ul>
+                    <li><strong>NO SEMICOLONS:</strong> Oracle driver fails with <code>;</code> at end of SQL</li>
+                    <li><strong>Use FETCH FIRST:</strong> Not LIMIT/OFFSET (e.g., <code>FETCH FIRST 10 ROWS ONLY</code>)</li>
+                    <li><strong>UPPERCASE tables:</strong> Table/column names are UPPERCASE unless quoted</li>
+                    <li><strong>NVL not COALESCE:</strong> Use <code>NVL(expr1, expr2)</code> for NULL handling</li>
+                    <li><strong>CLOUD_DATE UDT:</strong> Use <code>.ZONEDATE</code> attribute for date columns</li>
+                    <li><strong>LIKE for custom fields:</strong> text_field_3 contains formatted strings, use LIKE patterns</li>
+                </ul>
+            </div>
+
+            <div class="flow-description" style="background: #eff6ff; border-left-color: #1e40af;">
+                <h3>💡 Smart Search Strategy:</h3>
+                <ul>
+                    <li><strong>Standard columns:</strong> Use exact matches (e.g., <code>first_name = 'John'</code>)</li>
+                    <li><strong>Custom fields:</strong> Use LIKE patterns (e.g., <code>text_field_3 LIKE '%COO%'</code>)</li>
+                    <li><strong>Job titles:</strong> Stored as "CIO - Chief Information Officer", search with abbreviation</li>
+                    <li><strong>Dietary:</strong> JSON arrays like ["Halal"], use <code>LIKE '%Halal%'</code></li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Architecture Diagram -->
+        <div class="diagram-section">
+            <h2>🏗️ Component Architecture</h2>
+            
+            <div class="mermaid">
+graph TB
+    subgraph "User Layer"
+        U[User Query]
+    end
+    
+    subgraph "LlamaIndex Layer"
+        QE[SQLTableRetrieverQueryEngine]
+        OI[ObjectIndex<br/>7 Table Schemas]
+        VS[VectorStoreIndex<br/>Embeddings]
+    end
+    
+    subgraph "AI Layer"
+        GPT[OpenAI GPT-4.1-mini<br/>SQL Generation]
+        EMB[OpenAI Embeddings<br/>text-embedding-3-small]
+    end
+    
+    subgraph "Database Layer"
+        MOD[ModifyingSQLDatabase<br/>Strip Semicolons]
+        SA[SQLAlchemy Engine]
+        ORA[Oracle Database<br/>AWS RDS]
+    end
+    
+    U --> QE
+    QE --> OI
+    OI --> VS
+    VS --> EMB
+    OI --> GPT
+    GPT --> MOD
+    MOD --> SA
+    SA --> ORA
+    ORA --> SA
+    SA --> MOD
+    MOD --> GPT
+    GPT --> QE
+    QE --> U
+    
+    style U fill:#1e40af,stroke:#333,stroke-width:2px,color:#fff
+    style QE fill:#0891b2,stroke:#333,stroke-width:2px,color:#fff
+    style OI fill:#6366f1,stroke:#333,stroke-width:2px,color:#fff
+    style VS fill:#6366f1,stroke:#333,stroke-width:2px,color:#fff
+    style GPT fill:#8b5cf6,stroke:#333,stroke-width:2px,color:#fff
+    style EMB fill:#8b5cf6,stroke:#333,stroke-width:2px,color:#fff
+    style MOD fill:#059669,stroke:#333,stroke-width:2px,color:#fff
+    style SA fill:#dc2626,stroke:#333,stroke-width:2px,color:#fff
+    style ORA fill:#dc2626,stroke:#333,stroke-width:2px,color:#fff
+            </div>
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>
+

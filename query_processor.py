@@ -98,7 +98,12 @@ def process_query(query, schedule_headers=None, session_id=None):
         logger.info(f"ITERATION {iteration_count}")
         logger.info(f"{'='*60}")
         logger.info(f"Input to API:")
-        logger.info(f"{json_dumps_safe(input_list)}")
+        # Pretty print with truncation for readability
+        input_json = json_dumps_safe(input_list, indent=2)
+        if len(input_json) > 2000:
+            logger.info(f"{input_json[:2000]}...\n[TRUNCATED - {len(input_json)} chars total]")
+        else:
+            logger.info(f"{input_json}")
 
         response = client.responses.create(
             model="gpt-4.1-mini",
@@ -108,7 +113,12 @@ def process_query(query, schedule_headers=None, session_id=None):
         )
 
         logger.info(f"Raw API Response Output:")
-        logger.info(f"{json_dumps_safe(response.output)}")
+        # Pretty print response
+        response_json = json_dumps_safe(response.output, indent=2)
+        if len(response_json) > 3000:
+            logger.info(f"{response_json[:3000]}...\n[TRUNCATED - {len(response_json)} chars total]")
+        else:
+            logger.info(f"{response_json}")
 
         input_list += response.output
 

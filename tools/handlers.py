@@ -114,11 +114,12 @@ def execute_tool(tool_name, args, schedule_headers=None):
                 company_name=args.get("company_name")
             )
             output = {"generate_agenda": result}
-            output_str = json.dumps(output, indent=2, default=str)
-            if len(output_str) > 1000:
-                logger.info(f"✓ {tool_name} returned: {output_str[:1000]}... (truncated, {len(output_str)} chars total)")
+            output_str = json_dumps_safe(output, indent=2)
+            # Generate agenda returns a lot of data, so truncate more aggressively
+            if len(output_str) > 2000:
+                logger.info(f"✓ {tool_name} returned:\n{output_str[:2000]}...\n[TRUNCATED - {len(output_str)} chars total]")
             else:
-                logger.info(f"✓ {tool_name} returned: {output_str}")
+                logger.info(f"✓ {tool_name} returned:\n{output_str}")
             return output
 
         else:
@@ -143,7 +144,8 @@ def process_function_calls(pending_calls, schedule_headers=None):
 
     for item in pending_calls:
         args = json.loads(item.arguments) if item.arguments else {}
-        logger.info(f"→ Calling function: {item.name} with args: {json.dumps(args, indent=2)}")
+        args_str = json.dumps(args, indent=2, ensure_ascii=False)
+        logger.info(f"→ Calling function: {item.name} with args:\n{args_str}")
 
         result = execute_tool(item.name, args, schedule_headers)
 

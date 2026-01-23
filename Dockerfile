@@ -8,8 +8,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code (only what we need)
-COPY api.py get_gdp.py lambda_handler.py logging_config.py ./
+COPY api.py query_processor.py lambda_handler.py logging_config.py session_manager.py ./
 COPY scripts/ ./scripts/
+COPY tools/ ./tools/
+COPY utils/ ./utils/
 COPY static/ ./static/
 
 # Set the CMD to your handler
