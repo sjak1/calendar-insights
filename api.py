@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from query_processor import handle_query
@@ -32,18 +32,71 @@ async def root():
     return {"message": "BriefingIQ AI Assistant API", "endpoints": {"/process_query": "POST"}}
 
 @app.post("/process_query")
-async def process_query(payload: QueryPayload):
+async def process_query(payload: QueryPayload, request: Request):
     query = payload.query
-    headers = payload.headers
+    body_headers = payload.headers or {}
     session_id = payload.session_id
     
-    # Extract event_id from headers (for context-aware agenda generation)
-    # Header key can be lowercase or mixed case depending on client
-    event_id = headers.get("x-cloud-eventid") or headers.get("X-Cloud-Eventid")
+    # Extract HTTP headers from the request
+    # FastAPI Request.headers is case-insensitive, but we'll normalize to lowercase
+    # for easier lookup while preserving original case
+    http_headers = {}
+    for key, value in request.headers.items():
+        # Store with both original case and lowercase for flexible lookup
+        http_headers[key] = value
+        http_headers[key.lower()] = value
     
-    logger.info(f"Processing query: {query[:100]}... (session_id: {session_id}, event_id: {event_id})")
+    # Merge headers: body headers take precedence over HTTP headers
+    headers = {**http_headers, **body_headers}
+    
+    # Debug: Log all headers received
+    logger.info(f"📥 Received HTTP headers: {len(http_headers)} headers from request")
+    logger.info(f"📥 Received body headers: {list(body_headers.keys()) if body_headers else 'None'}")
+    logger.info(f"📥 Merged headers: {list(headers.keys())[:10]}... (showing first 10)")
+    if headers:
+        # Log all header keys and values (truncate long values)
+        for key, value in headers.items():
+            if isinstance(value, str) and len(value) > 50:
+                logger.info(f"   {key}: {value[:50]}... (truncated)")
+            else:
+                logger.info(f"   {key}: {value}")
+    
+    # Extract event_id from headers (for context-aware agenda generation)
+    # Try multiple possible header key formats (case-insensitive)
+    # Since we stored both original and lowercase, we can check both
+    event_id = (
+        headers.get("x-cloud-eventid") or 
+        headers.get("x-cloud-event-id") or
+        headers.get("X-Cloud-Eventid") or 
+        headers.get("X-Cloud-Event-ID") or
+        headers.get("eventid") or
+        headers.get("event_id") or
+        headers.get("EventId") or
+        headers.get("Event-ID")
+    )
+    
+    if event_id:
+        logger.info(f"✅ Event ID found in header: {event_id} (will prioritize over LLM-extracted)")
+    else:
+        logger.info(f"⚠️  No event_id in header, will rely on LLM-extracted or company_name")
+        logger.info(f"   Searched for: x-cloud-eventid, X-Cloud-Eventid, x-cloud-event-id, eventid, event_id")
+
+    # Extract category_id from headers (for category-level context: list of events in this category)
+    category_id = (
+        headers.get("x-cloud-categoryid") or
+        headers.get("x-cloud-category-id") or
+        headers.get("X-Cloud-Categoryid") or
+        headers.get("category_id") or
+        headers.get("categoryid")
+    )
+    if category_id:
+        logger.info(f"✅ Category ID found in header: {category_id} (for category-level context when no event_id)")
+    else:
+        logger.info(f"   No category_id in header")
+
+    logger.info(f"Processing query: {query[:100]}... (session_id: {session_id}, event_id: {event_id}, category_id: {category_id})")
     try:
-        result = handle_query(query, headers, session_id=session_id, event_id=event_id)
+        result = handle_query(query, headers, session_id=session_id, event_id=event_id, category_id=category_id)
         logger.info("Query processed successfully")
         return {"message": result, "session_id": session_id}
     except Exception as e:
