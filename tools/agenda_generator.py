@@ -584,7 +584,7 @@ GUIDELINES FOR USING DOCUMENT CONTENT:
 
 2. **Customer References**: IF any company names or case studies are mentioned, use them in customer_reference fields.
 
-3. **Presenter Names**: IF presenter/speaker names are mentioned, use them. Otherwise, use placeholders like 'TBD - Solutions Architect'.
+3. **Presenter Names**: IF presenter/speaker names are mentioned, use them. Otherwise, use placeholders like 'TBD'.
 
 4. **Attendee Concerns**: IF any attendee perspectives or concerns are mentioned, address them in attendee_consideration fields.
 
@@ -636,7 +636,7 @@ External: {len(external_attendees)}
 5. Incorporate sales plays: {meeting.get('sales_plays')}
 6. Use hybrid format if remote attendees ({len(remote_attendees)} remote)
 7. Vary session formats (Presentation, Demo, Roundtable, Working Session)
-{"8. If document contains presenter names, use them. Otherwise use placeholders like 'TBD - Solutions Architect'" if ebd_context and ebd_context.get("has_ebd") else "8. Use placeholder presenter names like 'TBD - Solutions Architect'"}
+{"8. If document contains presenter names, use them. Otherwise use placeholders like 'TBD'" if ebd_context and ebd_context.get("has_ebd") else "8. Use placeholder presenter names like 'TBD'"}
 {"9. If document contains financial figures or metrics, include them in key_metrics" if ebd_context and ebd_context.get("has_ebd") else ""}
 {"10. If document contains customer references, use them in customer_reference fields" if ebd_context and ebd_context.get("has_ebd") else ""}
 
@@ -799,8 +799,11 @@ def generate_agenda(
         - ebd_source: "database", "local_file", or None
     """
     # Resolve event_id (handles UUID → numeric conversion)
+    original_event_id = event_id
     if event_id:
         event_id = _resolve_event_id(event_id)
+        if original_event_id != event_id:
+            logger.info(f"🔄 Converted event_id: {original_event_id} → {event_id}")
     
     logger.info(f"Starting agenda generation - event_id: {event_id}, company_name: {company_name}")
     

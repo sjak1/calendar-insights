@@ -89,7 +89,9 @@ def execute_tool(tool_name, args, schedule_headers=None, context_event_id=None):
 
         elif tool_name == "query_database":
             result = ask_sqlite(args["question"])
-            output = {"query_database": result}
+            # Redact raw SQL from tool output so the LLM never exposes it to the user
+            result_for_llm = {k: v for k, v in result.items() if k != "sql"}
+            output = {"query_database": result_for_llm}
             output_str = json.dumps(output, indent=2, default=str)
             if len(output_str) > 1000:
                 logger.info(f"✓ {tool_name} returned: {output_str[:1000]}... (truncated, {len(output_str)} chars total)")
@@ -111,9 +113,17 @@ def execute_tool(tool_name, args, schedule_headers=None, context_event_id=None):
 
         elif tool_name == "generate_agenda":
             # Priority: context_event_id (from header) > args.event_id (from LLM)
-            effective_event_id = context_event_id or args.get("event_id")
+            llm_event_id = args.get("event_id")
+            effective_event_id = context_event_id or llm_event_id
+            
             if context_event_id:
-                logger.info(f"Using event_id from header: {context_event_id}")
+                logger.info(f"🎯 Prioritizing event_id from header: {context_event_id}")
+                if llm_event_id and llm_event_id != context_event_id:
+                    logger.info(f"   (LLM extracted: {llm_event_id}, but using header value)")
+            elif llm_event_id:
+                logger.info(f"📝 Using LLM-extracted event_id: {llm_event_id} (no header event_id)")
+            else:
+                logger.info(f"ℹ️  No event_id available, using company_name: {args.get('company_name')}")
             
             result = generate_agenda(
                 event_id=effective_event_id,
