@@ -527,11 +527,13 @@ def _fetch_meeting_context_os(
             "_source": _EVENT_SOURCE_FIELDS,
         }
     else:
-        # Fuzzy multi_match on company name for tolerance to typos / abbreviations
+        # Search eventName first (always populated), fall back to customerName
         query_body = {
             "query": {
                 "bool": {
                     "should": [
+                        {"term": {"eventName.keyword": company_name}},
+                        {"match": {"eventName": {"query": company_name, "fuzziness": "AUTO"}}},
                         {"term": {"eventData.VISIT_INFO.data.customerName.keyword": company_name}},
                         {"match": {"eventData.VISIT_INFO.data.customerName": {"query": company_name, "fuzziness": "AUTO"}}},
                     ],
@@ -539,7 +541,7 @@ def _fetch_meeting_context_os(
                 }
             },
             "size": 1,
-            "sort": [{"startTime": {"order": "desc"}}],
+            "sort": [{"_score": {"order": "desc"}}, {"startTime": {"order": "desc"}}],
             "_source": _EVENT_SOURCE_FIELDS,
         }
 
@@ -659,8 +661,10 @@ _EVENT_SOURCE_FIELDS = [
 
 
 def _deep_get(obj: Any, dotted_path: str) -> Any:
-    """Traverse nested dicts by dotted key path (e.g. 'a.b.c')."""
+    """Traverse nested dicts/lists by dotted key path (e.g. 'a.b.c')."""
     for key in dotted_path.split("."):
+        if isinstance(obj, list):
+            obj = obj[0] if obj else None
         if isinstance(obj, dict):
             obj = obj.get(key)
         else:
@@ -688,8 +692,14 @@ def _fetch_similar_briefings_os(
     if visit_focus:
         should_clauses.append({"match": {"eventData.VISIT_INFO.data.visitFocus": {"query": visit_focus, "boost": 3}}})
     if pillars:
-        pillar_str = pillars if isinstance(pillars, str) else json.dumps(pillars)
-        should_clauses.append({"match": {"eventData.VISIT_INFO.data.pillars": {"query": pillar_str, "boost": 1}}})
+        if isinstance(pillars, str):
+            pillar_str = pillars
+        elif isinstance(pillars, list):
+            pillar_str = " ".join(str(p) for p in pillars)
+        else:
+            pillar_str = None
+        if pillar_str:
+            should_clauses.append({"match": {"eventData.VISIT_INFO.data.pillars": {"query": pillar_str, "boost": 1}}})
 
     must_not = []
     if exclude_company:
@@ -704,7 +714,7 @@ def _fetch_similar_briefings_os(
             }
         },
         "size": 5,
-        "sort": [{"_score": {"order": "desc"}}, {"startTime": {"order": "desc"}}],
+        "sort": [{"_score": {"order": "desc"}}, {"startTime": {"order": "desc", "unmapped_type": "long"}}],
         "_source": [
             "eventData.VISIT_INFO.data.customerName",
             "eventData.VISIT_INFO.data.customerIndustry",
@@ -733,6 +743,8 @@ def _fetch_similar_briefings_os(
                 "pillars": sv.get("pillars"),
                 "relevance_score": h.get("score", 0),
             })
+    else:
+        logger.warning(f"Similar briefings query failed: {resp.get('error', 'unknown error')}")
     logger.info(f"Found {len(results)} similar briefings via OpenSearch")
     return results
 
