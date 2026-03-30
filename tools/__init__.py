@@ -1,6 +1,7 @@
 """
 Tools module - exports all tool functions and definitions.
 """
+
 from tools.definitions import tools
 from tools.external_apis import get_gdp
 from tools.briefingiq_api import (
@@ -11,6 +12,8 @@ from tools.briefingiq_api import (
 )
 from tools.chart import format_chart
 from tools.agenda_generator import generate_agenda
+from tools.report import generate_report
+from tools.pdf import generate_pdf
 
 __all__ = [
     "tools",
@@ -21,4 +24,6 @@ __all__ = [
     "get_report_data",
     "format_chart",
     "generate_agenda",
+    "generate_report",
+    "generate_pdf",
 ]

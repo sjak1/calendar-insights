@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Report Flow Diagram</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: true });
+  </script>
+</head>
+<body>
+<h2>Redwood Shores Report Flow</h2>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as User (Frontend)
+    participant API as FastAPI /process_query
+    participant LLM as Bedrock Model
+    participant TH as Tool Handler
+    participant REP as Report Generator
+    participant OS as OpenSearch Client
+
+    U->>API: Query: \"generate report for Redwood Shores events this month\"
+    API->>LLM: Messages + instructions + tools
+    LLM-->>API: Tool call: generate_report (DSL + columns + title)
+
+    API->>TH: process_function_calls(generate_report)
+    TH->>REP: generate_report(dsl_query, columns, title, subtitle, tz)
+    REP->>OS: run_raw_dsl(dsl_body, index, tz)
+    OS->>OS: validate DSL + normalize date filters
+    OS-->>REP: hits (OpenSearch documents)
+
+    REP->>REP: build_report_rows(hits, columns)
+    REP->>REP: format_report(rows, columns) → reportUiConfig + reportData
+    REP-->>TH: result = type=report + UI config + data
+
+    TH->>TH: summarize_report_for_llm(result)
+    TH-->>API: small summary for LLM + full payload for frontend
+    API->>LLM: function_call_output with report summary
+    LLM-->>API: final short text summary
+
+    API-->>U: text summary + reportUiConfig + reportData
+    note right of U: Frontend renders FlexGrid from reportUiConfig and reportData
+</div>
+</body>
+</html>
+
+

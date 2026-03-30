@@ -5,27 +5,20 @@ from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 import sys
 import os
 import datetime
 
-# Add parent directory to path for logging_config import
+# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from logging_config import get_logger
+from database import engine
 
 load_dotenv()
 
 logger = get_logger(__name__)
 
-
-
-ORACLE_CONNECTION_URI = (
-    "oracle+oracledb://BIQ_EIQ_AURORA:BIQ_EIQ_AURORA"
-    "@biq-read.ciqohztp4uck.us-west-2.rds.amazonaws.com:1521/?service_name=ORCL"
-)
-
-engine = create_engine(ORACLE_CONNECTION_URI)
 SCHEMA_CACHE: str | None = None
 
 # Views exposed through this helper (these are the only ones the user mentioned)
@@ -109,14 +102,17 @@ def _call_llm(messages: List[Dict[str, str]]) -> str:
             model="gpt-4.1-mini",
             input=messages,
             text={"format": {"type": "json_object"}},
-            instructions="todays date is " + datetime.datetime.now().strftime("%Y-%m-%d")
+            instructions="todays date is "
+            + datetime.datetime.now().strftime("%Y-%m-%d"),
         )
         return response.output_text
 
     # Fallback to Chat Completions API (older SDKs)
     chat_completions = getattr(client, "chat", None)
     if chat_completions is None or not hasattr(chat_completions, "completions"):
-        raise RuntimeError("OpenAI client does not support responses or chat completions APIs.")
+        raise RuntimeError(
+            "OpenAI client does not support responses or chat completions APIs."
+        )
 
     response = chat_completions.completions.create(
         model="gpt-4o-mini",
@@ -158,12 +154,18 @@ def _load_schema() -> str:
             context = VIEW_CONTEXTS.get(view_name)
             if context:
                 schema_lines.append(f"Context:\n{context.strip()}\n")
-            logger.debug(f"Loaded schema for view: {view_name} ({len(filtered_columns)} columns)")
+            logger.debug(
+                f"Loaded schema for view: {view_name} ({len(filtered_columns)} columns)"
+            )
         except Exception as e:
-            logger.error(f"Error loading schema for view {view_name}: {e}", exc_info=True)
+            logger.error(
+                f"Error loading schema for view {view_name}: {e}", exc_info=True
+            )
 
     SCHEMA_CACHE = "\n".join(schema_lines)
-    logger.info(f"Schema loaded successfully, total length: {len(SCHEMA_CACHE)} characters")
+    logger.info(
+        f"Schema loaded successfully, total length: {len(SCHEMA_CACHE)} characters"
+    )
     return SCHEMA_CACHE
 
 
@@ -189,7 +191,7 @@ def _generate_sql(question: str) -> Tuple[str, str]:
         if not content or not content.strip():
             logger.error("LLM returned empty response")
             raise ValueError("LLM returned empty response")
-        
+
         logger.debug(f"LLM response content (first 500 chars): {content[:500]}")
         payload = json.loads(content)
 
@@ -206,7 +208,9 @@ def _generate_sql(question: str) -> Tuple[str, str]:
         return sql, explanation
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM response as JSON: {e}")
-        logger.error(f"Response content that failed to parse: {content[:1000] if 'content' in locals() else 'N/A'}")
+        logger.error(
+            f"Response content that failed to parse: {content[:1000] if 'content' in locals() else 'N/A'}"
+        )
         raise
     except Exception as e:
         logger.error(f"Error generating SQL: {e}", exc_info=True)

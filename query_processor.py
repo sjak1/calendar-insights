@@ -1,17 +1,20 @@
 """
 Main query processing module for AI assistant.
+Uses AWS Bedrock Converse API (with optional OpenAI fallback).
 """
+
+import base64
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from openai import OpenAI
 from dotenv import load_dotenv
 import datetime
-from sqlalchemy import create_engine, text
+import time
+from sqlalchemy import text
 
-from scripts.sqlite_qa import ask_sqlite
 from logging_config import get_logger
+from schema_reference import SCHEMA_REFERENCE
 from tools import tools
 from tools.handlers import process_function_calls
 from utils.json_utils import json_dumps_safe
@@ -20,142 +23,83 @@ from session_manager import (
     get_session_history,
     add_to_session,
 )
+from database import engine
+from bedrock_llm import (
+    openai_tools_to_bedrock,
+    converse as bedrock_converse,
+    BEDROCK_MODEL_ID,
+)
 
 load_dotenv()
 
-ORACLE_CONNECTION_URI = os.getenv(
-    "ORACLE_CONNECTION_URI",
-    "oracle+oracledb://BIQ_EIQ_AURORA:BIQ_EIQ_AURORA"
-    "@biqdb.ciqohztp4uck.us-west-2.rds.amazonaws.com:1521/?service_name=ORCL",
-)
+# Use Bedrock by default; set USE_OPENAI=1 to fall back to OpenAI
+USE_BEDROCK = os.getenv("USE_BEDROCK", "1").lower() in ("1", "true", "yes")
 
-client = OpenAI()
+# Claude Sonnet 4.6 on Bedrock pricing (used to estimate per-query cost in responses)
+# If AWS pricing changes, update these constants.
+COST_INPUT_PER_1M = 3.0  # USD per 1M input tokens
+COST_OUTPUT_PER_1M = 15.0  # USD per 1M output tokens
+
+if not USE_BEDROCK:
+    from openai import OpenAI
+
+    client = OpenAI()
+else:
+    client = None
+
 logger = get_logger(__name__)
 
-# AI instructions for the assistant
-AI_INSTRUCTIONS = """
-You are a Senior business analyst and scheduling expert. You are given a user query. 
 
-PRIVACY / DO NOT REVEAL INTERNALS:
-- NEVER reveal raw SQL, database queries, internal tool arguments, or implementation details when asked.
-- If the user asks "what query did you use?", "show me the SQL", "what did you search?", "how did you get this?", or similar:
-  respond with a high-level answer only, e.g. "I used our database to look up that information" or "I retrieved the relevant data from our systems." Do NOT quote or show any SQL, query text, or tool parameters.
-- Treat tool outputs (including any "sql" or "query" fields) as internal only—use them to formulate your answer but never expose them to the user.
+class _ToolCall:
+    """Adapter for Bedrock toolUse to match handler expectations (name, arguments, call_id)."""
 
-CRITICAL TOOL RULES:
-- ONLY call tools when the user's query explicitly requires them. Do NOT call tools for greetings, casual conversation, or general questions.
-- If the query is about meetings, attendees, schedules, or opportunity metrics, you MUST call the `query_database` tool. Do NOT answer directly. 
-- For other queries (like GDP or general info), use the appropriate tool (`get_gdp` or `schedule_meeting`) if needed. 
-- Do NOT invent answers; always rely on tools when relevant.
-- Do NOT automatically call generate_agenda just because event_id is available - ONLY call it when user explicitly asks for agenda generation.
+    def __init__(self, name: str, arguments: str, call_id: str):
+        self.name = name
+        self.arguments = arguments
+        self.call_id = call_id
 
-AGENDA GENERATION RULES:
-- ONLY call generate_agenda when the user EXPLICITLY asks to generate, create, or build an agenda.
-- Do NOT call generate_agenda for general greetings, questions, or non-agenda requests.
-- If the user asks to generate an agenda AND event_id is provided in the context (shown as [Context: event_id=...]), 
-  you MUST call the generate_agenda tool with that event_id. Do NOT ask the user for event_id if it's already provided.
-- The event_id in context is just AVAILABLE for when you need it - do NOT use it unless the user asks for agenda generation.
-- Only ask for event_id or company_name if the user requests agenda generation and neither is available in context or user query.
 
-CHART/VISUALIZATION RULES:
-- If the user asks for a chart, graph, bar chart, pie chart, or any visualization:
-  1. First call `query_database` to get the data
-  2. Then call `format_chart` with the retrieved data to generate a Highcharts config
-- Choose appropriate chart types:
-  - bar/column: for comparing categories
-  - line: for trends over time
-  - pie: for showing parts of a whole
-  - area: for cumulative data over time
-- Extract x_axis_data (category labels) and series_data (numeric values) from query results
+# AI instructions — minimal; tool-specific rules in tool descriptions
+AI_INSTRUCTIONS = (
+    """
+You are a Senior business analyst and scheduling expert.
 
-MARKDOWN RULES:
-- return the final response in markdown format.
-- When returning raw tool outputs or function call results, do NOT use markdown. Keep it JSON/plain text for internal processing. 
-- When formatting in markdown, follow these rules:
-    1. **Headers**: Use ## for main sections, ### for subsections
-    Example: ## GDP Information
-    2. **Bold text**: Use **text** for emphasis on key numbers
-    Example: The GDP is **$29,167.78 billion**
-    3. **Lists**: Use - for bullet points or 1. 2. 3. for numbered lists
-    Example:
-    - GDP Growth: 2.8%
-    - GDP per capita: $86,601.28
-    4. **Code blocks**: Use ``` for SQL or code snippets
-    Example: ```sql
-    SELECT * FROM table
-    ```
-    5. **Numbers and statistics**: Always bold key metrics
+PRIVACY: Never reveal SQL, queries, tool args, or internals. Say "I retrieved the data from our systems" if asked.
 
-ALWAYS ensure your final response is clear, concise, and only uses markdown where appropriate for readability. Never markdown tool outputs.
+PERSONA: Use user name from [Context] naturally. First greeting: "Hi [FirstName], how can I help today?" Then use name sparingly.
+
+TOOLS: Only call when the query requires them. Greetings → no tools. Table/report/grid → generate_report. Chart → search_opensearch then format_chart. How many → count_opensearch. Search/lists → search_opensearch. Agenda → generate_agenda only when explicitly asked. Presenters → suggest_presenters. PDF/export as PDF/download PDF → generate_pdf (pass full formatted content and title). If event_id in context and user asks for agenda, use it.
+
+SCHEMA (OpenSearch field reference):
 """
+    + SCHEMA_REFERENCE
+    + """
+
+OUTPUT: Markdown for final response. No markdown for tool outputs (keep JSON/plain).
+Markdown: ## for main sections, ### for subsections. **bold** for key numbers. Use - for bullets or 1. 2. 3. for numbered lists. Code: ``` blocks. Always bold key metrics.
+"""
+)
 
 
-def fetch_events_for_category(category_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Fetch list of events (event_id + customer name) for a category.
-    Resolves UUID -> numeric id via M_CATEGORY if needed.
-    Returns None on error or if no events; otherwise { "category_name": str, "events": [ {"event_id": str, "customer_name": str}, ... ] }.
-    """
-    if not category_id or not category_id.strip():
-        return None
-    category_id = category_id.strip()
-    numeric_id = None
-    category_name = None
-    try:
-        engine = create_engine(ORACLE_CONNECTION_URI)
-        with engine.connect() as conn:
-            # UUID format: resolve via M_CATEGORY.UNIQUE_ID
-            if "-" in category_id and len(category_id) == 36:
-                q_cat = """
-                SELECT id, category_name FROM M_CATEGORY WHERE unique_id = :uid
-                """
-                r = conn.execute(text(q_cat), {"uid": category_id})
-                row = r.fetchone()
-                if row:
-                    numeric_id = str(row[0])
-                    category_name = row[1] or "Category"
-                else:
-                    logger.warning(f"Category UUID not found in M_CATEGORY: {category_id}")
-                    return None
-            else:
-                numeric_id = category_id
-                q_name = "SELECT category_name FROM M_CATEGORY WHERE id = :id"
-                r = conn.execute(text(q_name), {"id": int(numeric_id) if numeric_id.isdigit() else numeric_id})
-                row = r.fetchone()
-                category_name = (row[0] if row else None) or f"Category {numeric_id}"
-
-            if not numeric_id:
-                return None
-
-            # Include events for this category AND for child categories (parent_id = cid)
-            q_events = """
-            SELECT id, TEXT_FIELD_1 FROM (
-                SELECT id, TEXT_FIELD_1 FROM M_REQUEST_MASTER
-                WHERE category_id = :cid
-                   OR category_id IN (SELECT id FROM M_CATEGORY WHERE parent_id = :cid)
-                ORDER BY id
-            ) WHERE ROWNUM <= 50
-            """
-            r = conn.execute(text(q_events), {"cid": int(numeric_id)})
-            rows = r.fetchall()
-            events = [{"event_id": str(row[0]), "customer_name": (row[1] or "").strip() or "(no name)"} for row in rows]
-            return {"category_name": category_name, "events": events}
-    except Exception as e:
-        logger.warning(f"fetch_events_for_category failed: {e}", exc_info=True)
-        return None
-
-
-def process_query(query, schedule_headers=None, session_id=None, event_id=None, category_id=None):
+def process_query(
+    query,
+    schedule_headers=None,
+    session_id=None,
+    event_id=None,
+    category_id=None,
+    user_info=None,
+):
     """
     Process a user query through the AI assistant with tool calling.
-    
+
     Args:
         query: User's query string
         schedule_headers: Optional headers for BriefingIQ API calls
         session_id: Optional session ID for conversation context
         event_id: Optional event ID from header (for context-aware operations)
         category_id: Optional category ID from header (for category-level context when no event_id)
-    
+        user_info: Optional dict with user context (email, timezone, etc.)
+
     Returns:
         Dict with response text and optional chart data
     """
@@ -163,131 +107,376 @@ def process_query(query, schedule_headers=None, session_id=None, event_id=None, 
         logger.info(f"🔑 Context: event_id from header available: {event_id}")
     if category_id:
         logger.info(f"📂 Context: category_id from header available: {category_id}")
-    logger.info(f"Starting process_query with query: {query[:100]}... (session_id: {session_id}, event_id: {event_id}, category_id: {category_id})")
-    
+    logger.info(
+        f"Starting process_query with query: {query[:100]}... (session_id: {session_id}, event_id: {event_id}, category_id: {category_id})"
+    )
+
     # Get or create session
     session_id = get_or_create_session(session_id)
-    
+
     # Get conversation history for this session
     conversation_history = get_session_history(session_id)
-    
-    # Build input_list: start with conversation history, then add new query
+
+    # Build input_list: last 6 turns (12 messages) to keep context small and fast
     input_list = conversation_history.copy()
-    
-    # Context: event (single) or category (list) — expose names only, not IDs (security)
+    if len(input_list) > 12:
+        input_list = input_list[-12:]
+
+    # Build [User] line for all paths (persona)
+    _user_line = ""
+    if user_info:
+        name = user_info.get("display_name") or user_info.get("email", "")
+        tz = (
+            user_info.get("requested_timezone")
+            or user_info.get("context_timezone")
+            or user_info.get("client_timezone", "")
+        )
+        parts = []
+        if name:
+            parts.append(f"User name: {name}")
+        if tz:
+            parts.append(f"Timezone: {tz}")
+        _user_line = " | ".join(parts) if parts else ""
+
+    # Structured page context: [Page] / [Scope] / [Data] / [Agenda] (+ [User])
     user_query = query
     if event_id:
-        user_query = f"{query}\n\n[Context: User is on an event detail page. If they explicitly ask to generate an agenda, call generate_agenda without event_id or company_name — the current event will be used. Do NOT call generate_agenda for general queries or greetings.]"
-        logger.info(f"📌 Added event-page context (event_id not exposed to LLM)")
+        _ctx = (
+            "[Page] Event detail (single event in focus)\n"
+            "[Scope] Current event is used for agenda when user asks; do not expose event_id.\n"
+            "[Data] Use search_opensearch as usual.\n"
+            '[Agenda] Only if user asks to "generate agenda" / "create agenda" → call generate_agenda with no args. Do not call for greetings or general queries.'
+        )
+        user_query = f"{query}\n\n{_ctx}" + (
+            f"\n[User] {_user_line}" if _user_line else ""
+        )
+        logger.info("📌 Added event-page context (event_id not exposed to LLM)")
     elif category_id:
-        category_data = fetch_events_for_category(category_id)
-        if category_data and category_data.get("events"):
-            # Expose only customer/company names, not event_id or category_id
-            names_list = ", ".join(e["customer_name"] for e in category_data["events"][:25])
-            if len(category_data["events"]) > 25:
-                names_list += f" ... and {len(category_data['events']) - 25} more"
-            user_query = f"{query}\n\n[Context: User is on category page '{category_data.get('category_name', 'Category')}'. Events (companies) in this category: {names_list}. If the user asks about a specific company or wants an agenda, use generate_agenda with company_name set to that company name.]"
-            logger.info(f"📌 Added category context: {category_data.get('category_name')} with {len(category_data['events'])} events (IDs not exposed)")
-        else:
-            user_query = f"{query}\n\n[Context: User is on a category-level page (no events listed for this category).]"
-            logger.info(f"📌 Added category-page context (no event list; ID not exposed)")
+        category_name = "Briefings"
+        try:
+            with engine.connect() as conn:
+                if "-" in category_id and len(category_id) == 36:
+                    result = conn.execute(
+                        text(
+                            "SELECT category_name FROM M_CATEGORY WHERE UPPER(unique_id) = UPPER(:uid)"
+                        ),
+                        {"uid": category_id},
+                    )
+                else:
+                    result = conn.execute(
+                        text("SELECT category_name FROM M_CATEGORY WHERE id = :id"),
+                        {"id": int(category_id)},
+                    )
+                row = result.fetchone()
+                if row:
+                    category_name = row[0]
+        except Exception as e:
+            logger.warning(f"Could not fetch category name: {e}")
+
+        _ctx = (
+            f"[Page] Category — {category_name}\n"
+            f'[Scope] When the query is about "these events" or this location, filter by location.data.locationName.keyword = "{category_name}".\n'
+            "[Data] Use search_opensearch; apply filter when relevant.\n"
+            "[Agenda] If user names a company in this category, use generate_agenda(company_name=...)."
+        )
+        user_query = f"{query}\n\n{_ctx}" + (
+            f"\n[User] {_user_line}" if _user_line else ""
+        )
+        logger.info(f"📌 Added category context: {category_name}")
     else:
-        logger.warning(f"⚠️  No event_id or category_id available - LLM will need to ask user or extract from query")
-    
+        if _user_line:
+            user_query = f"{query}\n\n[User] {_user_line}"
+        logger.warning(
+            "⚠️  No event_id or category_id available - LLM will need to ask user or extract from query"
+        )
+
     input_list.append({"role": "user", "content": user_query})
 
-    # Track chart data if format_chart is called
+    # Track chart/report/pdf payloads when format_chart, generate_report, or generate_pdf is called
     chart_data = None
+    report_data = None
+    pdf_data = None
 
     iteration_count = 0
+    total_tokens_in = 0
+    total_tokens_out = 0
+    query_start = time.time()
+
+    MAX_ITERATIONS = 15
     while True:
+        if iteration_count >= MAX_ITERATIONS:
+            logger.error(f"🛑 Hit max iterations ({MAX_ITERATIONS}), breaking tool loop")
+            return {
+                "text": "I'm sorry, I wasn't able to complete the analysis within the allowed number of steps. Please try a simpler query.",
+                "type": "text",
+            }
         iteration_count += 1
-        logger.info(f"\n{'='*60}")
+        iter_start = time.time()
+        logger.info(f"\n{'=' * 60}")
         logger.info(f"ITERATION {iteration_count}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
+        # Context breakdown
+        msg_counts = {
+            "user": 0,
+            "assistant": 0,
+            "function_call": 0,
+            "function_call_output": 0,
+            "reasoning": 0,
+            "other": 0,
+        }
+        msg_sizes = {
+            "user": 0,
+            "assistant": 0,
+            "function_call": 0,
+            "function_call_output": 0,
+            "reasoning": 0,
+            "other": 0,
+        }
+        for item in input_list:
+            role = (
+                item.get("role")
+                if isinstance(item, dict)
+                else getattr(item, "type", getattr(item, "role", "other"))
+            )
+            if role in msg_counts:
+                key = role
+            else:
+                key = "other"
+            msg_counts[key] += 1
+            item_json = json_dumps_safe(item, indent=None)
+            msg_sizes[key] += len(item_json)
+        total_ctx_size = sum(msg_sizes.values())
+        logger.info(f"{'─' * 50}")
+        logger.info(
+            f"📦 Context: {len(input_list)} messages | {total_ctx_size:,} chars"
+        )
+        for k in msg_counts:
+            if msg_counts[k] > 0:
+                logger.info(f"   {k}: {msg_counts[k]} msg(s), {msg_sizes[k]:,} chars")
+        logger.info(f"{'─' * 50}")
+
         logger.info(f"Input to API:")
-        # Pretty print with truncation for readability
         input_json = json_dumps_safe(input_list, indent=2)
         if len(input_json) > 2000:
-            logger.info(f"{input_json[:2000]}...\n[TRUNCATED - {len(input_json)} chars total]")
+            logger.info(
+                f"{input_json[:2000]}...\n[TRUNCATED - {len(input_json)} chars total]"
+            )
         else:
             logger.info(f"{input_json}")
 
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            tools=tools,
-            input=input_list,
-            instructions=AI_INSTRUCTIONS + "\ntodays date is " + datetime.datetime.now().strftime("%Y-%m-%d"),
-        )
+        llm_start = time.time()
+        if USE_BEDROCK:
+            system = (
+                AI_INSTRUCTIONS
+                + "\ntodays date is "
+                + datetime.datetime.now().strftime("%Y-%m-%d")
+            )
+            tool_config = {
+                "tools": openai_tools_to_bedrock(tools),
+                "toolChoice": {"auto": {}},
+            }
+            response = bedrock_converse(
+                messages=input_list,
+                system=system,
+                tool_config=tool_config,
+            )
+            llm_elapsed = time.time() - llm_start
+            usage = response.get("usage", {})
+            iter_in = usage.get("inputTokens", 0)
+            iter_out = usage.get("outputTokens", 0)
+            total_tokens_in += iter_in
+            total_tokens_out += iter_out
+            logger.info(
+                f"⏱ LLM call: {llm_elapsed:.2f}s | tokens in: {iter_in}, out: {iter_out}"
+            )
 
-        logger.info(f"Raw API Response Output:")
-        # Pretty print response
-        response_json = json_dumps_safe(response.output, indent=2)
-        if len(response_json) > 3000:
-            logger.info(f"{response_json[:3000]}...\n[TRUNCATED - {len(response_json)} chars total]")
+            output_msg = response.get("output", {}).get("message", {})
+            stop_reason = response.get("stopReason", "end_turn")
+            logger.info(f"Raw API Response (stopReason={stop_reason}):")
+            response_json = json_dumps_safe(output_msg, indent=2)
+            if len(response_json) > 3000:
+                logger.info(
+                    f"{response_json[:3000]}...\n[TRUNCATED - {len(response_json)} chars total]"
+                )
+            else:
+                logger.info(f"{response_json}")
+
+            # Add assistant message to input_list for session/history consistency
+            input_list.append({"role": "assistant", "content": output_msg})
+
+            pending_calls = []
+            for block in output_msg.get("content", []):
+                if "toolUse" in block:
+                    t = block["toolUse"]
+                    pending_calls.append(
+                        _ToolCall(
+                            name=t["name"],
+                            arguments=json.dumps(t.get("input") or {}),
+                            call_id=t["toolUseId"],
+                        )
+                    )
+
+            if stop_reason != "tool_use":
+                # Extract final text from last assistant message
+                final_response_text = ""
+                for block in output_msg.get("content", []):
+                    if "text" in block:
+                        final_response_text += block.get("text", "")
+                response = type(
+                    "_BedrockResponse",
+                    (),
+                    {"output_text": final_response_text, "output": []},
+                )()
         else:
-            logger.info(f"{response_json}")
-
-        input_list += response.output
-
-        pending_calls = [item for item in response.output if item.type == "function_call"]
+            response = client.responses.create(
+                model="gpt-5-mini",
+                tools=tools,
+                input=input_list,
+                instructions=AI_INSTRUCTIONS
+                + "\ntodays date is "
+                + datetime.datetime.now().strftime("%Y-%m-%d"),
+            )
+            llm_elapsed = time.time() - llm_start
+            usage = getattr(response, "usage", None)
+            iter_in = getattr(usage, "input_tokens", 0) if usage else 0
+            iter_out = getattr(usage, "output_tokens", 0) if usage else 0
+            total_tokens_in += iter_in
+            total_tokens_out += iter_out
+            logger.info(
+                f"⏱ LLM call: {llm_elapsed:.2f}s | tokens in: {iter_in}, out: {iter_out}"
+            )
+            logger.info(f"Raw API Response Output:")
+            response_json = json_dumps_safe(response.output, indent=2)
+            if len(response_json) > 3000:
+                logger.info(
+                    f"{response_json[:3000]}...\n[TRUNCATED - {len(response_json)} chars total]"
+                )
+            else:
+                logger.info(f"{response_json}")
+            input_list += response.output
+            pending_calls = [
+                item for item in response.output if item.type == "function_call"
+            ]
 
         if not pending_calls:
             logger.debug("No pending function calls, breaking loop")
             # Extract the final response text from the last iteration
             final_response_text = response.output_text
-            
-            logger.info(f"\n{'='*60}")
+
+            total_elapsed = time.time() - query_start
+            # Compute approximate cost and usage metadata for this query
+            total_cost_usd = (total_tokens_in / 1_000_000.0) * COST_INPUT_PER_1M + (
+                total_tokens_out / 1_000_000.0
+            ) * COST_OUTPUT_PER_1M
+            model_name = BEDROCK_MODEL_ID if USE_BEDROCK else "gpt-5-mini"
+            usage_meta = {
+                "total_time_seconds": round(total_elapsed, 2),
+                "total_cost_usd": round(total_cost_usd, 6),
+                "model": model_name,
+                "tokens_in": total_tokens_in,
+                "tokens_out": total_tokens_out,
+            }
+            logger.info(f"\n{'=' * 60}")
             logger.info(f"FINAL OUTPUT")
-            logger.info(f"{'='*60}")
+            logger.info(f"{'=' * 60}")
             logger.info(f"Final Output Text:")
             logger.info(f"{final_response_text}")
             if chart_data:
-                logger.info(f"Chart Data: {chart_data.get('type', 'unknown')} chart included")
-            logger.info(f"{'='*60}\n")
-            
+                logger.info(
+                    f"Chart Data: {chart_data.get('type', 'unknown')} chart included"
+                )
+            if report_data:
+                logger.info(
+                    f"Report Data: {len(report_data.get('reportData', []))} rows"
+                )
+            if pdf_data:
+                logger.info(f"PDF Data: {len(pdf_data)} bytes")
+            logger.info(
+                f"📊 Total: {iteration_count} iterations | {total_elapsed:.2f}s | tokens in: {total_tokens_in}, out: {total_tokens_out}, total: {total_tokens_in + total_tokens_out}"
+            )
+            logger.info(
+                f"💰 Estimated cost: ${usage_meta['total_cost_usd']} | model: {model_name}"
+            )
+            logger.info(f"{'=' * 60}\n")
+
             # Update conversation history
             add_to_session(session_id, query, final_response_text)
-            
-            logger.info(f"Query processed successfully, response length: {len(final_response_text)} characters")
-            logger.info(f"Session {session_id} now has {len(get_session_history(session_id))} messages in history")
-            
-            # Return response with optional chart data
-            if chart_data:
-                return {
-                    "text": final_response_text,
-                    "chart": chart_data,
-                    "type": "chart",
-                }
-            return {
+
+            logger.info(
+                f"Query processed successfully, response length: {len(final_response_text)} characters"
+            )
+            logger.info(
+                f"Session {session_id} now has {len(get_session_history(session_id))} messages in history"
+            )
+
+            # Return response with all produced payloads and usage metadata
+            result = {
                 "text": final_response_text,
                 "type": "text",
+                **usage_meta,
             }
+            if chart_data:
+                result["chart"] = chart_data
+                result["type"] = "chart"
+            if report_data:
+                result["report"] = report_data
+                if result["type"] == "text":
+                    result["type"] = "report"
+            if pdf_data:
+                result["pdf"] = base64.b64encode(pdf_data).decode("ascii")
+                if result["type"] == "text":
+                    result["type"] = "pdf"
+            return result
 
         logger.info(f"Processing {len(pending_calls)} function call(s)")
-        
-        # Process all function calls (pass event_id for context-aware operations)
-        function_outputs, returned_chart_data = process_function_calls(
-            pending_calls, schedule_headers, context_event_id=event_id
+
+        tool_start = time.time()
+        (
+            function_outputs,
+            returned_chart_data,
+            returned_report_data,
+            returned_pdf_data,
+        ) = process_function_calls(
+            pending_calls,
+            schedule_headers,
+            context_event_id=event_id,
+            context_category_id=category_id,
         )
-        
-        # Update chart_data if format_chart was called
+        tool_elapsed = time.time() - tool_start
+        logger.info(f"⏱ Tool calls: {tool_elapsed:.2f}s")
+
+        iter_elapsed = time.time() - iter_start
+        logger.info(f"⏱ Iteration {iteration_count} total: {iter_elapsed:.2f}s")
+
         if returned_chart_data:
             chart_data = returned_chart_data
-        
+        if returned_report_data:
+            report_data = returned_report_data
+        if returned_pdf_data:
+            pdf_data = returned_pdf_data
+
         # Add function outputs to input_list for next iteration
         input_list.extend(function_outputs)
 
 
-def handle_query(query, headers, session_id=None, event_id=None, category_id=None):
+def handle_query(
+    query, headers, session_id=None, event_id=None, category_id=None, user_info=None
+):
     """Entry point for handling queries."""
-    return process_query(query, headers, session_id=session_id, event_id=event_id, category_id=category_id)
+    return process_query(
+        query,
+        headers,
+        session_id=session_id,
+        event_id=event_id,
+        category_id=category_id,
+        user_info=user_info,
+    )
 
 
 if __name__ == "__main__":
     # Test queries
     db_query_15 = "Give me a complete analysis for Ford Motor: show all their events with dates, total attendees, number of decision makers, remote vs in-person count, and any associated revenue or opportunity data."
-    
+
     logger.info("Running test query")
     result = handle_query(db_query_15, None)
     logger.info(f"Test query result: {result}")

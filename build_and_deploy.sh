@@ -7,7 +7,7 @@ set -e
 AWS_REGION="us-west-2"
 AWS_ACCOUNT_ID=""  # Will be detected automatically if AWS CLI is configured
 ECR_REPO_NAME="calender-insights-lambda"
-LAMBDA_FUNCTION_NAME=""  # Set your Lambda function name here, or it will be auto-detected
+LAMBDA_FUNCTION_NAME="calendar-insights-demo calendar-ai-api-1"  # space-separated list
 IMAGE_TAG="latest"
 
 # Get AWS account ID if not set
@@ -35,29 +35,20 @@ docker push ${ECR_URI}:${IMAGE_TAG}
 
 echo "✅ Image pushed! URI: ${ECR_URI}:${IMAGE_TAG}"
 
-# Update Lambda function if function name is provided or can be detected
+# Update Lambda functions
 if [ -z "$LAMBDA_FUNCTION_NAME" ]; then
-    # Try to find Lambda function that uses this ECR image
-    LAMBDA_FUNCTION_NAME=$(aws lambda list-functions --region ${AWS_REGION} \
-        --query "Functions[?contains(Code.ImageUri, '${ECR_REPO_NAME}')].FunctionName" \
-        --output text | head -n 1)
-fi
-
-if [ -n "$LAMBDA_FUNCTION_NAME" ] && [ "$LAMBDA_FUNCTION_NAME" != "None" ]; then
-    echo "🔄 Updating Lambda function: ${LAMBDA_FUNCTION_NAME}..."
-    aws lambda update-function-code \
-        --function-name ${LAMBDA_FUNCTION_NAME} \
-        --image-uri ${ECR_URI}:${IMAGE_TAG} \
-        --region ${AWS_REGION} \
-        --output text > /dev/null
-    
-    echo "⏳ Waiting for Lambda function update to complete..."
-    aws lambda wait function-updated \
-        --function-name ${LAMBDA_FUNCTION_NAME} \
-        --region ${AWS_REGION}
-    
-    echo "✅ Lambda function updated successfully!"
-else
-    echo "⚠️  Lambda function name not found. Please update manually:"
+    echo "⚠️  No Lambda function name set. Please update manually:"
     echo "   aws lambda update-function-code --function-name YOUR_FUNCTION_NAME --image-uri ${ECR_URI}:${IMAGE_TAG} --region ${AWS_REGION}"
+else
+    for FN in ${LAMBDA_FUNCTION_NAME}; do
+        echo "🔄 Updating Lambda function: ${FN}..."
+        aws lambda update-function-code \
+            --function-name ${FN} \
+            --image-uri ${ECR_URI}:${IMAGE_TAG} \
+            --region ${AWS_REGION} \
+            --output text > /dev/null
+        echo "⏳ Waiting for ${FN} to finish updating..."
+        aws lambda wait function-updated --function-name ${FN} --region ${AWS_REGION}
+        echo "✅ ${FN} updated!"
+    done
 fi

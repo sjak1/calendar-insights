@@ -1,0 +1,15 @@
+fastapi
+mangum
+requests
+boto3>=1.34.0
+# Use 2.x for client.responses (native file input). If you use instructor or llama-index-llms-openai,
+# upgrade them to versions that support openai 2.x, or use a separate venv for this project.
+openai>=2.0.0
+python-dotenv
+pydantic
+pydantic-core
+sqlalchemy
+oracledb
+python-pptx
+opensearch-py
+fpdf2
