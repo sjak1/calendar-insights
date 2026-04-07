@@ -400,4 +400,67 @@ tools = [
             "required": ["dsl_query", "columns", "title"],
         },
     },
+    {
+        "type": "function",
+        "name": "get_event_rooms",
+        "description": (
+            "Fetch available rooms for an event. Call this BEFORE push_agenda_to_briefingiq to get room resource_ids. "
+            "Returns rooms with names, resource_ids, and dates. If no rooms are configured, inform the user "
+            "that activities will be created but won't appear in the calendar view."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "BriefingIQ event UUID.",
+                },
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "push_agenda_to_briefingiq",
+        "description": (
+            "Push AI-generated agenda sessions into BriefingIQ as calendar activities. "
+            "Use ONLY after generate_agenda has produced sessions AND the user explicitly confirms they want to add it to the event. "
+            "Call get_event_rooms first to get available rooms. If multiple rooms exist, ask the user which one to use."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "BriefingIQ event UUID.",
+                },
+                "event_date": {
+                    "type": "string",
+                    "description": "Start date of the event in YYYY-MM-DD format.",
+                },
+                "sessions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Session title."},
+                            "time_slot": {"type": "string", "description": "Time range e.g. '10:00 AM - 10:45 AM'."},
+                        },
+                        "required": ["title", "time_slot"],
+                    },
+                    "description": "List of agenda sessions from generate_agenda output.",
+                },
+                "resource_id": {
+                    "type": "string",
+                    "description": "Room resource UUID from get_event_rooms. Optional — if omitted, activities are created without room assignment.",
+                },
+                "presenter_emails": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of presenter email addresses to add to every session.",
+                },
+            },
+            "required": ["event_id", "event_date", "sessions"],
+        },
+    },
 ]

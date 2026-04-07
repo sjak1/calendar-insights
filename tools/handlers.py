@@ -435,6 +435,34 @@ def execute_tool(
                 logger.info(f"✓ {tool_name} returned:\n{output_str}")
             return output
 
+        elif tool_name == "get_event_rooms":
+            from tools.briefingiq_writer import fetch_event_rooms
+            token = (schedule_headers or {}).get("Authorization", "")
+            effective_event_id = context_event_id or args.get("event_id", "")
+            result = fetch_event_rooms(
+                event_id=effective_event_id,
+                token=token,
+            )
+            output = {"get_event_rooms": {"rooms": result, "count": len(result)}}
+            logger.info(f"✓ get_event_rooms returned {len(result)} rooms")
+            return output
+
+        elif tool_name == "push_agenda_to_briefingiq":
+            from tools.briefingiq_writer import push_agenda_to_app
+            token = (schedule_headers or {}).get("Authorization", "")
+            effective_event_id = context_event_id or args["event_id"]
+            result = push_agenda_to_app(
+                event_id=effective_event_id,
+                event_date=args["event_date"],
+                sessions=args["sessions"],
+                token=token,
+                presenter_emails=args.get("presenter_emails"),
+                resource_id=args.get("resource_id"),
+            )
+            output = {"push_agenda_to_briefingiq": result}
+            logger.info(f"✓ push_agenda_to_briefingiq: {result.get('created_count', 0)} created, {result.get('failed_count', 0)} failed")
+            return output
+
         elif tool_name == "suggest_presenters":
             if get_suggested_presenters is None:
                 output = {"suggest_presenters": {"success": False, "error": "OpenSearch client not available.", "suggested_presenters": []}}
