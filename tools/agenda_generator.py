@@ -498,7 +498,10 @@ def _fetch_meeting_context(event_id: Optional[str] = None, company_name: Optiona
     # --- Try OpenSearch first ---
     if os_search is not None:
         try:
-            return _fetch_meeting_context_os(event_id, company_name)
+            os_ctx = _fetch_meeting_context_os(event_id, company_name)
+            if os_ctx.get("meeting_details"):
+                return os_ctx
+            logger.info("OpenSearch returned no meeting details, falling back to SQL")
         except Exception as e:
             logger.warning(f"OpenSearch context fetch failed, falling back to SQL: {e}")
 
@@ -1527,16 +1530,15 @@ def generate_agenda(
     5. Generate structured agenda via LLM (with timeout + retry)
     6. Compute confidence score and return results
     """
-    # Resolve event_id (handles UUID → numeric conversion)
+    # Keep original UUID for OpenSearch (which stores UUIDs), resolve numeric for SQL fallback
     original_event_id = event_id
-    if event_id:
-        event_id = _resolve_event_id(event_id)
-        if original_event_id != event_id:
-            logger.info(f"Converted event_id: {original_event_id} -> {event_id}")
+    numeric_event_id = _resolve_event_id(event_id) if event_id else None
+    if original_event_id and numeric_event_id != original_event_id:
+        logger.info(f"Converted event_id: {original_event_id} -> {numeric_event_id}")
 
-    logger.info(f"Starting agenda generation - event_id: {event_id}, company_name: {company_name}")
+    logger.info(f"Starting agenda generation - event_id: {original_event_id}, company_name: {company_name}")
 
-    if not event_id and not company_name:
+    if not original_event_id and not company_name:
         return {
             "success": False,
             "error": "Please provide either an event_id or company_name",
@@ -1545,14 +1547,17 @@ def generate_agenda(
         }
 
     try:
-        # Step 1: Fetch meeting context (OpenSearch → SQL fallback)
-        context = _fetch_meeting_context(event_id=event_id, company_name=company_name)
-        if not context["meeting_details"] and event_id and company_name:
+        # Step 1: Fetch meeting context — try UUID first (OpenSearch), fall back to numeric (SQL)
+        context = _fetch_meeting_context(event_id=original_event_id, company_name=company_name)
+        if not context["meeting_details"] and numeric_event_id and numeric_event_id != original_event_id:
+            logger.info(f"UUID lookup failed, retrying with numeric ID: {numeric_event_id}")
+            context = _fetch_meeting_context(event_id=numeric_event_id, company_name=company_name)
+        if not context["meeting_details"] and original_event_id and company_name:
             context = _fetch_meeting_context(event_id=None, company_name=company_name)
         if not context["meeting_details"]:
             return {
                 "success": False,
-                "error": f"No meeting found for {'event_id: ' + str(event_id) if event_id else 'company: ' + company_name}",
+                "error": f"No meeting found for {'event_id: ' + str(original_event_id) if original_event_id else 'company: ' + company_name}",
                 "agenda_structured": None,
                 "agenda_markdown": None,
             }
