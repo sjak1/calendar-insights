@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Presenter Suggestion Flow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; padding: 32px 24px; }
+  h1 { font-size: 1.4rem; font-weight: 700; color: #fff; margin-bottom: 4px; }
+  .subtitle { font-size: 0.85rem; color: #64748b; margin-bottom: 40px; }
+
+  /* ── layout ── */
+  .flow { display: flex; flex-direction: column; gap: 0; max-width: 860px; margin: 0 auto; }
+
+  /* ── step boxes ── */
+  .step { display: flex; gap: 20px; align-items: flex-start; position: relative; }
+  .step + .step { margin-top: 0; }
+
+  /* vertical line */
+  .spine { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 40px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+  .line { width: 2px; flex: 1; min-height: 28px; background: #2d3748; }
+
+  .body { flex: 1; padding-bottom: 28px; }
+  .step-label { font-size: 0.68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+  .card { background: #1e2433; border: 1px solid #2d3748; border-radius: 10px; padding: 16px 18px; }
+  .card h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 8px; }
+  .card p  { font-size: 0.82rem; color: #94a3b8; line-height: 1.55; }
+
+  /* field pills */
+  .fields { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .field { background: #0f1117; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; font-size: 0.72rem; font-family: "SF Mono", Menlo, monospace; color: #7dd3fc; }
+  .field.key { color: #fbbf24; border-color: #78350f; }
+  .field.out { color: #86efac; border-color: #14532d; }
+
+  /* index badge */
+  .index-badge { display: inline-block; font-size: 0.7rem; font-family: monospace; padding: 2px 8px; border-radius: 4px; font-weight: 700; margin-bottom: 10px; }
+  .idx-events     { background: #312e81; color: #a5b4fc; }
+  .idx-activities { background: #164e63; color: #7dd3fc; }
+
+  /* query block */
+  .query { background: #0a0d14; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 14px; margin-top: 10px; }
+  .query pre { font-size: 0.73rem; font-family: "SF Mono", Menlo, monospace; color: #c4b5fd; line-height: 1.6; white-space: pre-wrap; }
+
+  /* two-col */
+  .cols { display: flex; gap: 12px; margin-top: 10px; }
+  .col  { flex: 1; background: #0f1117; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; }
+  .col h3 { font-size: 0.75rem; font-weight: 600; margin-bottom: 6px; color: #e2e8f0; }
+  .col p  { font-size: 0.75rem; color: #64748b; line-height: 1.5; }
+
+  /* rank table */
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.78rem; }
+  th { text-align: left; color: #64748b; font-weight: 600; padding: 6px 10px; border-bottom: 1px solid #2d3748; }
+  td { padding: 6px 10px; color: #94a3b8; border-bottom: 1px solid #1e293b; }
+  td.rank { font-weight: 700; color: #e2e8f0; }
+
+  /* dot colours */
+  .d1 { background: #6366f1; }
+  .d2 { background: #0ea5e9; }
+  .d3 { background: #10b981; }
+  .d4 { background: #f59e0b; }
+  .d5 { background: #ec4899; }
+
+  /* fallback callout */
+  .callout { background: #1c1007; border: 1px solid #78350f; border-radius: 8px; padding: 12px 14px; margin-top: 10px; font-size: 0.8rem; color: #fcd34d; line-height: 1.55; }
+  .callout strong { color: #fbbf24; }
+
+  /* output example */
+  .out-card { background: #0f2318; border: 1px solid #14532d; border-radius: 8px; padding: 12px 14px; margin-top: 10px; font-size: 0.78rem; color: #86efac; font-family: monospace; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<h1>Presenter Suggestion — End-to-End Flow</h1>
+<p class="subtitle">What happens when the agenda generator asks "who should present at this meeting?"</p>
+
+<div class="flow">
+
+  <!-- STEP 1 -->
+  <div class="step">
+    <div class="spine"><div class="dot d1"></div><div class="line"></div></div>
+    <div class="body">
+      <div class="step-label" style="color:#818cf8">Step 1 — Inputs</div>
+      <div class="card">
+        <h2>What we know about the meeting</h2>
+        <p>The agenda generator passes these values into the presenter engine:</p>
+        <div class="fields" style="margin-top:10px">
+          <span class="field key">event_id</span>
+          <span class="field key">customer_name</span>
+          <span class="field key">industry</span>
+          <span class="field key">topic</span>
+        </div>
+        <p style="margin-top:10px">At least one must be present. Three separate calls are made — one per "scope" — ranked from most-specific to least-specific.</p>
+        <div class="cols">
+          <div class="col"><h3>Scope 1 — Same Event</h3><p>event_id only. "Who presented at this exact event before?"</p></div>
+          <div class="col"><h3>Scope 2 — Same Company</h3><p>customer_name only. "Who presented for this company before?"</p></div>
+          <div class="col"><h3>Scope 3 — Same Industry</h3><p>industry only. "Who presents on topics for this industry?"</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="step">
+    <div class="spine"><div class="dot d2"></div><div class="line"></div></div>
+    <div class="body">
+      <div class="step-label" style="color:#38bdf8">Step 2 — Scope Resolution (events index)</div>
+      <div class="card">
+        <h2>customer_name / industry → list of event_ids</h2>
+        <p>We can't filter activities by company name directly — so we first query the <span class="index-badge idx-events">events</span> index to find matching event IDs.</p>
+        <div class="fields">
+          <span class="field">eventData.VISIT_INFO.data.customerName</span>
+          <span class="field">eventData.VISIT_INFO.data.customerIndustry</span>
+          <span class="field out">→ event_ids[]</span>
+        </div>
+        <div class="query">
+          <pre>{
+  "query": {
+    "bool": {
+      "should": [
+        { "term":  { "eventData.VISIT_INFO.data.customerName.keyword": "Slack" }},
+        { "match": { "eventData.VISIT_INFO.data.customerName": { "query": "Slack", "fuzziness": "AUTO" }}},
+        { "term":  { "eventData.VISIT_INFO.data.customerIndustry.keyword": "Technology" }}
+      ],
+      "minimum_should_match": 1
+    }
+  },
+  "size": 50
+}</pre>
+        </div>
+        <p style="margin-top:8px">Returns up to 50 event IDs — passed to Step 3 as a filter.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="step">
+    <div class="spine"><div class="dot d3"></div><div class="line"></div></div>
+    <div class="body">
+      <div class="step-label" style="color:#34d399">Step 3 — Activity Search (activities index)</div>
+      <div class="card">
+        <h2>Find activities that have real presenters attached</h2>
+        <span class="index-badge idx-activities">activities</span>
+        <p>Filter: must have a presenter with an email. Optionally filter by event_ids. Topic adds a relevance boost but is not required.</p>
+        <div class="fields">
+          <span class="field key">activityInfo.topic_presenter.data.presenter.primaryEmail</span>
+          <span class="field">eventId.keyword</span>
+          <span class="field">activityInfo.topic.data.topic.textField1</span>
+          <span class="field">startTime.utcMs</span>
+        </div>
+        <div class="query">
+          <pre>{
+  "query": {
+    "bool": {
+      "must": [
+        { "exists": { "field": "activityInfo.topic_presenter.data.presenter.primaryEmail" }},
+        { "terms": { "eventId.keyword": ["EVT-001", "EVT-002", ...] }}
+      ],
+      "should": [
+        { "match": { "activityInfo.topic.data.topic.textField1": { "query": "Cloud Migration", "boost": 3 }}}
+      ]
+    }
+  },
+  "size": 100,
+  "sort": [{ "startTime.utcMs": { "order": "desc" }}]
+}</pre>
+        </div>
+        <div class="callout">
+          <strong>Fallback:</strong> If this returns 0 hits (e.g. the event is new with no history), we drop all filters and fetch the 200 most recent activities globally that have presenter emails.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="step">
+    <div class="spine"><div class="dot d4"></div><div class="line"></div></div>
+    <div class="body">
+      <div class="step-label" style="color:#fbbf24">Step 4 — Extract Presenters from Hits</div>
+      <div class="card">
+        <h2>Each activity has a <code style="color:#7dd3fc">topic_presenter</code> array</h2>
+        <p>We loop over every element in the array per activity hit and read these fields:</p>
+        <div class="fields">
+          <span class="field">data.presenter.firstName</span>
+          <span class="field">data.presenter.lastName</span>
+          <span class="field key">data.presenter.primaryEmail</span>
+          <span class="field">data.presenter.designation</span>
+          <span class="field">data.presenterStatus</span>
+        </div>
+        <div class="cols" style="margin-top:12px">
+          <div class="col"><h3>Skipped</h3><p>presenterStatus == "declined", "rejected", or "cancelled"</p></div>
+          <div class="col"><h3>Keyed on</h3><p>primaryEmail (lowercase). Same person across events is deduplicated.</p></div>
+          <div class="col"><h3>Tracked per presenter</h3><p>session_count, accepted_count, list of topics, list of event_ids, latest timestamp</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div class="step">
+    <div class="spine"><div class="dot d5"></div><div class="line"></div></div>
+    <div class="body">
+      <div class="step-label" style="color:#f472b6">Step 5 — Rank &amp; Return</div>
+      <div class="card">
+        <h2>Sort by quality signals, return top N</h2>
+        <table>
+          <tr><th>#</th><th>Signal</th><th>Why</th></tr>
+          <tr><td class="rank">1</td><td>accepted_count ↓</td><td>Confirmed sessions outweigh tentative ones</td></tr>
+          <tr><td class="rank">2</td><td>session_count ↓</td><td>More sessions = more experienced presenter</td></tr>
+          <tr><td class="rank">3</td><td>event_count ↓</td><td>Breadth — presented at more distinct events</td></tr>
+          <tr><td class="rank">4</td><td>latest_ts ↓</td><td>Recency — active presenters preferred</td></tr>
+        </table>
+        <div class="out-card">
+{
+  "presenter_name": "Deepa Murthy",
+  "email": "deepa.murthy@company.com",
+  "title": "Solutions Architect",
+  "session_count": 12,
+  "event_count": 5,
+  "sample_topic": "Cloud Migration",
+  "reason": "12 session(s) | 8 accepted | on: Cloud Migration, Security (+2 more)"
+}
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
