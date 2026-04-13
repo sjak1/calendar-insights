@@ -143,14 +143,22 @@ def process_query(
     if event_id:
         _ctx = (
             "[Page] Event detail (single event in focus)\n"
-            "[Scope] Current event is used for agenda when user asks; do not expose event_id.\n"
-            "[Data] Use search_opensearch as usual.\n"
-            '[Agenda] Only if user asks to "generate agenda" / "create agenda" → call generate_agenda with no args. Do not call for greetings or general queries.'
+            '[Scope] When the user refers to "this event" / "current event", scope queries using '
+            'the placeholder string "CURRENT_EVENT" as the event_id value. The backend substitutes '
+            "the real event_id before executing. Never invent or display event_id values.\n"
+            "[Field paths for CURRENT_EVENT — different per index]\n"
+            '  • events index:     filter on "eventData.VISIT_INFO.eventId.keyword" = "CURRENT_EVENT"\n'
+            '  • activities index: filter on "eventId.keyword" = "CURRENT_EVENT"\n'
+            "[Data] For event-level questions (attendees, customer, industry, status, location, "
+            "opportunity, revenue) query the events index. For session-level questions (topics, "
+            "presenters, rooms, schedule) query the activities index. Use CURRENT_EVENT with the "
+            "matching field path above. For broader queries (e.g. 'all events this week'), do not use it.\n"
+            '[Agenda] Only if user asks to "generate agenda" / "create agenda" → call generate_agenda with no args.'
         )
         user_query = f"{query}\n\n{_ctx}" + (
             f"\n[User] {_user_line}" if _user_line else ""
         )
-        logger.info("📌 Added event-page context (event_id not exposed to LLM)")
+        logger.info("📌 Added event-page context with CURRENT_EVENT placeholder")
     elif category_id:
         category_name = "Briefings"
         try:

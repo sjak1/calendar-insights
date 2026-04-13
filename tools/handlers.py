@@ -35,6 +35,26 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+CURRENT_EVENT_PLACEHOLDER = "CURRENT_EVENT"
+
+
+def _substitute_current_event(obj, real_event_id):
+    """Recursively replace CURRENT_EVENT placeholder with the real event_id.
+
+    The LLM never sees real UUIDs — it uses "CURRENT_EVENT" as a symbolic
+    reference to whichever event is in focus on the page. This walker swaps
+    it in place before any tool hits OpenSearch / BriefingIQ.
+    """
+    if not real_event_id:
+        return obj
+    if isinstance(obj, str):
+        return real_event_id if obj == CURRENT_EVENT_PLACEHOLDER else obj
+    if isinstance(obj, list):
+        return [_substitute_current_event(x, real_event_id) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _substitute_current_event(v, real_event_id) for k, v in obj.items()}
+    return obj
+
 
 def _get_query_timezone(schedule_headers=None) -> str:
     """Pick the best timezone available for relative-date OpenSearch queries."""
@@ -145,6 +165,9 @@ def execute_tool(
         Dict with tool output or error
     """
     try:
+        if context_event_id and isinstance(args, dict):
+            args = _substitute_current_event(args, context_event_id)
+
         if tool_name == "get_gdp":
             result = get_gdp(args["country"], args["year"])
             output = {"gdp": result}
