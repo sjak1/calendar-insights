@@ -981,7 +981,7 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
     scoped_calls = [
         ("same_event", {"event_id": event_id, "limit": 5}),
         ("same_company", {"customer_name": company_name, "limit": 5}),
-        ("topic_and_industry", {"topic": visit_focus, "industry": industry, "limit": 8}),
+        ("industry", {"industry": industry, "limit": 8}),
     ]
 
     for source, kwargs in scoped_calls:

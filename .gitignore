@@ -23,3 +23,7 @@ node_modules
 FRONTEND_RESPONSE.md
 PROJECT_CHANGES.md
 config/moltbook_credentials.json
+auth.txt
+test_briefingiq_write.py
+TODO.md
+agenda_push_flow.html
