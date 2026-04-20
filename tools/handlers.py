@@ -7,14 +7,16 @@ from logging_config import get_logger
 from scripts.sqlite_qa import ask_sqlite
 from tools import (
     get_gdp,
-    schedule_meeting,
-    get_calendars,
-    get_resources,
     get_report_data,
     format_chart,
     generate_agenda,
     generate_report,
     generate_pdf,
+    list_rooms,
+    list_event_activities,
+    get_resource_schedule,
+    find_vacant_slots,
+    block_calendar,
 )
 from utils.json_utils import json_dumps_safe
 
@@ -174,42 +176,58 @@ def execute_tool(
             logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
             return output
 
-        elif tool_name == "schedule_meeting":
-            result = schedule_meeting(
-                args["calendarFromDateIso"],
-                args["calendarStartTimeIso"],
-                args["calendarEndTimeIso"],
-                args["calendarToDateIso"],
-                args.get("calendarType", "BLOCKED"),
-                args.get("comments"),
-                schedule_headers,
+        elif tool_name == "list_rooms":
+            token = (schedule_headers or {}).get("Authorization", "")
+            event_id = args.get("event_id") or context_event_id or ""
+            result = list_rooms(token, schedule_headers, event_id=event_id)
+            output = {"list_rooms": result}
+            logger.info(f"✓ {tool_name} returned {len(result)} rooms (event_id={event_id or 'none'})")
+            return output
+
+        elif tool_name == "list_event_activities":
+            token = (schedule_headers or {}).get("Authorization", "")
+            event_id = args.get("event_id") or context_event_id or ""
+            date = args.get("date") or None
+            result = list_event_activities(token, schedule_headers, event_id=event_id, date=date)
+            output = {"list_event_activities": result}
+            logger.info(f"✓ {tool_name} returned {len(result)} activities (event={event_id or 'none'}, date={date or 'all'})")
+            return output
+
+        elif tool_name == "get_resource_schedule":
+            token = (schedule_headers or {}).get("Authorization", "")
+            result = get_resource_schedule(args["resource_id"], token, schedule_headers)
+            output = {"get_resource_schedule": result}
+            logger.info(f"✓ {tool_name} returned {len(result)} entries")
+            return output
+
+        elif tool_name == "find_vacant_slots":
+            token = (schedule_headers or {}).get("Authorization", "")
+            result = find_vacant_slots(
+                resource_id=args["resource_id"],
+                date=args["date"],
+                duration_minutes=args["duration_minutes"],
+                token=token,
+                schedule_headers=schedule_headers,
+                day_start_hour=args.get("day_start_hour", 9),
+                day_end_hour=args.get("day_end_hour", 18),
             )
-            output = {"schedule_meeting": result}
-            logger.info(f"✓ {tool_name} returned: {json.dumps(output, indent=2)}")
+            output = {"find_vacant_slots": result}
+            logger.info(f"✓ {tool_name} returned {len(result)} free slots")
             return output
 
-        elif tool_name == "get_calendars":
-            result = get_calendars()
-            output = {"get_calendars": result}
-            output_str = json.dumps(output, indent=2)
-            if len(output_str) > 500:
-                logger.info(
-                    f"✓ {tool_name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)"
-                )
-            else:
-                logger.info(f"✓ {tool_name} returned: {output_str}")
-            return output
-
-        elif tool_name == "get_resources":
-            result = get_resources(args["resource_type_id"], schedule_headers)
-            output = {"get_resources": result}
-            output_str = json.dumps(output, indent=2)
-            if len(output_str) > 500:
-                logger.info(
-                    f"✓ {tool_name} returned: {output_str[:500]}... (truncated, {len(output_str)} chars total)"
-                )
-            else:
-                logger.info(f"✓ {tool_name} returned: {output_str}")
+        elif tool_name == "block_calendar":
+            token = (schedule_headers or {}).get("Authorization", "")
+            result = block_calendar(
+                resource_id=args["resource_id"],
+                start_iso=args["start_iso"],
+                end_iso=args["end_iso"],
+                token=token,
+                schedule_headers=schedule_headers,
+                comments=args.get("comments"),
+                calendar_type=args.get("calendar_type", "BLOCKED"),
+            )
+            output = {"block_calendar": result}
+            logger.info(f"✓ {tool_name} returned: {json.dumps(output)[:300]}")
             return output
 
         elif tool_name == "get_report_data":
@@ -459,15 +477,12 @@ def execute_tool(
             return output
 
         elif tool_name == "get_event_rooms":
-            from tools.briefingiq_writer import fetch_event_rooms
+            # Legacy alias — routes through merged list_rooms
             token = (schedule_headers or {}).get("Authorization", "")
-            effective_event_id = context_event_id or args.get("event_id", "")
-            result = fetch_event_rooms(
-                event_id=effective_event_id,
-                token=token,
-            )
+            event_id = context_event_id or args.get("event_id", "")
+            result = list_rooms(token, schedule_headers, event_id=event_id)
             output = {"get_event_rooms": {"rooms": result, "count": len(result)}}
-            logger.info(f"✓ get_event_rooms returned {len(result)} rooms")
+            logger.info(f"✓ get_event_rooms (via list_rooms) returned {len(result)} rooms")
             return output
 
         elif tool_name == "push_agenda_to_briefingiq":
@@ -481,6 +496,7 @@ def execute_tool(
                 token=token,
                 presenter_emails=args.get("presenter_emails"),
                 resource_id=args.get("resource_id"),
+                schedule_headers=schedule_headers,
             )
             output = {"push_agenda_to_briefingiq": result}
             logger.info(f"✓ push_agenda_to_briefingiq: {result.get('created_count', 0)} created, {result.get('failed_count', 0)} failed")

@@ -5,42 +5,137 @@ Tool definitions for OpenAI function calling.
 tools = [
     {
         "type": "function",
-        "name": "schedule_meeting",
-        "description": "Create blocked calendar time using BriefingIQ API with ISO-8601 fields.",
+        "name": "list_rooms",
+        "description": (
+            "List bookable rooms. If an event_id is available (from context header or arg), returns "
+            "event-level rooms (e.g. Horizon Chamber, Panorama Suite) — these are the rooms on that event's calendar. "
+            "If no event context, returns tenant-wide rooms (Outlook 1-6, Executive Lounge). "
+            "Call this FIRST when the user asks about rooms, availability, or wants to book. "
+            "Returns: [{resource_id, name, source, dates?}]."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "calendarFromDateIso": {
+                "event_id": {
                     "type": "string",
-                    "description": "Start date ISO string, e.g. 2025-10-28T00:00:00",
+                    "description": "Optional event UUID. If omitted, uses event_id from request header context (if any).",
                 },
-                "calendarStartTimeIso": {
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "list_event_activities",
+        "description": (
+            "List every scheduled activity on an event — sessions, catering, topics — across all rooms. "
+            "Use when the user asks 'what activities do I have today?', 'what's on the agenda?', or similar. "
+            "Pass a date (YYYY-MM-DD) to narrow to one day; omit for the whole event. "
+            "event_id defaults to the one in the request header context if not passed. "
+            "Returns: [{activity_id, title, activity_type, start_iso, end_iso, date, room_name, room_id, status}]."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
                     "type": "string",
-                    "description": "Start time ISO string, e.g. 2025-10-28T01:00:00",
+                    "description": "Optional event UUID. Defaults to header context.",
                 },
-                "calendarEndTimeIso": {
+                "date": {
                     "type": "string",
-                    "description": "End time ISO string, e.g. 2025-10-29T02:30:00",
+                    "description": "Optional YYYY-MM-DD to filter activities to a single day.",
                 },
-                "calendarToDateIso": {
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_resource_schedule",
+        "description": (
+            "Fetch existing calendar entries (bookings/blocks) for a specific room. "
+            "Use to show the user what's already booked on a room, or to decide when to schedule."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resource_id": {
                     "type": "string",
-                    "description": "End date ISO string, e.g. 2025-10-30T00:00:00",
+                    "description": "Room resource UUID from list_rooms.",
                 },
-                "calendarType": {
+            },
+            "required": ["resource_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "find_vacant_slots",
+        "description": (
+            "Find free time windows of a given minimum duration on a specific date for a room. "
+            "Use this for natural-language booking requests like 'find a 1-hour slot tomorrow' or "
+            "'when is Outlook3 free on Friday'. Respects working hours (default 9am–6pm in the request timezone)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resource_id": {
                     "type": "string",
-                    "description": "Calendar type such as BLOCKED",
+                    "description": "Room resource UUID from list_rooms.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Target date in YYYY-MM-DD.",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Minimum slot length required, in minutes.",
+                },
+                "day_start_hour": {
+                    "type": "integer",
+                    "description": "Working-day start hour (24h). Default 9.",
+                },
+                "day_end_hour": {
+                    "type": "integer",
+                    "description": "Working-day end hour (24h). Default 18.",
+                },
+            },
+            "required": ["resource_id", "date", "duration_minutes"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "block_calendar",
+        "description": (
+            "Reserve a time window on a room by creating a calendar entry (default type BLOCKED). "
+            "Runs a conflict check first — if the window overlaps any existing entry, returns "
+            "status='conflict' with the conflicting entries instead of writing. "
+            "Call list_rooms (and optionally find_vacant_slots) before this."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resource_id": {
+                    "type": "string",
+                    "description": "Room resource UUID from list_rooms.",
+                },
+                "start_iso": {
+                    "type": "string",
+                    "description": "Local wall-clock start in ISO-8601 'YYYY-MM-DDTHH:MM:SS'.",
+                },
+                "end_iso": {
+                    "type": "string",
+                    "description": "Local wall-clock end in ISO-8601 'YYYY-MM-DDTHH:MM:SS'.",
                 },
                 "comments": {
                     "type": ["string", "null"],
-                    "description": "Optional comments",
+                    "description": "Optional note stored on the entry (e.g. meeting purpose).",
+                },
+                "calendar_type": {
+                    "type": "string",
+                    "description": "Entry type. Default 'BLOCKED'.",
                 },
             },
-            "required": [
-                "calendarFromDateIso",
-                "calendarStartTimeIso",
-                "calendarEndTimeIso",
-                "calendarToDateIso",
-            ],
+            "required": ["resource_id", "start_iso", "end_iso"],
         },
     },
     # NOTE: Oracle query_database tool temporarily disabled — routing all queries through OpenSearch.
@@ -400,32 +495,15 @@ tools = [
             "required": ["dsl_query", "columns", "title"],
         },
     },
-    {
-        "type": "function",
-        "name": "get_event_rooms",
-        "description": (
-            "Fetch available rooms for an event. Call this BEFORE push_agenda_to_briefingiq to get room resource_ids. "
-            "Returns rooms with names, resource_ids, and dates. If no rooms are configured, inform the user "
-            "that activities will be created but won't appear in the calendar view."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {
-                    "type": "string",
-                    "description": "BriefingIQ event UUID.",
-                },
-            },
-            "required": ["event_id"],
-        },
-    },
+    # get_event_rooms merged into list_rooms — list_rooms now auto-detects event context
+    # and returns event-level rooms when event_id is available.
     {
         "type": "function",
         "name": "push_agenda_to_briefingiq",
         "description": (
             "Push AI-generated agenda sessions into BriefingIQ as calendar activities. "
             "Use ONLY after generate_agenda has produced sessions AND the user explicitly confirms they want to add it to the event. "
-            "Call get_event_rooms first to get available rooms. If multiple rooms exist, ask the user which one to use."
+            "Call list_rooms first to get available rooms. If multiple rooms exist, ask the user which one to use."
         ),
         "parameters": {
             "type": "object",
