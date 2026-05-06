@@ -9,5 +9,6 @@ pydantic-core==2.33.2
 sqlalchemy
 oracledb==3.4.0
 python-pptx==1.0.2
+pdfplumber==0.11.9
 opensearch-py==3.1.0
 fpdf2==2.8.5

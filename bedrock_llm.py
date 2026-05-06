@@ -125,11 +125,18 @@ def _to_bedrock_message(item: Dict) -> Optional[Dict]:
 
 def converse(
     messages: List[Dict],
-    system: str,
+    system,
     tool_config: Dict,
+    model_id: Optional[str] = None,
 ) -> Dict:
     """
     Call Bedrock Converse API.
+
+    `system` accepts either a plain string (wrapped as a single text block)
+    or a pre-built list of Bedrock system content blocks — use the list form
+    to insert ``{"cachePoint": {"type": "default"}}`` markers for prompt
+    caching of static prefixes.
+
     Returns the raw response dict.
     """
     client = _get_bedrock_client()
@@ -171,9 +178,12 @@ def converse(
             bedrock_messages.append(converted)
         i += 1
 
-    system_content = [{"text": system}] if system else []
+    if isinstance(system, list):
+        system_content = system
+    else:
+        system_content = [{"text": system}] if system else []
     response = client.converse(
-        modelId=BEDROCK_MODEL_ID,
+        modelId=model_id or BEDROCK_MODEL_ID,
         messages=bedrock_messages,
         system=system_content,
         toolConfig=tool_config,

@@ -3,6 +3,7 @@ Presenter suggestion engine — queries OpenSearch activities index to find
 presenters who have presented on matching topics or at matching events.
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from logging_config import get_logger
@@ -16,6 +17,7 @@ EVENTS_INDEX = "events"
 TOPIC_NAME = "activityInfo.topic.data.topic.textField1"
 PRESENTER_LIST = "activityInfo.topic_presenter"
 PRESENTER_EMAIL_FIELD = "activityInfo.topic_presenter.data.presenter.primaryEmail"
+ACT_IS_CLEVEL = "activityInfo.EVENTS_VISIT_INFO.data.isCLevelAttendee"
 EVENT_ID = "eventId"
 START_TIME = "startTime.utcMs"
 
@@ -29,6 +31,49 @@ _MAX_SCOPE_EVENTS = 50
 
 # Presenter statuses to exclude (don't suggest people who declined)
 _EXCLUDED_STATUSES = {"declined", "rejected", "cancelled"}
+
+# Audience-level signals
+AUDIENCE_C_LEVEL = "c_level"
+AUDIENCE_VP_PLUS = "vp_plus"
+AUDIENCE_SENIOR = "senior"
+_AUDIENCE_LEVELS = {AUDIENCE_C_LEVEL, AUDIENCE_VP_PLUS, AUDIENCE_SENIOR}
+
+# Seniority tiers derived from presenter title. Higher = more senior.
+# Tier 3: C-suite / President / Chief (but NOT "Vice President")
+# Tier 2: VP / EVP / SVP
+# Tier 1: Director / Head of / Managing
+# Tier 0: everyone else
+_VP_RE = re.compile(r"\bvice\s+president\b|\b[se]vp\b|\bvp\b", re.IGNORECASE)
+_CHIEF_RE = re.compile(r"\b(ceo|cfo|cto|cio|coo|cmo|cxo|chief)\b", re.IGNORECASE)
+_PRESIDENT_RE = re.compile(r"\bpresident\b", re.IGNORECASE)
+_TIER1_RE = re.compile(r"\b(director|head\s+of|managing)\b", re.IGNORECASE)
+
+
+def _presenter_seniority(title: str) -> int:
+    """Rough seniority tier from a presenter's designation. Higher = more senior."""
+    if not title:
+        return 0
+    t = title.lower()
+    is_vp = bool(_VP_RE.search(t))
+    # Tier 3 needs Chief/C-suite OR "President" that isn't part of "Vice President"
+    if _CHIEF_RE.search(t) or (_PRESIDENT_RE.search(t) and not is_vp):
+        return 3
+    if is_vp:
+        return 2
+    if _TIER1_RE.search(t):
+        return 1
+    return 0
+
+
+def _min_seniority_for_audience(audience_level: Optional[str]) -> int:
+    """Minimum presenter seniority tier we consider a strong match for a given audience."""
+    if audience_level == AUDIENCE_C_LEVEL:
+        return 3
+    if audience_level == AUDIENCE_VP_PLUS:
+        return 2
+    if audience_level == AUDIENCE_SENIOR:
+        return 1
+    return 0
 
 
 def _deep_get(d: Any, path: str) -> Any:
@@ -91,8 +136,14 @@ def _fetch_event_ids_by_scope(
 def _build_activity_query(
     topic: Optional[str],
     event_ids: Optional[List[str]],
+    audience_level: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build OpenSearch query for the activities index."""
+    """Build OpenSearch query for the activities index.
+
+    When audience_level is supplied, activities attended by a matching audience
+    are boosted (not required) — so we still get results if nobody has a
+    perfectly-matching history.
+    """
     must: List[Dict[str, Any]] = [
         {"exists": {"field": PRESENTER_EMAIL_FIELD}},
     ]
@@ -103,6 +154,9 @@ def _build_activity_query(
 
     if topic:
         should.append({"match": {TOPIC_NAME: {"query": topic, "boost": 3}}})
+
+    if audience_level == AUDIENCE_C_LEVEL:
+        should.append({"term": {ACT_IS_CLEVEL: {"value": True, "boost": 2}}})
 
     query: Dict[str, Any] = {"bool": {"must": must}}
     if should:
@@ -135,6 +189,13 @@ def _extract_presenters_from_hits(
             if name and name not in topic_names:
                 topic_names.append(name)
         primary_topic = topic_names[0] if topic_names else ""
+
+        # Did this activity have a C-level audience? Field is on
+        # activityInfo.EVENTS_VISIT_INFO[].data.isCLevelAttendee (array).
+        visit_infos = activity_info.get("EVENTS_VISIT_INFO") or []
+        is_c_level_audience = any(
+            bool(_deep_get(v, "data.isCLevelAttendee")) for v in visit_infos
+        )
 
         eid = src.get("eventId") or ""
         ts = _deep_get(src, START_TIME) or 0
@@ -169,12 +230,16 @@ def _extract_presenters_from_hits(
                     "sample_topic": "",
                     "sample_event_id": "",
                     "accepted_count": 0,
+                    "c_level_session_count": 0,
+                    "seniority_tier": _presenter_seniority(title),
                 }
 
             entry = presenters[key]
             entry["session_count"] += 1
             if status == "accepted":
                 entry["accepted_count"] += 1
+            if is_c_level_audience:
+                entry["c_level_session_count"] += 1
             if eid:
                 entry["event_ids"].add(eid)
             for tn in topic_names:
@@ -186,6 +251,7 @@ def _extract_presenters_from_hits(
                 entry["sample_event_id"] = eid
             if not entry["title"] and title:
                 entry["title"] = title
+                entry["seniority_tier"] = _presenter_seniority(title)
             if not entry["email"] and email:
                 entry["email"] = email
 
@@ -193,18 +259,38 @@ def _extract_presenters_from_hits(
 
 
 def _rank_presenters(
-    presenters: Dict[str, Dict[str, Any]], limit: int
+    presenters: Dict[str, Dict[str, Any]],
+    limit: int,
+    audience_level: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Rank by accepted sessions, then total sessions, then event coverage, then recency."""
-    ranked = sorted(
-        presenters.values(),
-        key=lambda p: (
+    """Rank presenters.
+
+    Default order: accepted → total sessions → event coverage → recency.
+    When audience_level is set, seniority match + C-level track record take
+    priority so the top results are peers of the target audience.
+    """
+    min_tier = _min_seniority_for_audience(audience_level)
+
+    def sort_key(p: Dict[str, Any]):
+        if audience_level:
+            meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
+            return (
+                -meets_tier,
+                -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
+                -p["seniority_tier"],
+                -p["accepted_count"],
+                -p["session_count"],
+                -len(p["event_ids"]),
+                -p["latest_ts"],
+            )
+        return (
             -p["accepted_count"],
             -p["session_count"],
             -len(p["event_ids"]),
             -p["latest_ts"],
-        ),
-    )
+        )
+
+    ranked = sorted(presenters.values(), key=sort_key)
 
     results = []
     for p in ranked[:limit]:
@@ -214,6 +300,10 @@ def _rank_presenters(
         reason_parts = [f"{p['session_count']} session(s)"]
         if p["accepted_count"]:
             reason_parts.append(f"{p['accepted_count']} accepted")
+        if audience_level and p["c_level_session_count"]:
+            reason_parts.append(f"{p['c_level_session_count']} C-level audience")
+        if audience_level and p["seniority_tier"] >= min_tier and p["title"]:
+            reason_parts.append(f"peer-level ({p['title']})")
         if topics_summary:
             reason_parts.append(f"on: {topics_summary}")
         results.append(
@@ -223,6 +313,8 @@ def _rank_presenters(
                 "title": p["title"],
                 "session_count": p["session_count"],
                 "event_count": len(p["event_ids"]),
+                "c_level_session_count": p["c_level_session_count"],
+                "seniority_tier": p["seniority_tier"],
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
                 "sample_event_name": "",
@@ -237,6 +329,7 @@ def get_suggested_presenters(
     industry: Optional[str] = None,
     customer_name: Optional[str] = None,
     event_id: Optional[str] = None,
+    audience_level: Optional[str] = None,
     limit: int = 10,
     index: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -247,7 +340,14 @@ def get_suggested_presenters(
     1. If customer_name or industry, resolve them to a list of event_ids
        via the events index.
     2. Query the activities index filtered by those event_ids and/or topic.
-    3. Aggregate presenters across matching activities, rank, return top N.
+       If audience_level is set, boost activities with a matching audience.
+    3. Aggregate presenters across matching activities, rank using audience
+       seniority when requested, return top N.
+
+    audience_level values:
+      - "c_level"  → prefer presenters with C-suite/Chief/President titles
+      - "vp_plus"  → prefer VP+ titles
+      - "senior"   → prefer Director+ titles
     """
     try:
         from opensearch_client import search
@@ -255,6 +355,13 @@ def get_suggested_presenters(
         return {
             "success": False,
             "error": "OpenSearch client not available",
+            "suggested_presenters": [],
+        }
+
+    if audience_level and audience_level not in _AUDIENCE_LEVELS:
+        return {
+            "success": False,
+            "error": f"Invalid audience_level '{audience_level}'. Expected one of: {sorted(_AUDIENCE_LEVELS)}",
             "suggested_presenters": [],
         }
 
@@ -286,7 +393,11 @@ def get_suggested_presenters(
             "message": "No activity constraint could be derived",
         }
 
-    query = _build_activity_query(topic=topic, event_ids=scoped_event_ids or None)
+    query = _build_activity_query(
+        topic=topic,
+        event_ids=scoped_event_ids or None,
+        audience_level=audience_level,
+    )
 
     body = {
         "query": query,
@@ -332,12 +443,16 @@ def get_suggested_presenters(
         }
 
     presenters = _extract_presenters_from_hits(hits)
-    ranked = _rank_presenters(presenters, limit)
+    ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
 
-    logger.info(f"Found {len(ranked)} unique presenters from {len(hits)} activities")
+    logger.info(
+        f"Found {len(ranked)} unique presenters from {len(hits)} activities"
+        + (f" (audience_level={audience_level})" if audience_level else "")
+    )
 
     return {
         "success": True,
         "suggested_presenters": ranked,
         "total_activities_matched": result.get("total_hits", len(hits)),
+        "audience_level": audience_level,
     }

@@ -516,6 +516,7 @@ def execute_tool(
                     industry=args.get("industry"),
                     customer_name=args.get("customer_name"),
                     event_id=args.get("event_id") or context_event_id,
+                    audience_level=args.get("audience_level"),
                     limit=limit,
                 )
                 output = {"suggest_presenters": result}

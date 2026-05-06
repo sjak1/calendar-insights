@@ -1,7 +1,12 @@
+import asyncio
+import json
+import queue
 import re
+import threading
+import time
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from query_processor import handle_query
 from pydantic import BaseModel
 import os
@@ -184,3 +189,87 @@ async def process_query(payload: QueryPayload, request: Request):
     except Exception as e:
         logger.error(f"Error processing query: {e}", exc_info=True)
         raise
+
+
+@app.post("/process_query_stream")
+async def process_query_stream(payload: QueryPayload, request: Request):
+    """Server-Sent Events version of /process_query.
+
+    Streams lifecycle events (llm_start/llm_end, tool_start/tool_end, query_end)
+    as the query runs, so a client can render a live waterfall of where the
+    time is being spent.
+    """
+    query = payload.query
+    body_headers = payload.headers or {}
+    session_id = payload.session_id
+
+    http_headers = {}
+    for key, value in request.headers.items():
+        http_headers[key] = value
+        http_headers[key.lower()] = value
+    headers = {**http_headers, **body_headers}
+
+    event_id = (
+        headers.get("x-cloud-eventid")
+        or headers.get("x-cloud-event-id")
+        or headers.get("eventid")
+        or headers.get("event_id")
+    )
+    category_id = (
+        headers.get("x-cloud-categoryid")
+        or headers.get("x-cloud-category-id")
+        or headers.get("category_id")
+    )
+    email = headers.get("x_cloud_user") or headers.get("x-cloud-user") or ""
+    user_info = {
+        "email": email,
+        "display_name": _display_name_from_email(email),
+        "client_timezone": headers.get("x-cloud-client-timezone"),
+        "context_timezone": headers.get("x-cloud-context-timezone"),
+        "requested_timezone": headers.get("x-cloud-requested-timezone"),
+    }
+
+    event_queue: "queue.Queue" = queue.Queue()
+    start_ts = time.time()
+    _SENTINEL = object()
+
+    def on_event(ev_type, data):
+        event_queue.put({"type": ev_type, "t": round(time.time() - start_ts, 3), **data})
+
+    def run_query():
+        try:
+            handle_query(
+                query,
+                headers,
+                session_id=session_id,
+                event_id=event_id,
+                category_id=category_id,
+                user_info=user_info,
+                on_event=on_event,
+            )
+        except Exception as e:
+            logger.error(f"stream query error: {e}", exc_info=True)
+            event_queue.put({"type": "error", "t": round(time.time() - start_ts, 3), "error": str(e)})
+        finally:
+            event_queue.put(_SENTINEL)
+
+    threading.Thread(target=run_query, daemon=True).start()
+
+    async def event_stream():
+        loop = asyncio.get_event_loop()
+        while True:
+            event = await loop.run_in_executor(None, event_queue.get)
+            if event is _SENTINEL:
+                yield "event: done\ndata: {}\n\n"
+                return
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

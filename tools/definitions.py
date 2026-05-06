@@ -284,7 +284,8 @@ tools = [
             "Suggest the best presenters for a topic, event, industry, or customer. "
             "Use when the user asks who should present, who is the best presenter for X, or to recommend presenters for an agenda/session. "
             "Returns presenters ranked by matched activities, based on real activity-level topic/presenter matches. "
-            "Provide at least one scope filter: event_id, topic, industry, or customer_name."
+            "Provide at least one scope filter: event_id, topic, industry, or customer_name. "
+            "Set audience_level when the briefing has senior attendees — presenters will be ranked so peers of the audience surface first."
         ),
         "parameters": {
             "type": "object",
@@ -304,6 +305,15 @@ tools = [
                 "customer_name": {
                     "type": "string",
                     "description": "Optional customer/company name to match.",
+                },
+                "audience_level": {
+                    "type": "string",
+                    "enum": ["c_level", "vp_plus", "senior"],
+                    "description": (
+                        "Seniority of the briefing audience. 'c_level' = CEO/CFO/CTO etc, "
+                        "'vp_plus' = VP/EVP/SVP, 'senior' = Director+. "
+                        "When set, presenters with matching title tiers and past experience with that audience are ranked first."
+                    ),
                 },
                 "limit": {
                     "type": "integer",

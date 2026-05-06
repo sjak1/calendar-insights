@@ -30,10 +30,23 @@ from bedrock_llm import (
     BEDROCK_MODEL_ID,
 )
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
 load_dotenv()
 
 # Use Bedrock by default; set USE_OPENAI=1 to fall back to OpenAI
 USE_BEDROCK = os.getenv("USE_BEDROCK", "1").lower() in ("1", "true", "yes")
+
+# Split-model routing disabled — Sonnet handles all iterations.
+# Re-enable with USE_HAIKU_SYNTHESIS=1 once synthesis-only routing is tightened.
+USE_HAIKU_SYNTHESIS = os.getenv("USE_HAIKU_SYNTHESIS", "0").lower() in ("1", "true", "yes")
+HAIKU_SYNTHESIS_MODEL_ID = (
+    os.getenv("HAIKU_SYNTHESIS_MODEL_ID")
+    or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
 
 # Claude Sonnet 4.6 on Bedrock pricing (used to estimate per-query cost in responses)
 # If AWS pricing changes, update these constants.
@@ -48,6 +61,42 @@ else:
     client = None
 
 logger = get_logger(__name__)
+
+
+def _build_time_context_block(timezone_name: str) -> str:
+    """Build a small dated block listing today + supported time placeholder tokens.
+    Mirrors the sugar tokens that handlers._substitute_time_tokens replaces, so the
+    LLM can write tokens / ISO dates and skip the get_time_context round-trip.
+    """
+    try:
+        tz = ZoneInfo(timezone_name) if ZoneInfo else None
+    except Exception:
+        tz = None
+    now = datetime.datetime.now(tz=tz) if tz else datetime.datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    weekday = now.strftime("%A")
+    return (
+        f"\n[Time Context — server substitutes these before hitting OpenSearch]\n"
+        f"Today: {today_str} ({weekday}), timezone {timezone_name}\n"
+        f"For OpenSearch range filters on epoch_millis fields (startTime, etc.), use either:\n"
+        f"  • A placeholder TOKEN (preferred for relative dates) — server replaces with epoch_ms.\n"
+        f"  • An ISO date string 'YYYY-MM-DD' — server replaces with start-of-day epoch_ms in this tz.\n"
+        f"  • An ISO datetime string 'YYYY-MM-DDTHH:MM' — server replaces with that exact minute as epoch_ms.\n"
+        f"Supported tokens:\n"
+        f"  TODAY_START, TODAY_END, YESTERDAY_START, YESTERDAY_END,\n"
+        f"  TOMORROW_START, TOMORROW_END,\n"
+        f"  THIS_WEEK_START, THIS_WEEK_END (Mon-based, end is exclusive),\n"
+        f"  NEXT_WEEK_START, NEXT_WEEK_END,\n"
+        f"  THIS_MONTH_START, THIS_MONTH_END (end is exclusive = next month start),\n"
+        f"  NEXT_MONTH_START, NEXT_MONTH_END,\n"
+        f"  LAST_7_DAYS_START, LAST_30_DAYS_START,\n"
+        f"  NEXT_7_DAYS_END, NEXT_30_DAYS_END\n"
+        f"Example (events this month):\n"
+        f"  {{\"range\": {{\"startTime\": {{\"gte\": \"THIS_MONTH_START\", \"lt\": \"THIS_MONTH_END\", \"format\": \"epoch_millis\"}}}}}}\n"
+        f"Example (events on May 7 → May 14):\n"
+        f"  {{\"range\": {{\"startTime\": {{\"gte\": \"2026-05-07\", \"lt\": \"2026-05-14\", \"format\": \"epoch_millis\"}}}}}}\n"
+        f"Always use 'lt' (not 'lte') with _END tokens to avoid catching the next bucket.\n"
+    )
 
 
 class _ToolCall:
@@ -77,6 +126,7 @@ SCHEMA (OpenSearch field reference):
 
 OUTPUT: Markdown for final response. No markdown for tool outputs (keep JSON/plain).
 Markdown: ## for main sections, ### for subsections. **bold** for key numbers. Use - for bullets or 1. 2. 3. for numbered lists. Code: ``` blocks. Always bold key metrics.
+FORMAT DEFAULT: Always prefer compact bullets / short summaries. DO NOT use inline markdown tables unless the user explicitly asks for a "table", "grid", or "report". For lists of events / rooms / activities / presenters / attendees, use ONE single-line bullet per item with em-dash separators — e.g. "- **Acme Corp** — Reston, VA — Submitted — 1 hr". No per-item subsections, no nested bullets, no `### N.` headings for list items. Keep supporting detail to a brief sentence below the list, only if it adds real information. No filler columns, no decorative emoji chips. If in doubt, pick the shorter form.
 """
 )
 
@@ -88,6 +138,7 @@ def process_query(
     event_id=None,
     category_id=None,
     user_info=None,
+    on_event=None,
 ):
     """
     Process a user query through the AI assistant with tool calling.
@@ -208,7 +259,17 @@ def process_query(
     iteration_count = 0
     total_tokens_in = 0
     total_tokens_out = 0
+    had_tool_results = False
     query_start = time.time()
+
+    def _emit(ev_type, **data):
+        if on_event is not None:
+            try:
+                on_event(ev_type, data)
+            except Exception:
+                pass
+
+    _emit("query_start", query=query[:300])
 
     MAX_ITERATIONS = 15
     while True:
@@ -274,28 +335,69 @@ def process_query(
 
         llm_start = time.time()
         if USE_BEDROCK:
-            system = (
-                AI_INSTRUCTIONS
-                + "\ntodays date is "
-                + datetime.datetime.now().strftime("%Y-%m-%d")
+            tz_name = (
+                (user_info or {}).get("requested_timezone")
+                or (user_info or {}).get("context_timezone")
+                or (user_info or {}).get("client_timezone")
+                or "America/Los_Angeles"
             )
+            time_block = _build_time_context_block(tz_name)
+            # Split system into static (cached) + dynamic (date) so the ~9k-token
+            # AI_INSTRUCTIONS + SCHEMA_REFERENCE prefix is reused across iterations
+            # and across users via Bedrock prompt caching.
+            system = [
+                {"text": AI_INSTRUCTIONS},
+                {"cachePoint": {"type": "default"}},
+                {"text": time_block},
+            ]
             tool_config = {
-                "tools": openai_tools_to_bedrock(tools),
+                "tools": openai_tools_to_bedrock(tools) + [
+                    {"cachePoint": {"type": "default"}}
+                ],
                 "toolChoice": {"auto": {}},
             }
+            # Route: Sonnet plans on iter 1; Haiku handles post-tool-result turns.
+            iter_model_id = (
+                HAIKU_SYNTHESIS_MODEL_ID
+                if (USE_HAIKU_SYNTHESIS and had_tool_results)
+                else None
+            )
+            _emit(
+                "llm_start",
+                iteration=iteration_count,
+                model=(iter_model_id or BEDROCK_MODEL_ID).split(".")[-1],
+                role=("synthesis" if had_tool_results else "planning"),
+            )
             response = bedrock_converse(
                 messages=input_list,
                 system=system,
                 tool_config=tool_config,
+                model_id=iter_model_id,
             )
             llm_elapsed = time.time() - llm_start
             usage = response.get("usage", {})
             iter_in = usage.get("inputTokens", 0)
             iter_out = usage.get("outputTokens", 0)
+            cache_read = usage.get("cacheReadInputTokens", 0)
+            cache_write = usage.get("cacheWriteInputTokens", 0)
             total_tokens_in += iter_in
             total_tokens_out += iter_out
+            cache_note = ""
+            if cache_read or cache_write:
+                cache_note = f" | cache read: {cache_read}, write: {cache_write}"
+            model_used = iter_model_id or BEDROCK_MODEL_ID
             logger.info(
-                f"⏱ LLM call: {llm_elapsed:.2f}s | tokens in: {iter_in}, out: {iter_out}"
+                f"⏱ LLM call: {llm_elapsed:.2f}s | model: {model_used.split('.')[-1]} | tokens in: {iter_in}, out: {iter_out}{cache_note}"
+            )
+            _emit(
+                "llm_end",
+                iteration=iteration_count,
+                model=model_used.split(".")[-1],
+                duration=round(llm_elapsed, 3),
+                tokens_in=iter_in,
+                tokens_out=iter_out,
+                cache_read=cache_read,
+                cache_write=cache_write,
             )
 
             output_msg = response.get("output", {}).get("message", {})
@@ -434,6 +536,16 @@ def process_query(
                 result["pdf"] = base64.b64encode(pdf_data).decode("ascii")
                 if result["type"] == "text":
                     result["type"] = "pdf"
+            _emit(
+                "query_end",
+                total_time=round(total_elapsed, 3),
+                tokens_in=total_tokens_in,
+                tokens_out=total_tokens_out,
+                cost_usd=usage_meta["total_cost_usd"],
+                iterations=iteration_count,
+                text=final_response_text,
+                response_type=result.get("type", "text"),
+            )
             return result
 
         logger.info(f"Processing {len(pending_calls)} function call(s)")
@@ -449,6 +561,7 @@ def process_query(
             schedule_headers,
             context_event_id=event_id,
             context_category_id=category_id,
+            on_event=on_event,
         )
         tool_elapsed = time.time() - tool_start
         logger.info(f"⏱ Tool calls: {tool_elapsed:.2f}s")
@@ -465,10 +578,17 @@ def process_query(
 
         # Add function outputs to input_list for next iteration
         input_list.extend(function_outputs)
+        had_tool_results = True
 
 
 def handle_query(
-    query, headers, session_id=None, event_id=None, category_id=None, user_info=None
+    query,
+    headers,
+    session_id=None,
+    event_id=None,
+    category_id=None,
+    user_info=None,
+    on_event=None,
 ):
     """Entry point for handling queries."""
     return process_query(
@@ -478,6 +598,7 @@ def handle_query(
         event_id=event_id,
         category_id=category_id,
         user_info=user_info,
+        on_event=on_event,
     )
 
 
