@@ -26,9 +26,28 @@ Fetches available rooms (resource_ids + names) for a BriefingIQ event. Call befo
 
 ## Scheduling
 
-### `schedule_meeting`
-Creates blocked calendar time on a BriefingIQ resource calendar.  
-Params: `calendarFromDateIso`, `calendarStartTimeIso`, `calendarEndTimeIso`, `calendarToDateIso` — all ISO-8601 strings. Optional `calendarType` (default `BLOCKED`) and `comments`.
+All scheduling tools go through `tools.briefingiq_writer` and pull auth + tenant
+context (`customerId`, `categoryId`, timezone, user) from the incoming request
+headers. No hardcoded tokens.
+
+### `list_rooms`
+Lists bookable rooms for the current tenant/category.  
+Returns: `[{resource_id, name, capacity}]`. No params.  
+Call first for any room-booking flow.
+
+### `get_resource_schedule`
+Fetches existing calendar entries (bookings/blocks) for a specific room.  
+Params: `resource_id`.  
+Returns: `[{unique_id, calendar_type, start_utc_ms, end_utc_ms, comments}]` sorted by start time.
+
+### `find_vacant_slots`
+Computes free windows of a minimum duration on a given date for one room, respecting working hours.  
+Params: `resource_id`, `date` (YYYY-MM-DD), `duration_minutes`, optional `day_start_hour` (default 9), `day_end_hour` (default 18).  
+Returns: `[{start_iso, end_iso, start_utc_ms, end_utc_ms}]` — wall-clock ISO in the request timezone.
+
+### `block_calendar`
+Reserves a window on a room by creating a calendar entry. Runs a pre-flight conflict check — if the window overlaps an existing entry, returns `status="conflict"` with the overlapping entries instead of writing.  
+Params: `resource_id`, `start_iso`, `end_iso` (both `YYYY-MM-DDTHH:MM:SS` local wall-clock), optional `comments`, `calendar_type` (default `BLOCKED`).
 
 ---
 

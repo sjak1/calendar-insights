@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Repo Map — calender-insights</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'SF Mono', 'Fira Code', monospace; overflow: hidden; }
+
+  #canvas { width: 100vw; height: 100vh; display: block; }
+
+  #tooltip {
+    position: fixed;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    pointer-events: none;
+    display: none;
+    z-index: 100;
+    max-width: 280px;
+    line-height: 1.6;
+  }
+  #tooltip .name { font-weight: bold; color: #58a6ff; margin-bottom: 4px; }
+  #tooltip .desc { color: #8b949e; }
+  #tooltip .role { color: #3fb950; font-size: 11px; margin-top: 4px; }
+
+  #legend {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 11px;
+    z-index: 100;
+  }
+  #legend h4 { color: #8b949e; margin-bottom: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .leg { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  #title {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    font-size: 13px;
+    color: #8b949e;
+    z-index: 100;
+  }
+  #title span { color: #58a6ff; font-size: 16px; font-weight: bold; }
+
+  #hint {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    font-size: 11px;
+    color: #484f58;
+    z-index: 100;
+    text-align: right;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="tooltip"><div class="name"></div><div class="desc"></div><div class="role"></div></div>
+<div id="title"><span>calender-insights</span><br>repo architecture map</div>
+<div id="hint">hover nodes · drag to explore<br>scroll to zoom</div>
+
+<div id="legend">
+  <h4>Layers</h4>
+  <div class="leg"><div class="dot" style="background:#58a6ff"></div> Entry / API</div>
+  <div class="leg"><div class="dot" style="background:#3fb950"></div> Core Logic</div>
+  <div class="leg"><div class="dot" style="background:#d29922"></div> Tools</div>
+  <div class="leg"><div class="dot" style="background:#f78166"></div> Data / Storage</div>
+  <div class="leg"><div class="dot" style="background:#bc8cff"></div> LLM / AI</div>
+  <div class="leg"><div class="dot" style="background:#39d353"></div> UI / Static</div>
+  <div class="leg"><div class="dot" style="background:#8b949e"></div> Config / Utils</div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const CX = canvas.width / 2;
+const CY = canvas.height / 2;
+
+// Categories with colors
+const CAT = {
+  entry:   '#58a6ff',
+  core:    '#3fb950',
+  tools:   '#d29922',
+  data:    '#f78166',
+  llm:     '#bc8cff',
+  ui:      '#39d353',
+  config:  '#8b949e',
+};
+
+// Nodes: id, label, file, desc, role (what it does), cat, size
+const nodes = [
+  // Hub
+  { id: 'api',            label: 'api.py',                  file: 'api.py',
+    desc: 'FastAPI app — all HTTP endpoints incl. /process_query and /process_query_stream (SSE)',
+    role: 'Entry point · routes requests · spawns SSE worker thread',
+    cat: 'entry', size: 28 },
+
+  { id: 'lambda',         label: 'lambda_handler.py',       file: 'lambda_handler.py',
+    desc: 'AWS Lambda entry point — wraps api.py for serverless deploy',
+    role: 'Prod entry point on Lambda',
+    cat: 'entry', size: 18 },
+
+  // Core
+  { id: 'qp',             label: 'query_processor.py',      file: 'query_processor.py',
+    desc: 'Main agentic loop — Bedrock Converse, caching, tool dispatch, SSE events',
+    role: 'Orchestrator · drives the plan→tool→synthesize loop',
+    cat: 'core', size: 30 },
+
+  { id: 'bedrock',        label: 'bedrock_llm.py',          file: 'bedrock_llm.py',
+    desc: 'Thin Bedrock Converse wrapper — handles cachePoint, model_id override, tool format conversion',
+    role: 'LLM transport layer',
+    cat: 'llm', size: 22 },
+
+  { id: 'handlers',       label: 'tools/handlers.py',       file: 'tools/handlers.py',
+    desc: 'Tool executor — time-token substitution, ThreadPoolExecutor parallel dispatch, SSE callbacks',
+    role: 'Routes LLM tool calls → real functions',
+    cat: 'core', size: 26 },
+
+  // Tools
+  { id: 'definitions',    label: 'tools/definitions.py',    file: 'tools/definitions.py',
+    desc: 'OpenAI-format tool schemas sent to Bedrock — what the LLM can call',
+    role: 'Tool contract definitions',
+    cat: 'tools', size: 20 },
+
+  { id: 'agenda_gen',     label: 'tools/agenda_generator.py', file: 'tools/agenda_generator.py',
+    desc: 'Builds full meeting agenda from event data, similar briefings, presenter suggestions + availability',
+    role: 'generate_agenda tool impl',
+    cat: 'tools', size: 22 },
+
+  { id: 'presenter',      label: 'tools/presenter_suggest.py', file: 'tools/presenter_suggest.py',
+    desc: 'Ranks presenters from activities index, checks double-booking via _check_presenter_conflicts',
+    role: 'suggest_presenters tool impl',
+    cat: 'tools', size: 22 },
+
+  { id: 'briefingiq_api', label: 'tools/briefingiq_api.py', file: 'tools/briefingiq_api.py',
+    desc: 'HTTP client for BriefingIQ REST API — rooms, events, activities, calendar ops',
+    role: 'External API adapter',
+    cat: 'tools', size: 20 },
+
+  { id: 'briefingiq_w',   label: 'tools/briefingiq_writer.py', file: 'tools/briefingiq_writer.py',
+    desc: 'Writes agenda sessions back to BriefingIQ (push_agenda_to_briefingiq)',
+    role: 'Write path for agenda push',
+    cat: 'tools', size: 18 },
+
+  // Data
+  { id: 'opensearch',     label: 'opensearch_client.py',    file: 'opensearch_client.py',
+    desc: 'Thin OpenSearch wrapper — search, count, list_indices, get_mapping, banned-field guard',
+    role: 'Read from events + activities indices',
+    cat: 'data', size: 22 },
+
+  { id: 'database',       label: 'database.py',             file: 'database.py',
+    desc: 'SQLAlchemy engine — connects to BriefingIQ SQL DB for category/event lookups',
+    role: 'SQL data access',
+    cat: 'data', size: 18 },
+
+  { id: 'session_mgr',    label: 'session_manager.py',      file: 'session_manager.py',
+    desc: 'In-memory conversation history per session_id (last 6 turns)',
+    role: 'Chat session state',
+    cat: 'data', size: 16 },
+
+  { id: 'schema',         label: 'schema_reference.py',     file: 'schema_reference.py',
+    desc: 'Static OpenSearch field path reference injected into every system prompt',
+    role: 'LLM field path cheat-sheet',
+    cat: 'config', size: 16 },
+
+  // UI
+  { id: 'timings',        label: 'static/timings.html',     file: 'static/timings.html',
+    desc: 'Live waterfall UI — SSE client, animated bars for planning/tools/synthesis phases',
+    role: 'Dev perf dashboard',
+    cat: 'ui', size: 18 },
+
+  { id: 'repomap',        label: 'static/repo_map.html',    file: 'static/repo_map.html',
+    desc: 'This file — interactive repo architecture map',
+    role: 'Dev docs',
+    cat: 'ui', size: 14 },
+
+  // Config / Utils
+  { id: 'logging',        label: 'logging_config.py',       file: 'logging_config.py',
+    desc: 'Structured logger setup used across all modules',
+    role: 'Logging',
+    cat: 'config', size: 14 },
+
+  { id: 'bench',          label: 'bench_bedrock.py',        file: 'bench_bedrock.py',
+    desc: 'Standalone Bedrock latency benchmark — Sonnet vs Haiku, ms/token measurements',
+    role: 'Dev tooling',
+    cat: 'config', size: 14 },
+];
+
+// Edges: [from, to, label?]
+const edges = [
+  ['api',         'qp',            'calls'],
+  ['lambda',      'api',           'wraps'],
+  ['qp',          'bedrock',       'converse()'],
+  ['qp',          'handlers',      'process_function_calls()'],
+  ['qp',          'session_mgr',   'history'],
+  ['qp',          'schema',        'system prompt'],
+  ['handlers',    'definitions',   'tool schema'],
+  ['handlers',    'opensearch',    'search/count'],
+  ['handlers',    'presenter',     'suggest_presenters'],
+  ['handlers',    'agenda_gen',    'generate_agenda'],
+  ['handlers',    'briefingiq_api','list_rooms / block_cal'],
+  ['handlers',    'briefingiq_w',  'push_agenda'],
+  ['agenda_gen',  'opensearch',    'similar briefings'],
+  ['agenda_gen',  'presenter',     'presenter recs'],
+  ['agenda_gen',  'briefingiq_api','event data'],
+  ['presenter',   'opensearch',    'activities query'],
+  ['briefingiq_w','briefingiq_api','API calls'],
+  ['qp',          'database',      'category lookup'],
+];
+
+// Layout — place nodes in rings
+const rings = [
+  { ids: ['api'],                                                            r: 0 },
+  { ids: ['qp', 'lambda'],                                                   r: 120 },
+  { ids: ['bedrock', 'handlers', 'session_mgr', 'schema', 'database'],      r: 240 },
+  { ids: ['definitions', 'opensearch', 'agenda_gen', 'presenter', 'briefingiq_api', 'briefingiq_w'], r: 370 },
+  { ids: ['timings', 'repomap', 'logging', 'bench'],                        r: 480 },
+];
+
+const nodeMap = {};
+nodes.forEach(n => { nodeMap[n.id] = n; });
+
+rings.forEach(ring => {
+  const count = ring.ids.length;
+  ring.ids.forEach((id, i) => {
+    const angle = (2 * Math.PI * i / count) - Math.PI / 2;
+    const n = nodeMap[id];
+    n.x = CX + ring.r * Math.cos(angle);
+    n.y = CY + ring.r * Math.sin(angle);
+    n.vx = 0; n.vy = 0;
+    n.angle = angle;
+    n.baseX = n.x; n.baseY = n.y;
+    n.pulse = Math.random() * Math.PI * 2;
+  });
+});
+
+// Pan + zoom state
+let pan = { x: 0, y: 0 };
+let zoom = 1;
+let dragging = false;
+let dragStart = { x: 0, y: 0 };
+let panStart = { x: 0, y: 0 };
+let hoveredNode = null;
+let time = 0;
+
+function worldToScreen(wx, wy) {
+  return { x: wx * zoom + pan.x, y: wy * zoom + pan.y };
+}
+
+function screenToWorld(sx, sy) {
+  return { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom };
+}
+
+function drawEdge(a, b, label) {
+  const sa = worldToScreen(a.x, a.y);
+  const sb = worldToScreen(b.x, b.y);
+  const isHovered = hoveredNode && (hoveredNode.id === a.id || hoveredNode.id === b.id);
+
+  ctx.beginPath();
+  ctx.moveTo(sa.x, sa.y);
+  ctx.lineTo(sb.x, sb.y);
+  ctx.strokeStyle = isHovered ? 'rgba(88,166,255,0.6)' : 'rgba(48,54,61,0.7)';
+  ctx.lineWidth = isHovered ? 1.5 : 0.8;
+  ctx.stroke();
+
+  if (isHovered && label && zoom > 0.7) {
+    const mx = (sa.x + sb.x) / 2;
+    const my = (sa.y + sb.y) / 2;
+    ctx.font = `${Math.round(9 * zoom)}px SF Mono, monospace`;
+    ctx.fillStyle = 'rgba(139,148,158,0.9)';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, mx, my - 4);
+  }
+}
+
+function drawNode(n) {
+  const s = worldToScreen(n.x, n.y);
+  const r = n.size * zoom;
+  const isHovered = hoveredNode && hoveredNode.id === n.id;
+  const pulse = Math.sin(time * 0.02 + n.pulse) * 0.15 + 1;
+  const color = CAT[n.cat];
+
+  // Glow
+  if (isHovered) {
+    const grd = ctx.createRadialGradient(s.x, s.y, r * 0.5, s.x, s.y, r * 2.5);
+    grd.addColorStop(0, color + '55');
+    grd.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = grd;
+    ctx.fill();
+  }
+
+  // Ring pulse for entry nodes
+  if (n.cat === 'entry') {
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r * pulse * 1.6, 0, Math.PI * 2);
+    ctx.strokeStyle = color + '33';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Node circle
+  const grd2 = ctx.createRadialGradient(s.x - r * 0.3, s.y - r * 0.3, r * 0.1, s.x, s.y, r);
+  grd2.addColorStop(0, color + 'dd');
+  grd2.addColorStop(1, color + '88');
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = grd2;
+  ctx.fill();
+  ctx.strokeStyle = isHovered ? color : color + '66';
+  ctx.lineWidth = isHovered ? 2 : 1;
+  ctx.stroke();
+
+  // Label
+  if (zoom > 0.5) {
+    const fontSize = Math.max(9, Math.round(11 * zoom));
+    ctx.font = `${fontSize}px SF Mono, monospace`;
+    ctx.fillStyle = isHovered ? '#e6edf3' : '#c9d1d9';
+    ctx.textAlign = 'center';
+    const label = n.label.replace('tools/', '').replace('static/', '');
+    ctx.fillText(label, s.x, s.y + r + fontSize + 2);
+  }
+}
+
+function getNodeAt(sx, sy) {
+  const w = screenToWorld(sx, sy);
+  for (const n of nodes) {
+    const dx = n.x - w.x, dy = n.y - w.y;
+    if (Math.sqrt(dx * dx + dy * dy) < n.size + 4) return n;
+  }
+  return null;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background grid
+  ctx.strokeStyle = 'rgba(48,54,61,0.15)';
+  ctx.lineWidth = 0.5;
+  const gridSize = 60 * zoom;
+  const offX = pan.x % gridSize;
+  const offY = pan.y % gridSize;
+  for (let x = offX; x < canvas.width; x += gridSize) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  }
+  for (let y = offY; y < canvas.height; y += gridSize) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  }
+
+  // Edges
+  edges.forEach(([aid, bid, label]) => {
+    const a = nodeMap[aid], b = nodeMap[bid];
+    if (a && b) drawEdge(a, b, label);
+  });
+
+  // Nodes
+  nodes.forEach(drawNode);
+
+  time++;
+  requestAnimationFrame(draw);
+}
+
+// Interaction
+canvas.addEventListener('mousemove', e => {
+  const n = getNodeAt(e.clientX, e.clientY);
+  hoveredNode = n;
+  canvas.style.cursor = n ? 'pointer' : (dragging ? 'grabbing' : 'grab');
+
+  if (n) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 16) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+    tooltip.querySelector('.name').textContent = n.file;
+    tooltip.querySelector('.desc').textContent = n.desc;
+    tooltip.querySelector('.role').textContent = '→ ' + n.role;
+  } else {
+    tooltip.style.display = 'none';
+  }
+
+  if (dragging) {
+    pan.x = panStart.x + (e.clientX - dragStart.x);
+    pan.y = panStart.y + (e.clientY - dragStart.y);
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  dragging = true;
+  dragStart = { x: e.clientX, y: e.clientY };
+  panStart = { x: pan.x, y: pan.y };
+  canvas.style.cursor = 'grabbing';
+});
+
+canvas.addEventListener('mouseup', () => { dragging = false; });
+canvas.addEventListener('mouseleave', () => { dragging = false; tooltip.style.display = 'none'; });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.91;
+  const wx = (e.clientX - pan.x) / zoom;
+  const wy = (e.clientY - pan.y) / zoom;
+  zoom *= factor;
+  zoom = Math.max(0.2, Math.min(3, zoom));
+  pan.x = e.clientX - wx * zoom;
+  pan.y = e.clientY - wy * zoom;
+}, { passive: false });
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+// Center pan on load
+pan.x = 0; pan.y = 0;
+
+draw();
+</script>
+</body>
+</html>

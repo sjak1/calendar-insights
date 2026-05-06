@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>BriefingIQ — Query Timing Waterfall</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #121a33;
+    --panel-2: #1a2447;
+    --text: #e6ecff;
+    --muted: #8ea0d4;
+    --accent: #6ee7ff;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --plan: #a78bfa;
+    --synth: #34d399;
+    --tool: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid #222c55;
+    display: flex; gap: 16px; align-items: center;
+  }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: 0.02em; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { padding: 20px 24px 48px; max-width: 1100px; margin: 0 auto; }
+  .query-box {
+    display: flex; gap: 8px; margin-bottom: 18px;
+  }
+  .query-box input {
+    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #2a386b;
+    background: var(--panel); color: var(--text); font-size: 14px;
+  }
+  .query-box button {
+    padding: 10px 18px; border-radius: 8px; border: 0; cursor: pointer;
+    background: var(--accent); color: #002430; font-weight: 600;
+  }
+  .query-box button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .summary {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px;
+  }
+  .stat {
+    background: var(--panel); border: 1px solid #222c55; border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat .val { font-size: 20px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .waterfall {
+    background: var(--panel); border: 1px solid #222c55; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 18px; min-height: 120px;
+  }
+  .wf-row {
+    display: grid; grid-template-columns: 220px 1fr 72px;
+    align-items: center; gap: 10px; padding: 6px 0;
+    border-bottom: 1px dashed #20294f;
+  }
+  .wf-row:last-child { border-bottom: 0; }
+  .wf-label { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-label small { color: var(--muted); font-weight: normal; }
+  .wf-bar-track {
+    position: relative; height: 16px; background: #0e1535;
+    border-radius: 4px; overflow: hidden;
+  }
+  .wf-bar {
+    position: absolute; top: 0; bottom: 0;
+    background: var(--tool);
+    border-radius: 4px;
+    transition: width 0.12s linear, left 0.12s linear;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .wf-bar.plan { background: linear-gradient(90deg, #a78bfa, #7c3aed); }
+  .wf-bar.synth { background: linear-gradient(90deg, #34d399, #059669); }
+  .wf-bar.tool { background: linear-gradient(90deg, #60a5fa, #2563eb); }
+  .wf-bar.running { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .wf-dur { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .axis {
+    display: grid; grid-template-columns: 220px 1fr 72px; gap: 10px;
+    padding: 6px 0 10px; border-bottom: 1px solid #20294f; margin-bottom: 6px;
+    font-size: 11px; color: var(--muted);
+  }
+  .axis .ticks { position: relative; height: 16px; }
+  .axis .tick { position: absolute; top: 0; transform: translateX(-50%); }
+  .legend { display: flex; gap: 14px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+  .dot.plan { background: #a78bfa; }
+  .dot.synth { background: #34d399; }
+  .dot.tool { background: #60a5fa; }
+  .response {
+    background: var(--panel); border: 1px solid #222c55; border-radius: 10px;
+    padding: 14px 16px; white-space: pre-wrap; word-wrap: break-word;
+    max-height: 320px; overflow: auto;
+  }
+  .response h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .err { color: var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BriefingIQ — Query Timing</h1>
+  <span class="sub">Live waterfall of where time is spent per query</span>
+</header>
+<main>
+  <div class="query-box">
+    <input id="q" type="text" value="list 5 upcoming events this month" placeholder="Type a query…" />
+    <button id="go">Run</button>
+  </div>
+
+  <div class="summary">
+    <div class="stat"><div class="label">Elapsed</div><div class="val" id="s-elapsed">0.00s</div></div>
+    <div class="stat"><div class="label">Iterations</div><div class="val" id="s-iters">0</div></div>
+    <div class="stat"><div class="label">Tokens in / out</div><div class="val" id="s-tokens">0 / 0</div></div>
+    <div class="stat"><div class="label">Cost</div><div class="val" id="s-cost">$0.00</div></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot plan"></span>Planning (Sonnet)</span>
+    <span><span class="dot tool"></span>Tool calls</span>
+    <span><span class="dot synth"></span>Synthesis (Haiku)</span>
+  </div>
+
+  <div class="waterfall" id="waterfall">
+    <div class="axis">
+      <div>Step</div>
+      <div class="ticks" id="ticks"></div>
+      <div style="text-align:right">Duration</div>
+    </div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="response">
+    <h2>Response</h2>
+    <div id="resp"></div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const q = document.getElementById("q");
+  const go = document.getElementById("go");
+  const rowsEl = document.getElementById("rows");
+  const ticksEl = document.getElementById("ticks");
+  const respEl = document.getElementById("resp");
+  const sElapsed = document.getElementById("s-elapsed");
+  const sIters = document.getElementById("s-iters");
+  const sTokens = document.getElementById("s-tokens");
+  const sCost = document.getElementById("s-cost");
+
+  let startMs = 0;
+  let rafId = null;
+  let running = false;
+  const steps = new Map();      // key -> {label, kind, startT, endT, el, barEl, durEl}
+  let maxSeenT = 1;             // seconds — denominator for bar widths
+  const AXIS_PAD = 0.2;
+
+  function keyForLLM(d) { return `llm-${d.iteration}`; }
+  function keyForTool(d) { return `tool-${d.call_id || d.name}`; }
+
+  function addRow(key, label, kind, startT) {
+    const row = document.createElement("div");
+    row.className = "wf-row";
+    const lab = document.createElement("div");
+    lab.className = "wf-label";
+    lab.innerHTML = label;
+    const track = document.createElement("div");
+    track.className = "wf-bar-track";
+    const bar = document.createElement("div");
+    bar.className = `wf-bar ${kind} running`;
+    bar.style.left = "0%";
+    bar.style.width = "0%";
+    track.appendChild(bar);
+    const dur = document.createElement("div");
+    dur.className = "wf-dur";
+    dur.textContent = "…";
+    row.appendChild(lab);
+    row.appendChild(track);
+    row.appendChild(dur);
+    rowsEl.appendChild(row);
+    const entry = { label, kind, startT, endT: null, el: row, barEl: bar, durEl: dur };
+    steps.set(key, entry);
+    return entry;
+  }
+
+  function redrawAxis() {
+    const max = Math.max(maxSeenT, 1);
+    ticksEl.innerHTML = "";
+    const ticks = 5;
+    for (let i = 0; i <= ticks; i++) {
+      const frac = i / ticks;
+      const t = (frac * max).toFixed(1);
+      const el = document.createElement("span");
+      el.className = "tick";
+      el.style.left = `${frac * 100}%`;
+      el.textContent = `${t}s`;
+      ticksEl.appendChild(el);
+    }
+  }
+
+  function redrawBars() {
+    const max = Math.max(maxSeenT, 1);
+    const nowT = (performance.now() - startMs) / 1000;
+    for (const entry of steps.values()) {
+      const s = entry.startT;
+      const e = entry.endT ?? nowT;
+      const leftPct = (s / max) * 100;
+      const widthPct = Math.max(1.2, ((e - s) / max) * 100);
+      entry.barEl.style.left = `${leftPct}%`;
+      entry.barEl.style.width = `${widthPct}%`;
+      if (entry.endT != null) {
+        entry.barEl.classList.remove("running");
+        entry.durEl.textContent = `${(entry.endT - entry.startT).toFixed(2)}s`;
+      }
+    }
+  }
+
+  function tick() {
+    if (!running) return;
+    const nowT = (performance.now() - startMs) / 1000;
+    sElapsed.textContent = `${nowT.toFixed(2)}s`;
+    if (nowT + AXIS_PAD > maxSeenT) {
+      maxSeenT = nowT + AXIS_PAD;
+      redrawAxis();
+    }
+    redrawBars();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function reset() {
+    rowsEl.innerHTML = "";
+    respEl.textContent = "";
+    respEl.classList.remove("err");
+    steps.clear();
+    maxSeenT = 1;
+    startMs = performance.now();
+    sElapsed.textContent = "0.00s";
+    sIters.textContent = "0";
+    sTokens.textContent = "0 / 0";
+    sCost.textContent = "$0.00";
+    redrawAxis();
+  }
+
+  function onEvent(ev) {
+    const t = ev.t ?? 0;
+    if (t > maxSeenT - AXIS_PAD) {
+      maxSeenT = t + AXIS_PAD;
+      redrawAxis();
+    }
+    if (ev.type === "query_start") {
+      // nothing — rows appear on llm_start / tool_start
+    } else if (ev.type === "llm_start") {
+      const label = `<b>LLM</b> ${ev.role} · <small>${ev.model}</small>`;
+      const kind = ev.role === "planning" ? "plan" : "synth";
+      addRow(keyForLLM(ev), label, kind, t);
+    } else if (ev.type === "llm_end") {
+      const entry = steps.get(keyForLLM(ev));
+      if (entry) {
+        entry.endT = t;
+        entry.label = `<b>LLM</b> ${entry.kind === "plan" ? "planning" : "synthesis"} · <small>${ev.model} · ${ev.tokens_in}→${ev.tokens_out} tok${ev.cache_read ? ` · cache ${ev.cache_read}` : ""}</small>`;
+        entry.el.querySelector(".wf-label").innerHTML = entry.label;
+      }
+      sIters.textContent = String(ev.iteration);
+    } else if (ev.type === "tool_start") {
+      const label = `<b>Tool</b> ${ev.name}`;
+      addRow(keyForTool(ev), label, "tool", t);
+    } else if (ev.type === "tool_end") {
+      const entry = steps.get(keyForTool(ev));
+      if (entry) entry.endT = t;
+    } else if (ev.type === "query_end") {
+      sTokens.textContent = `${ev.tokens_in} / ${ev.tokens_out}`;
+      sCost.textContent = `$${(ev.cost_usd ?? 0).toFixed(4)}`;
+      sIters.textContent = String(ev.iterations);
+      respEl.textContent = ev.text || "(no text)";
+    } else if (ev.type === "error") {
+      respEl.textContent = `Error: ${ev.error}`;
+      respEl.classList.add("err");
+    }
+    redrawBars();
+  }
+
+  async function run() {
+    if (running) return;
+    running = true;
+    go.disabled = true;
+    reset();
+    rafId = requestAnimationFrame(tick);
+
+    try {
+      const resp = await fetch("/process_query_stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q.value, headers: {} }),
+      });
+      if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // parse SSE frames separated by \n\n
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          // each frame: one or more lines "data: ..." or "event: ..."
+          const dataLines = frame.split("\n").filter(l => l.startsWith("data:"));
+          if (!dataLines.length) continue;
+          const data = dataLines.map(l => l.slice(5).trimStart()).join("\n");
+          if (!data) continue;
+          try {
+            const ev = JSON.parse(data);
+            onEvent(ev);
+          } catch (_) {
+            // ignore parse errors (e.g. empty heartbeat)
+          }
+        }
+      }
+    } catch (err) {
+      respEl.textContent = `Stream error: ${err}`;
+      respEl.classList.add("err");
+    } finally {
+      running = false;
+      go.disabled = false;
+      cancelAnimationFrame(rafId);
+      redrawBars();
+    }
+  }
+
+  go.addEventListener("click", run);
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+  redrawAxis();
+})();
+</script>
+</body>
+</html>
