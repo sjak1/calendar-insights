@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import engine  # noqa: E402 — shared engine from database.py
 from logging_config import get_logger  # noqa: E402
 from tools.extract_ebd import extract_pptx_content, format_extracted_content  # noqa: E402
+from bedrock_llm import converse as bedrock_converse  # noqa: E402
 try:
     from opensearch_client import search as os_search, get_suggested_presenters  # noqa: E402
 except ImportError:
@@ -50,7 +51,12 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
+# Provider: "openai" (gpt-5-mini, default) or "bedrock" (Claude Haiku on Bedrock)
+AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "openai").lower()
 LLM_MODEL: str = os.getenv("AGENDA_LLM_MODEL", "gpt-5-mini")
+AGENDA_BEDROCK_MODEL_ID: str = os.getenv(
+    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001"
+)
 MAX_DOCUMENT_CHARS: int = int(os.getenv("MAX_DOCUMENT_CHARS", "30000"))
 AGENDA_SESSION_MIN: int = int(os.getenv("AGENDA_SESSION_MIN", "6"))
 AGENDA_SESSION_MAX: int = int(os.getenv("AGENDA_SESSION_MAX", "10"))
@@ -569,6 +575,7 @@ def _fetch_meeting_context_os(
         "form_type": visit.get("formType") or visit.get("visitType"),
         "region": visit.get("region"),
         "tier": visit.get("tier"),
+        "start_time_ms": hit.get("startTime"),
     }
     actual_event_id = hit.get("eventId")
     actual_company = visit.get("customerName") or company_name
@@ -783,7 +790,7 @@ def _fetch_meeting_context_sql(
         meeting_query = text(f"""
             SELECT EVENTID, CUSTOMERNAME, CUSTOMERINDUSTRY, ACCOUNTTYPE,
                    LINEOFBUSINESS, VISITFOCUS, MEETINGOBJECTIVE, SALESPLAY,
-                   PILLARS, FORMTYPE, REGION, TIER
+                   PILLARS, FORMTYPE, REGION, TIER, STARTDATEMS
             FROM VW_OPERATIONS_REPORT
             WHERE {where_clause}
             ORDER BY {order_by}
@@ -800,6 +807,7 @@ def _fetch_meeting_context_sql(
             "visit_focus": row[5], "meeting_objective": row[6],
             "sales_plays": _parse_json_field(row[7]), "pillars": _parse_json_field(row[8]),
             "form_type": row[9], "region": row[10], "tier": row[11],
+            "start_time_ms": int(row[12]) if row[12] is not None else None,
         }
         actual_company = row[1]
         actual_event_id = row[0]
@@ -956,6 +964,14 @@ def _merge_presenter_recommendations(
             existing["sample_event_id"] = suggestion.get("sample_event_id")
         if not existing.get("sample_event_name") and suggestion.get("sample_event_name"):
             existing["sample_event_name"] = suggestion.get("sample_event_name")
+        # Carry availability — once flagged as booked, stays booked even if another
+        # scope returns them as available (conservative: surface conflicts)
+        if "available" not in existing:
+            existing["available"] = suggestion.get("available")
+            existing["conflicts"] = suggestion.get("conflicts", [])
+        elif suggestion.get("available") is False:
+            existing["available"] = False
+            existing["conflicts"] = suggestion.get("conflicts", [])
 
 
 def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -976,6 +992,27 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
     company_name = meeting.get("company_name")
     industry = meeting.get("industry")
     visit_focus = meeting.get("visit_focus")
+    start_time_ms = meeting.get("start_time_ms")
+
+    # Compute event-day availability window so we can flag double-booked presenters.
+    # Use start-of-day → end-of-day for the event date (covers the full briefing day).
+    check_start_ms = None
+    check_end_ms = None
+    if start_time_ms:
+        try:
+            from datetime import timezone as _tz
+            from datetime import datetime as _dt, timedelta as _td, time as _t
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                _tz_obj = _ZI("America/Los_Angeles")
+            except Exception:
+                _tz_obj = _tz.utc
+            _event_dt = _dt.fromtimestamp(start_time_ms / 1000, tz=_tz_obj)
+            _sod = _dt.combine(_event_dt.date(), _t(0, 0, 0), tzinfo=_tz_obj)
+            check_start_ms = int(_sod.timestamp() * 1000)
+            check_end_ms = int((_sod + _td(days=1)).timestamp() * 1000)
+        except Exception:
+            pass
 
     combined: Dict[str, Dict[str, Any]] = {}
     scoped_calls = [
@@ -988,6 +1025,9 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
         cleaned_kwargs = {k: v for k, v in kwargs.items() if v}
         if not cleaned_kwargs:
             continue
+        if check_start_ms and check_end_ms:
+            cleaned_kwargs["check_start_utc_ms"] = check_start_ms
+            cleaned_kwargs["check_end_utc_ms"] = check_end_ms
         try:
             result = get_suggested_presenters(**cleaned_kwargs)
             if result.get("success"):
@@ -1023,6 +1063,12 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
             continue
         source_label = ", ".join(item["sources"]) if item["sources"] else "unknown"
         reason_bits = list(item["reasons"]) or [f"{item['session_count']} matched activities"]
+        conflict_note = ""
+        available = item.get("available")
+        if available is False:
+            top_conflicts = item.get("conflicts", [])[:2]
+            slots = ", ".join(c.get("time", "") for c in top_conflicts if c.get("time"))
+            conflict_note = f" ⚠️ May be double-booked on event day ({slots})" if slots else " ⚠️ May be double-booked on event day"
         recommendations.append(
             {
                 "presenter_name": item["presenter_name"],
@@ -1032,7 +1078,9 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
                 "sample_topic": item.get("sample_topic"),
                 "sample_event_id": item.get("sample_event_id"),
                 "sample_event_name": item.get("sample_event_name"),
-                "reason": f"Sources: {source_label}. " + " | ".join(reason_bits[:2]),
+                "available": available,
+                "conflicts": item.get("conflicts", [])[:2],
+                "reason": f"Sources: {source_label}. " + " | ".join(reason_bits[:2]) + conflict_note,
             }
         )
 
@@ -1059,8 +1107,6 @@ def _generate_agenda_with_llm(
     When ebd_file_url or ebd_file_id is set, the doc is attached to the user message in this
     single call (one LLM call). Otherwise we use ebd_context (pre-extracted text) in the prompt.
     """
-    client = _get_openai_client()
-
     meeting = context["meeting_details"]
     attendees = context["attendees"]
     previous = _rank_previous_meetings(context["previous_meetings"], meeting)
@@ -1285,6 +1331,116 @@ Hard-code the following attendee counts (do NOT make them up):
 - remote_count: {len(remote_attendees)}"""
 
 
+def _inline_json_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve `$ref` / `$defs` in a Pydantic-emitted JSON schema into a flat
+    schema, which is what Bedrock / Claude tool-use accepts cleanly."""
+    defs = schema.pop("$defs", {}) or schema.pop("definitions", {})
+
+    def resolve(obj):
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref_name = obj["$ref"].split("/")[-1]
+                resolved = resolve(defs.get(ref_name, {}))
+                # Merge sibling metadata (e.g. description) on top of the resolved schema
+                merged = dict(resolved) if isinstance(resolved, dict) else {}
+                for k, v in obj.items():
+                    if k == "$ref":
+                        continue
+                    merged[k] = resolve(v)
+                return merged
+            return {k: resolve(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [resolve(x) for x in obj]
+        return obj
+
+    return resolve(schema)
+
+
+def _call_llm_bedrock(
+    system_msg: str,
+    user_content,
+    previous: List[Dict[str, Any]],
+    similar: List[Dict[str, Any]],
+) -> GeneratedAgenda:
+    """
+    Bedrock path: Claude Haiku via Converse API with tool-use for structured output.
+    Static system message is wrapped with a cachePoint so repeated agenda runs
+    re-use the cached prefix.
+    """
+    tool_name = "emit_agenda"
+    agenda_schema = _inline_json_schema_refs(GeneratedAgenda.model_json_schema())
+    tool_config = {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": tool_name,
+                    "description": "Emit the final structured executive briefing agenda.",
+                    "inputSchema": {"json": agenda_schema},
+                }
+            }
+        ],
+        "toolChoice": {"tool": {"name": tool_name}},
+    }
+
+    # user_content is either a str (pre-extracted context) or a list of parts.
+    # For Bedrock, we collapse to plain text since the file-attach path is
+    # OpenAI-specific (EBD is already extracted to text upstream).
+    if isinstance(user_content, list):
+        text_parts = [p.get("text", "") for p in user_content if isinstance(p, dict) and p.get("type") == "text"]
+        user_text = "\n\n".join(text_parts)
+    else:
+        user_text = user_content
+
+    messages = [{"role": "user", "content": user_text}]
+
+    # Split system for cache: static instructions cached, everything else fresh.
+    system_blocks = [
+        {"text": system_msg},
+        {"cachePoint": {"type": "default"}},
+    ]
+
+    for attempt in range(2):
+        try:
+            response = bedrock_converse(
+                messages=messages,
+                system=system_blocks,
+                tool_config=tool_config,
+                model_id=AGENDA_BEDROCK_MODEL_ID,
+            )
+            usage = response.get("usage", {}) or {}
+            logger.info(
+                f"Agenda Bedrock call: tokens in={usage.get('inputTokens', 0)}, "
+                f"out={usage.get('outputTokens', 0)}, "
+                f"cache_read={usage.get('cacheReadInputTokens', 0)}, "
+                f"cache_write={usage.get('cacheWriteInputTokens', 0)}"
+            )
+            output_msg = response.get("output", {}).get("message", {})
+            for block in output_msg.get("content", []):
+                tu = block.get("toolUse")
+                if tu and tu.get("name") == tool_name:
+                    return GeneratedAgenda.model_validate(tu.get("input") or {})
+            raise RuntimeError("Bedrock response contained no toolUse block")
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(f"Bedrock agenda call failed ({e}). Retrying with shorter prompt...")
+                # Shorten: strip previous meetings and similar briefings from user message
+                user_text = re.sub(
+                    r"## PREVIOUS MEETINGS.*?(?=## )",
+                    "## PREVIOUS MEETINGS\n\nOmitted.\n\n",
+                    user_text, flags=re.DOTALL,
+                )
+                user_text = re.sub(
+                    r"## SIMILAR BRIEFINGS.*?(?=## )",
+                    "## SIMILAR BRIEFINGS\n\nOmitted.\n\n",
+                    user_text, flags=re.DOTALL,
+                )
+                messages = [{"role": "user", "content": user_text}]
+            else:
+                raise
+
+    raise RuntimeError("Bedrock agenda call failed after 2 attempts")
+
+
 def _call_llm_with_retry(
     messages: list,
     previous: List[Dict[str, Any]],
@@ -1293,7 +1449,20 @@ def _call_llm_with_retry(
     """
     Call the LLM with timeout. On failure, retry once with a shorter prompt
     (drop similar briefings and previous meetings to reduce tokens).
+
+    Dispatches to Bedrock (default) or OpenAI based on AGENDA_PROVIDER env var.
     """
+    if AGENDA_PROVIDER == "bedrock":
+        # Split system + user out of OpenAI-style messages for the Bedrock call.
+        system_msg = ""
+        user_content: Any = ""
+        for m in messages:
+            if m.get("role") == "system":
+                system_msg = m.get("content", "") if isinstance(m.get("content"), str) else str(m.get("content", ""))
+            elif m.get("role") == "user":
+                user_content = m.get("content")
+        return _call_llm_bedrock(system_msg, user_content, previous, similar)
+
     client = _get_openai_client()
 
     for attempt in range(2):

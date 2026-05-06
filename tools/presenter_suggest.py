@@ -324,6 +324,88 @@ def _rank_presenters(
     return results
 
 
+def _check_presenter_conflicts(
+    presenter_emails: List[str],
+    check_start_ms: int,
+    check_end_ms: int,
+    exclude_event_id: Optional[str] = None,
+) -> Dict[str, List[Dict]]:
+    """Check which presenters have overlapping activities in the given window.
+
+    Classic overlap condition: activity starts before our window ends
+    AND activity ends after our window starts.
+
+    Returns dict keyed by email → list of conflict dicts:
+      {"event_id", "event_name", "start_ms", "end_ms", "start_time_local", "end_time_local"}
+    """
+    try:
+        from opensearch_client import search
+    except ImportError:
+        return {}
+
+    if not presenter_emails or check_start_ms >= check_end_ms:
+        return {}
+
+    must: List[Dict] = [
+        {"range": {"startTime.utcMs": {"lt": check_end_ms}}},
+        {"range": {"endTime.utcMs": {"gt": check_start_ms}}},
+    ]
+    if exclude_event_id:
+        must.append({"bool": {"must_not": [{"term": {"eventId.keyword": exclude_event_id}}]}})
+
+    body = {
+        "query": {"bool": {"must": must}},
+        "_source": [
+            "eventId", "bookingId",
+            "startTime.utcMs", "endTime.utcMs",
+            "startTime.requested.requestedZoneDate",
+            "endTime.requested.requestedZoneDate",
+            PRESENTER_EMAIL_FIELD,
+        ],
+        "size": 200,
+    }
+
+    result = search(index=ACTIVITIES_INDEX, body=body)
+    if not result.get("success"):
+        logger.warning(f"Availability check failed: {result.get('error')}")
+        return {}
+
+    email_set = {e.lower() for e in presenter_emails}
+    conflicts: Dict[str, List[Dict]] = {}
+
+    for hit in result.get("hits", []):
+        src = hit.get("source", {})
+        presenter_entries = (src.get("activityInfo") or {}).get("topic_presenter") or []
+        for pe in presenter_entries:
+            email = _deep_get(pe, "data.presenter.primaryEmail") or ""
+            if email.lower() not in email_set:
+                continue
+            start_ms = _deep_get(src, "startTime.utcMs") or 0
+            end_ms = _deep_get(src, "endTime.utcMs") or 0
+            start_local = _deep_get(src, "startTime.requested.requestedZoneDate") or ""
+            end_local = _deep_get(src, "endTime.requested.requestedZoneDate") or ""
+            if start_local and "T" in start_local:
+                start_local = start_local.split("T")[1][:5]
+            if end_local and "T" in end_local:
+                end_local = end_local.split("T")[1][:5]
+            # bookingId e.g. "CBR-20260330-3625-031" → strip last segment for display
+            booking_id = src.get("bookingId", "")
+            event_label = "-".join(booking_id.split("-")[:3]) if booking_id else src.get("eventId", "")[:8]
+            conflicts.setdefault(email.lower(), []).append({
+                "event_id": src.get("eventId", ""),
+                "event_name": event_label,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "time": f"{start_local}–{end_local}" if start_local else "unknown time",
+            })
+
+    logger.info(
+        f"Availability check: {len(presenter_emails)} presenters, window {check_start_ms}-{check_end_ms}, "
+        f"{len(conflicts)} with conflicts"
+    )
+    return conflicts
+
+
 def get_suggested_presenters(
     topic: Optional[str] = None,
     industry: Optional[str] = None,
@@ -332,6 +414,8 @@ def get_suggested_presenters(
     audience_level: Optional[str] = None,
     limit: int = 10,
     index: Optional[str] = None,
+    check_start_utc_ms: Optional[int] = None,
+    check_end_utc_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Query OpenSearch for presenters matching the given filters.
@@ -449,6 +533,24 @@ def get_suggested_presenters(
         f"Found {len(ranked)} unique presenters from {len(hits)} activities"
         + (f" (audience_level={audience_level})" if audience_level else "")
     )
+
+    # Availability check — only when caller supplies a time window
+    if check_start_utc_ms and check_end_utc_ms:
+        emails = [p["email"] for p in ranked if p.get("email")]
+        conflicts = _check_presenter_conflicts(
+            emails,
+            check_start_utc_ms,
+            check_end_utc_ms,
+            exclude_event_id=event_id,
+        )
+        for p in ranked:
+            email_key = (p.get("email") or "").lower()
+            if email_key in conflicts:
+                p["available"] = False
+                p["conflicts"] = conflicts[email_key][:3]  # cap at 3 for LLM context
+            else:
+                p["available"] = True
+                p["conflicts"] = []
 
     return {
         "success": True,
