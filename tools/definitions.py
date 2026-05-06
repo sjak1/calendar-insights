@@ -285,7 +285,9 @@ tools = [
             "Use when the user asks who should present, who is the best presenter for X, or to recommend presenters for an agenda/session. "
             "Returns presenters ranked by matched activities, based on real activity-level topic/presenter matches. "
             "Provide at least one scope filter: event_id, topic, industry, or customer_name. "
-            "Set audience_level when the briefing has senior attendees — presenters will be ranked so peers of the audience surface first."
+            "Set audience_level when the briefing has senior attendees — presenters will be ranked so peers of the audience surface first. "
+            "Set check_start_utc_ms + check_end_utc_ms (epoch ms) to get availability — each result will include available:true/false and any conflict details. "
+            "Use time placeholder tokens (TODAY_START etc.) or ISO date strings — the server converts to epoch_ms."
         ),
         "parameters": {
             "type": "object",
@@ -315,6 +317,18 @@ tools = [
                         "When set, presenters with matching title tiers and past experience with that audience are ranked first."
                     ),
                 },
+                "check_start_utc_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Session start time as epoch milliseconds (UTC). When provided together with check_end_utc_ms, "
+                        "each suggested presenter will include available:true/false and conflict details. "
+                        "Use time placeholder token strings (e.g. TODAY_START) or ISO date strings — server converts automatically."
+                    ),
+                },
+                "check_end_utc_ms": {
+                    "type": "integer",
+                    "description": "Session end time as epoch milliseconds (UTC). Must be paired with check_start_utc_ms.",
+                },
                 "limit": {
                     "type": "integer",
                     "description": "Max number of presenters to return (default 10, max 50).",
@@ -333,7 +347,9 @@ tools = [
             "For charts: call search_opensearch with aggs (terms on status/category/region) or size+_source, then format_chart. "
             "Filters/sort: use .keyword. _source: paths WITHOUT .keyword. startTime is epoch ms (events) or startTime.utcMs (activities). "
             "IMPORTANT: For keyword fields use field.keyword, for text fields with keyword subfield use field.keyword for exact match. "
-            "For date range queries, MUST include format parameter (e.g. format: 'strict_date_optional_time||epoch_millis')."
+            "For date range queries on epoch_millis fields, write placeholder TOKENS (TODAY_START, THIS_MONTH_END, etc.) "
+            "or ISO date strings ('YYYY-MM-DD'). The server substitutes them for real epoch_ms before executing — "
+            "see [Time Context] in the system prompt for the full token list. ALWAYS include format: 'epoch_millis'."
         ),
         "parameters": {
             "type": "object",
@@ -375,44 +391,6 @@ tools = [
                 },
             },
             "required": ["query"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_time_context",
-        "description": (
-            "Get the current time and compute epoch-ms day boundaries for a given date. "
-            "Use this when you must answer 'today/tomorrow/next few days' questions and need the correct current date/time, timezone, "
-            "or need start/end-of-day epoch milliseconds for filtering startTime (epoch ms). "
-            "For multiple consecutive days (e.g. 'next 4 days'), prefer calling this ONCE with days_ahead instead of issuing multiple tool calls."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "date_iso": {
-                    "type": "string",
-                    "description": (
-                        "Optional date to compute day boundaries for, in ISO format YYYY-MM-DD. "
-                        "If omitted, uses today's date in the resolved timezone."
-                    ),
-                },
-                "days_ahead": {
-                    "type": "integer",
-                    "description": (
-                        "Optional number of consecutive days (including the base date) to compute. "
-                        "For example, days_ahead=4 with date_iso='2026-03-17' returns ranges for 17th–20th. "
-                        "If omitted or 1, only a single day is returned."
-                    ),
-                },
-                "timezone": {
-                    "type": "string",
-                    "description": (
-                        "IANA timezone name (e.g. America/Los_Angeles). "
-                        "If omitted, uses request/context timezone from headers (fallback America/Los_Angeles)."
-                    ),
-                },
-            },
-            "required": [],
         },
     },
     {

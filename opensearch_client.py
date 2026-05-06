@@ -267,8 +267,11 @@ def get_suggested_presenters(
     industry: Optional[str] = None,
     customer_name: Optional[str] = None,
     event_id: Optional[str] = None,
+    audience_level: Optional[str] = None,
     limit: int = 10,
     index: Optional[str] = None,
+    check_start_utc_ms: Optional[int] = None,
+    check_end_utc_ms: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Suggest presenters from activity matches. Delegates to tools.presenter_suggest."""
     try:
@@ -279,8 +282,11 @@ def get_suggested_presenters(
             industry=industry,
             customer_name=customer_name,
             event_id=event_id,
+            audience_level=audience_level,
             limit=limit,
             index=index,
+            check_start_utc_ms=check_start_utc_ms,
+            check_end_utc_ms=check_end_utc_ms,
         )
     except ImportError:
         return {

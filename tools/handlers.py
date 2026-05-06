@@ -3,7 +3,16 @@ Tool execution handlers for function calls.
 """
 
 import json
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, date as _date, time as _time, timedelta, timezone as _timezone
 from logging_config import get_logger
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 from scripts.sqlite_qa import ask_sqlite
 from tools import (
     get_gdp,
@@ -55,6 +64,115 @@ def _substitute_current_event(obj, real_event_id):
         return [_substitute_current_event(x, real_event_id) for x in obj]
     if isinstance(obj, dict):
         return {k: _substitute_current_event(v, real_event_id) for k, v in obj.items()}
+    return obj
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$")
+
+
+def _build_time_token_map(timezone_name: str):
+    """Compute epoch-ms values for sugar tokens like TODAY, THIS_WEEK_START, etc.
+    All boundaries are in the user's local timezone, returned as UTC epoch ms.
+    """
+    try:
+        tz = ZoneInfo(timezone_name) if ZoneInfo else _timezone.utc
+    except Exception:
+        tz = _timezone.utc
+
+    now_local = datetime.now(tz=_timezone.utc).astimezone(tz)
+    today = now_local.date()
+
+    def sod(d):  # start-of-day epoch ms in tz
+        return int(datetime.combine(d, _time(0, 0, 0), tzinfo=tz).timestamp() * 1000)
+
+    yesterday = today - timedelta(days=1)
+    tomorrow = today + timedelta(days=1)
+    # ISO weeks: Monday=0
+    week_start = today - timedelta(days=today.weekday())
+    week_end_excl = week_start + timedelta(days=7)
+    next_week_start = week_end_excl
+    next_week_end_excl = next_week_start + timedelta(days=7)
+    month_start = today.replace(day=1)
+    next_month_start = (month_start + timedelta(days=32)).replace(day=1)
+    month_after_next = (next_month_start + timedelta(days=32)).replace(day=1)
+
+    return {
+        "TODAY": sod(today),
+        "TODAY_START": sod(today),
+        "TODAY_END": sod(tomorrow),
+        "YESTERDAY_START": sod(yesterday),
+        "YESTERDAY_END": sod(today),
+        "TOMORROW": sod(tomorrow),
+        "TOMORROW_START": sod(tomorrow),
+        "TOMORROW_END": sod(today + timedelta(days=2)),
+        "THIS_WEEK_START": sod(week_start),
+        "THIS_WEEK_END": sod(week_end_excl),
+        "NEXT_WEEK_START": sod(next_week_start),
+        "NEXT_WEEK_END": sod(next_week_end_excl),
+        "THIS_MONTH_START": sod(month_start),
+        "THIS_MONTH_END": sod(next_month_start),
+        "NEXT_MONTH_START": sod(next_month_start),
+        "NEXT_MONTH_END": sod(month_after_next),
+        "LAST_7_DAYS_START": sod(today - timedelta(days=7)),
+        "LAST_30_DAYS_START": sod(today - timedelta(days=30)),
+        "NEXT_7_DAYS_END": sod(today + timedelta(days=7)),
+        "NEXT_30_DAYS_END": sod(today + timedelta(days=30)),
+    }
+
+
+def _iso_date_to_epoch_ms(value: str, timezone_name: str):
+    """Convert ISO date or datetime string to epoch ms in the given tz, or None.
+
+    Accepts:
+      'YYYY-MM-DD'           → start-of-day in tz
+      'YYYY-MM-DDTHH:MM'     → that exact minute in tz
+      'YYYY-MM-DDTHH:MM:SS'  → that exact second in tz
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        tz = ZoneInfo(timezone_name) if ZoneInfo else _timezone.utc
+    except Exception:
+        tz = _timezone.utc
+    if _ISO_DATETIME_RE.match(value):
+        try:
+            dt = datetime.fromisoformat(value.replace(" ", "T"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz)
+            return int(dt.timestamp() * 1000)
+        except ValueError:
+            return None
+    if _ISO_DATE_RE.match(value):
+        try:
+            d = _date.fromisoformat(value)
+            return int(datetime.combine(d, _time(0, 0, 0), tzinfo=tz).timestamp() * 1000)
+        except ValueError:
+            return None
+    return None
+
+
+def _substitute_time_tokens(obj, timezone_name: str, token_map=None):
+    """Walk a DSL dict and replace time placeholders with epoch-ms numbers.
+
+    Replaces in place:
+      - sugar tokens like TODAY, THIS_WEEK_START → epoch_ms (from token_map)
+      - ISO date strings 'YYYY-MM-DD' → start-of-day epoch_ms in user tz
+
+    Lets the LLM author DSL in human-readable date terms while OpenSearch
+    receives the epoch_millis numbers it needs.
+    """
+    if token_map is None:
+        token_map = _build_time_token_map(timezone_name)
+    if isinstance(obj, str):
+        if obj in token_map:
+            return token_map[obj]
+        epoch = _iso_date_to_epoch_ms(obj, timezone_name)
+        return epoch if epoch is not None else obj
+    if isinstance(obj, list):
+        return [_substitute_time_tokens(x, timezone_name, token_map) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _substitute_time_tokens(v, timezone_name, token_map) for k, v in obj.items()}
     return obj
 
 
@@ -273,6 +391,7 @@ def execute_tool(
                     if isinstance(dsl, str):
                         import json as _json
                         dsl = _json.loads(dsl)
+                    dsl = _substitute_time_tokens(dsl, timezone_name)
                     result = run_raw_dsl(
                         dsl_body=dsl,
                         index=args.get("index"),
@@ -297,6 +416,9 @@ def execute_tool(
                 # Unwrap if LLM passed full body { "query": { "bool": ... } } to avoid double-wrapping
                 if isinstance(q, dict) and list(q.keys()) == ["query"] and isinstance(q.get("query"), dict):
                     q = q["query"]
+                if q:
+                    timezone_name = _get_query_timezone(schedule_headers)
+                    q = _substitute_time_tokens(q, timezone_name)
                 result = count_opensearch_fn(index=args.get("index"), body={"query": q} if q else {})
                 output = {"count_opensearch": result}
             logger.info(f"✓ count_opensearch returned: {output.get('count_opensearch', {}).get('count', output.get('error'))}")
@@ -511,6 +633,21 @@ def execute_tool(
                     limit = max(1, min(50, int(limit)))
                 else:
                     limit = 10
+                # Resolve time-token strings → epoch_ms for availability window
+                tz_name = _get_query_timezone(schedule_headers)
+                def _resolve_ms(val):
+                    if val is None:
+                        return None
+                    if isinstance(val, (int, float)):
+                        return int(val)
+                    if isinstance(val, str):
+                        token_map = _build_time_token_map(tz_name)
+                        if val in token_map:
+                            return token_map[val]
+                        epoch = _iso_date_to_epoch_ms(val, tz_name)
+                        return epoch
+                    return None
+
                 result = get_suggested_presenters(
                     topic=args.get("topic"),
                     industry=args.get("industry"),
@@ -518,6 +655,8 @@ def execute_tool(
                     event_id=args.get("event_id") or context_event_id,
                     audience_level=args.get("audience_level"),
                     limit=limit,
+                    check_start_utc_ms=_resolve_ms(args.get("check_start_utc_ms")),
+                    check_end_utc_ms=_resolve_ms(args.get("check_end_utc_ms")),
                 )
                 output = {"suggest_presenters": result}
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")
@@ -537,6 +676,7 @@ def process_function_calls(
     schedule_headers=None,
     context_event_id=None,
     context_category_id=None,
+    on_event=None,
 ):
     """
     Process a list of function calls and return results.
@@ -546,21 +686,30 @@ def process_function_calls(
         schedule_headers: Optional headers for BriefingIQ API calls
         context_event_id: Optional event ID from header (for context-aware operations)
         context_category_id: Optional category ID from header (for category-scoped queries)
+        on_event: Optional callback(event_type, payload_dict) for live-progress streaming.
+                  Called from worker threads, so it must be thread-safe (a queue.put works).
 
     Returns:
         Tuple of (function_call_outputs, chart_data, report_data, pdf_data)
         chart_data / report_data / pdf_data are None if not produced
     """
-    function_outputs = []
     chart_data = None
     report_data = None
     pdf_data = None
 
-    for item in pending_calls:
+    def _emit(ev_type, **data):
+        if on_event is not None:
+            try:
+                on_event(ev_type, data)
+            except Exception:
+                pass  # never let a broken listener break the pipeline
+
+    def _run(item):
         args = json.loads(item.arguments) if item.arguments else {}
         args_str = json.dumps(args, indent=2, ensure_ascii=False)
         logger.info(f"→ Calling function: {item.name} with args:\n{args_str}")
-
+        t0 = time.time()
+        _emit("tool_start", name=item.name, call_id=item.call_id, args_preview=args_str[:400])
         result = execute_tool(
             item.name,
             args,
@@ -568,8 +717,23 @@ def process_function_calls(
             context_event_id=context_event_id,
             context_category_id=context_category_id,
         )
+        duration = time.time() - t0
+        logger.info(f"   ↳ {item.name} finished in {duration:.2f}s")
+        _emit("tool_end", name=item.name, call_id=item.call_id, duration=round(duration, 3))
+        return item, result
 
-        # Handle tools that return (output, payload) for frontend
+    # Single tool → just run inline (no thread-pool overhead).
+    # Multiple tools → fan out: tool handlers are self-contained + I/O-bound,
+    # so a thread pool turns the total latency into max(tool_time) instead of sum(tool_time).
+    if len(pending_calls) == 1:
+        results = [_run(pending_calls[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(len(pending_calls), 5)) as ex:
+            results = list(ex.map(_run, pending_calls))
+
+    # Preserve LLM's original call order in the outputs (some providers care).
+    function_outputs = []
+    for item, result in results:
         if isinstance(result, tuple):
             output, payload = result
             if item.name == "format_chart":
