@@ -173,50 +173,9 @@ DEFAULT_EBD_PATH: Optional[str] = os.getenv(
 # ============================================================================
 
 def _resolve_event_id(event_id: Optional[str]) -> Optional[str]:
-    """
-    Resolve event_id to numeric format.
-    
-    Handles both:
-    - UUID format from frontend headers (e.g., 'BD496D83-0DF0-4E5A-B12F-F61E51D2ACFF')
-    - Numeric format from database (e.g., '731318059084')
-    
-    Args:
-        event_id: Event ID in either UUID or numeric format
-        
-    Returns:
-        Numeric event ID string, or None if not found
-    """
-    if not event_id:
-        return None
-    
-    # Already numeric - return as-is
-    if event_id.isdigit():
-        return event_id
-    
-    # Check if it looks like a UUID (contains dashes, 36 chars)
-    if '-' in event_id and len(event_id) == 36:
-        logger.info(f"Resolving UUID to numeric ID: {event_id}")
-        try:
-            with engine.connect() as conn:
-                query = text("""
-                    SELECT id FROM m_request_master 
-                    WHERE UPPER(unique_id) = UPPER(:uuid)
-                """)
-                result = conn.execute(query, {"uuid": event_id})
-                row = result.fetchone()
-                if row:
-                    numeric_id = str(row[0])
-                    logger.info(f"Resolved UUID {event_id} → {numeric_id}")
-                    return numeric_id
-                else:
-                    logger.warning(f"UUID not found in database: {event_id}")
-                    return None
-        except Exception as e:
-            logger.error(f"Error resolving UUID: {e}")
-            return None
-    
-    # Unknown format - try to use as-is
-    return event_id
+    """Delegates to the shared resolver. Kept here for backward compat."""
+    from tools.event_resolver import resolve_event_id
+    return resolve_event_id(event_id)
 
 
 # ============================================================================

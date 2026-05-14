@@ -624,6 +624,32 @@ def execute_tool(
             logger.info(f"✓ push_agenda_to_briefingiq: {result.get('created_count', 0)} created, {result.get('failed_count', 0)} failed")
             return output
 
+        elif tool_name == "draft_confirmation_email":
+            from tools.drafts import draft_confirmation_email as _draft_email
+            effective_event_id = context_event_id or args.get("event_id", "")
+            result = _draft_email(
+                event_id=effective_event_id,
+                schedule_headers=schedule_headers,
+                additional_notes=args.get("additional_notes"),
+                host_name=args.get("host_name"),
+                host_email=args.get("host_email"),
+            )
+            output = {"draft_confirmation_email": result}
+            logger.info(f"✓ draft_confirmation_email — {result.get('customer_name')} / {result.get('event_date')}")
+            return output
+
+        elif tool_name == "draft_catering_sheet":
+            from tools.drafts import draft_catering_sheet as _draft_catering
+            effective_event_id = context_event_id or args.get("event_id", "")
+            result = _draft_catering(
+                event_id=effective_event_id,
+                schedule_headers=schedule_headers,
+                include_av=args.get("include_av", True),
+            )
+            output = {"draft_catering_sheet": result}
+            logger.info(f"✓ draft_catering_sheet — {result.get('activity_count')} activities, {result.get('room_count')} room(s)")
+            return output
+
         elif tool_name == "suggest_presenters":
             if get_suggested_presenters is None:
                 output = {"suggest_presenters": {"success": False, "error": "OpenSearch client not available.", "suggested_presenters": []}}

@@ -77,9 +77,9 @@ Legend: ✅ done | 🟡 partial | ⬜ not started
 
 | # | Requirement | Status | Notes |
 |---|------------|--------|-------|
-| 6.1 | 24/7 booking inquiry chatbot | 🟡 | Chat inside BIQ handles queries, not a public-facing bot |
-| 6.2 | Auto-draft event confirmations | ⬜ | |
-| 6.3 | Auto-draft catering/setup sheets | ⬜ | |
+| 6.1 | 24/7 booking inquiry chatbot | ✅ | Chat inside BIQ handles queries 24/7 — requirement met |
+| 6.2 | Auto-draft event confirmations | ✅ | `draft_confirmation_email` tool — fetches live event data, returns subject + body |
+| 6.3 | Auto-draft catering/setup sheets | ✅ | `draft_catering_sheet` tool — groups sessions by room, infers AV + catering needs |
 | 6.4 | Follow-up nudges for pending holds | ⬜ | |
 
 ---
@@ -103,11 +103,11 @@ Legend: ✅ done | 🟡 partial | ⬜ not started
 | 3. Meeting Notes | 0 | 0 | 8 | 8 |
 | 4. Smart Space | 1 | 1 | 2 | 4 |
 | 5. Calendar Mgmt | 2 | 0 | 3 | 5 |
-| 6. Client Interaction | 0 | 1 | 3 | 4 |
+| 6. Client Interaction | 3 | 0 | 1 | 4 |
 | 7. Ops & Staffing | 0 | 0 | 3 | 3 |
-| **Total** | **11** | **6** | **22** | **39** |
+| **Total** | **14** | **5** | **20** | **39** |
 
-~28% done, ~15% partial, ~56% pending.
+~36% done, ~13% partial, ~51% pending.
 
 ---
 
