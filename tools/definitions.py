@@ -483,6 +483,62 @@ tools = [
             "required": ["dsl_query", "columns", "title"],
         },
     },
+    {
+        "type": "function",
+        "name": "draft_confirmation_email",
+        "description": (
+            "Draft a professional event confirmation email to send to the customer. "
+            "Fetches live event details (date, location, agenda, host) and returns a ready-to-send subject + body. "
+            "Use when the user asks to 'draft a confirmation', 'send a confirmation email', or 'confirm the event with the customer'. "
+            "event_id defaults to the one in the request header context if not passed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "Event UUID. Defaults to header context.",
+                },
+                "host_name": {
+                    "type": "string",
+                    "description": "Override the host name in the email signature.",
+                },
+                "host_email": {
+                    "type": "string",
+                    "description": "Override the host email in the email signature.",
+                },
+                "additional_notes": {
+                    "type": "string",
+                    "description": "Any extra instructions or notes to include in the email body.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "draft_catering_sheet",
+        "description": (
+            "Draft an internal ops/catering and room-setup sheet for the EBC team. "
+            "Groups sessions by room and lists catering and AV requirements inferred from activity types. "
+            "Use when the user asks for a 'catering sheet', 'setup sheet', 'ops sheet', or 'room requirements'. "
+            "event_id defaults to the one in the request header context if not passed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "Event UUID. Defaults to header context.",
+                },
+                "include_av": {
+                    "type": "boolean",
+                    "description": "Include AV/tech setup notes per session. Default true.",
+                },
+            },
+            "required": [],
+        },
+    },
     # get_event_rooms merged into list_rooms — list_rooms now auto-detects event context
     # and returns event-level rooms when event_id is available.
     {
