@@ -1,9 +1,18 @@
 """
 Draft generation tools — confirmation emails and catering/setup sheets.
-Both tools fetch live event data from OpenSearch + BriefingIQ API and return
-ready-to-use text drafts. No extra LLM call needed; caller presents the draft.
+
+The confirmation email tool fetches event data, then delegates writing the email
+body to a fast sub-LLM call (Haiku) with a focused prompt. This gives polished,
+adaptive output without paying the cost of the main agent rendering the body in
+its primary context.
+
+The catering sheet still uses Python templating + keyword inference for setup
+needs — deterministic ops output is more important than prose flexibility there.
 """
 
+import json as _json
+import os
+import time
 from datetime import datetime, timezone as _timezone
 from typing import Any, Dict, List, Optional
 
@@ -13,31 +22,25 @@ logger = get_logger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────
-# Email template — edit here to change tone/branding without code changes
+# Sub-LLM prompt — Haiku composes the email from structured event data
 # ─────────────────────────────────────────────────────────────
 
-CONFIRMATION_EMAIL_TEMPLATE = """Dear {customer_name} Team,
+EMAIL_COMPOSER_SYSTEM = (
+    "You are a senior Executive Briefing Center (EBC) manager at a large enterprise "
+    "tech company, writing customer-facing confirmation emails. Tone: warm, "
+    "professional, concise. Use clean plain-text formatting (no markdown tables). "
+    "Sections: greeting → confirmation paragraph → Event Details block → Agenda "
+    "Overview block → close → signature. End the email with the host's name + "
+    "email. Output ONLY the email — start with 'Subject:' on the first line, "
+    "blank line, then body. No preamble, no commentary."
+)
 
-We are pleased to confirm your upcoming Executive Briefing at {location_name}.
-
-Event Details
-─────────────────────────────────
-Date:      {event_date}
-Time:      {time_range}
-Location:  {location_block}
-{focus_line}{attendees_line}
-Agenda Overview
-─────────────────────────────────
-{agenda_block}
-{notes_block}
-We look forward to hosting you and ensuring a productive visit. If you have any questions or need to make changes, please don't hesitate to reach out.
-
-Warm regards,
-{host_sig}
-EBC Team
-"""
-
-CONFIRMATION_SUBJECT_TEMPLATE = "Confirmed: {event_name} — {event_date}"
+# Default sub-LLM model. Haiku 4.5 is ~2x faster than Sonnet for this kind of
+# small structured-input → short-form-text task and the quality is plenty good.
+EMAIL_COMPOSER_MODEL_ID = (
+    os.getenv("EMAIL_COMPOSER_MODEL_ID")
+    or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -174,6 +177,69 @@ def _extract_customer_emails(evt: Dict) -> List[str]:
 # 6.2  Draft confirmation email
 # ─────────────────────────────────────────────────────────────
 
+def _compose_email_with_llm(payload: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Send the structured event payload to a fast sub-LLM (Haiku) and return
+    {'subject': ..., 'body': ...}. Falls back to a minimal templated draft
+    if the call fails — caller always gets *something* usable.
+    """
+    user_prompt = (
+        "Compose a confirmation email for the customer from this event data. "
+        "Use only fields that are present; skip anything that is null/empty. "
+        "Be concise — 200-350 words.\n\n"
+        f"{_json.dumps(payload, indent=2, default=str)}"
+    )
+
+    try:
+        from bedrock_llm import converse as bedrock_converse
+        t0 = time.time()
+        resp = bedrock_converse(
+            messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+            system=[{"text": EMAIL_COMPOSER_SYSTEM}],
+            tool_config={
+                "tools": [{
+                    "toolSpec": {
+                        "name": "_noop",
+                        "description": "unused",
+                        "inputSchema": {"json": {"type": "object", "properties": {}}},
+                    }
+                }],
+                "toolChoice": {"auto": {}},
+            },
+            model_id=EMAIL_COMPOSER_MODEL_ID,
+        )
+        elapsed = time.time() - t0
+        usage = resp.get("usage", {})
+        out_msg = resp.get("output", {}).get("message", {})
+        text = "".join(b.get("text", "") for b in out_msg.get("content", []) if "text" in b).strip()
+
+        # Split "Subject: ..." line from body
+        subject = ""
+        body = text
+        for sep in ("\n\n", "\n"):
+            if text.lower().startswith("subject:"):
+                first, _, rest = text.partition(sep)
+                if first.lower().startswith("subject:"):
+                    subject = first.split(":", 1)[1].strip()
+                    body = rest.lstrip()
+                    break
+
+        logger.info(
+            f"Composed email via {EMAIL_COMPOSER_MODEL_ID.split('.')[-1]} in {elapsed:.2f}s "
+            f"(in={usage.get('inputTokens')}, out={usage.get('outputTokens')})"
+        )
+        return {"subject": subject, "body": body}
+    except Exception as e:
+        logger.warning(f"Sub-LLM email composition failed: {e} — falling back to minimal draft")
+        cust = payload.get("customer_name") or "Valued Customer"
+        date = payload.get("event_date") or "TBD"
+        host = payload.get("host_name") or "Your EBC Host"
+        return {
+            "subject": f"Confirmed: {payload.get('event_name', 'Executive Briefing')} — {date}",
+            "body": f"Dear {cust} Team,\n\nWe are pleased to confirm your upcoming Executive Briefing.\n\nWarm regards,\n{host}\nEBC Team",
+        }
+
+
 def draft_confirmation_email(
     event_id: str,
     schedule_headers: Optional[Dict] = None,
@@ -182,8 +248,8 @@ def draft_confirmation_email(
     host_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Draft a professional event confirmation email for the customer.
-    Fetches live event + activity data and returns subject + body.
+    Draft a professional confirmation email by combining live event data with
+    a focused sub-LLM (Haiku) writing the actual prose. Returns subject + body.
     """
     headers = schedule_headers or {}
     token = headers.get("Authorization", "")
@@ -198,68 +264,63 @@ def draft_confirmation_email(
             "event_id": event_id,
         }
 
-    customer_name = evt.get("customer_name") or "Valued Customer"
-    event_name    = evt.get("event_name") or "Executive Briefing"
-    location_name = evt.get("location_name") or "our facility"
-    address       = _stringify_address(evt.get("location_address") or "")
-    visit_focus   = evt.get("visit_focus") or ""
-    num_attendees = evt.get("num_attendees") or ""
-    start_ms      = evt.get("start_time_ms")
-    end_ms        = evt.get("end_time_ms")
-    _host_name    = host_name or evt.get("host_name") or "Your EBC Host"
-    _host_email   = host_email or evt.get("host_email") or ""
+    start_ms = evt.get("start_time_ms")
+    end_ms   = evt.get("end_time_ms")
+    event_date = _epoch_ms_to_date(start_ms) if start_ms else None
+    time_range = None
+    if start_ms and end_ms:
+        time_range = f"{_epoch_ms_to_time(start_ms)} – {_epoch_ms_to_time(end_ms)}"
+    elif start_ms:
+        time_range = _epoch_ms_to_time(start_ms)
 
-    event_date = _epoch_ms_to_date(start_ms) if start_ms else "TBD"
-    start_time = _epoch_ms_to_time(start_ms) if start_ms else ""
-    end_time   = _epoch_ms_to_time(end_ms) if end_ms else ""
-    time_range = f"{start_time} – {end_time}" if start_time and end_time else start_time or "TBD"
+    # Sessions: keep up to 8 to give the LLM enough agenda detail without bloating context
+    sessions = []
+    for act in activities[:8]:
+        sessions.append({
+            "title": act.get("title") or act.get("activity_type"),
+            "time":  _fmt_iso_time(act.get("start_iso", "")) or None,
+            "room":  act.get("room_name"),
+        })
 
-    # Build agenda snippet (up to 6 sessions)
-    agenda_lines = []
-    for act in activities[:6]:
-        title = act.get("title") or act.get("activity_type", "Session")
-        t = _fmt_iso_time(act.get("start_iso", "") or act.get("time", ""))
-        agenda_lines.append(f"  • {t + '  ' if t else ''}{title}")
-    if len(activities) > 6:
-        agenda_lines.append(f"  • ... and {len(activities) - 6} more session(s)")
-    agenda_block = "\n".join(agenda_lines) if agenda_lines else "  • Sessions to be confirmed"
+    # Structured payload — only non-empty fields make it through
+    payload = {k: v for k, v in {
+        "customer_name":     evt.get("customer_name"),
+        "event_name":        evt.get("event_name"),
+        "event_date":        event_date,
+        "time_range":        time_range,
+        "location_name":     evt.get("location_name"),
+        "location_address":  _stringify_address(evt.get("location_address") or ""),
+        "visit_focus":       evt.get("visit_focus"),
+        "customer_industry": evt.get("customer_industry"),
+        "num_attendees":     evt.get("num_attendees"),
+        "host_name":         host_name or evt.get("host_name"),
+        "host_email":        host_email or evt.get("host_email"),
+        "host_title":        evt.get("host_business_title"),
+        "sessions":          sessions if sessions else None,
+        "additional_notes":  additional_notes,
+    }.items() if v}
 
-    location_block = location_name + (f"\n  {address}" if address else "")
-    focus_line = f"\nVisit focus: {visit_focus}\n" if visit_focus else ""
-    attendees_line = f"We are expecting {num_attendees} attendee(s) from your team.\n" if num_attendees else ""
-    notes_block = f"\n{additional_notes}\n" if additional_notes else ""
-    host_sig = _host_name + (f"\n{_host_email}" if _host_email else "")
-
-    subject = CONFIRMATION_SUBJECT_TEMPLATE.format(event_name=event_name, event_date=event_date)
-    body = CONFIRMATION_EMAIL_TEMPLATE.format(
-        customer_name=customer_name,
-        location_name=location_name,
-        event_date=event_date,
-        time_range=time_range,
-        location_block=location_block,
-        focus_line=focus_line,
-        attendees_line=attendees_line,
-        agenda_block=agenda_block,
-        notes_block=notes_block,
-        host_sig=host_sig,
-    )
+    composed = _compose_email_with_llm(payload)
 
     to_emails = _extract_customer_emails(evt)
+    customer_name = evt.get("customer_name") or "Valued Customer"
+    final_date = event_date or "TBD"
+    _host_email = host_email or evt.get("host_email") or ""
 
     logger.info(
-        f"Drafted confirmation email for event {event_id} — {customer_name}, {event_date}, "
+        f"Drafted confirmation email for event {event_id} — {customer_name}, {final_date}, "
         f"{len(to_emails)} recipient(s)"
     )
     return {
         "success": True,
         "type": "confirmation_email",
-        "subject": subject,
-        "body": body.strip(),
+        "subject": composed.get("subject") or f"Confirmed: {evt.get('event_name', 'Executive Briefing')} — {final_date}",
+        "body": (composed.get("body") or "").strip(),
         "to": to_emails,
         "from_email": _host_email,
         "event_id": event_id,
         "customer_name": customer_name,
-        "event_date": event_date,
+        "event_date": final_date,
     }
 
 
