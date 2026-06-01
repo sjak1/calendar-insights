@@ -140,6 +140,8 @@ async def process_query(payload: QueryPayload, request: Request):
     user_info = {
         "email": email,
         "display_name": _display_name_from_email(email),
+        "customer_id": headers.get("x-cloud-customerid")
+        or headers.get("x-cloud-customer-id"),
         "client_timezone": headers.get("x-cloud-client-timezone")
         or headers.get("client-timezone"),
         "context_timezone": headers.get("x-cloud-context-timezone")
@@ -224,6 +226,8 @@ async def process_query_stream(payload: QueryPayload, request: Request):
     user_info = {
         "email": email,
         "display_name": _display_name_from_email(email),
+        "customer_id": headers.get("x-cloud-customerid")
+        or headers.get("x-cloud-customer-id"),
         "client_timezone": headers.get("x-cloud-client-timezone"),
         "context_timezone": headers.get("x-cloud-context-timezone"),
         "requested_timezone": headers.get("x-cloud-requested-timezone"),
