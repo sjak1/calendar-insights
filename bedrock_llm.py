@@ -126,7 +126,7 @@ def _to_bedrock_message(item: Dict) -> Optional[Dict]:
 def converse(
     messages: List[Dict],
     system,
-    tool_config: Dict,
+    tool_config: Optional[Dict] = None,
     model_id: Optional[str] = None,
 ) -> Dict:
     """
@@ -182,10 +182,12 @@ def converse(
         system_content = system
     else:
         system_content = [{"text": system}] if system else []
-    response = client.converse(
-        modelId=model_id or BEDROCK_MODEL_ID,
-        messages=bedrock_messages,
-        system=system_content,
-        toolConfig=tool_config,
-    )
+    request = {
+        "modelId": model_id or BEDROCK_MODEL_ID,
+        "messages": bedrock_messages,
+        "system": system_content,
+    }
+    if tool_config is not None:
+        request["toolConfig"] = tool_config
+    response = client.converse(**request)
     return response
