@@ -163,7 +163,7 @@ def _extract_customer_emails(evt: Dict) -> List[str]:
             if email:
                 emails.add(email)
     # requesterEmail / customerEmail sometimes live on the visit info — peek into raw if needed
-    raw_visit = _deep_get(evt.get("_raw") or {}, "eventData.VISIT_INFO.data") or {}
+    raw_visit = _deep_get(evt.get("_raw") or {}, "eventFormData.VISIT_INFO") or {}
     if isinstance(raw_visit, list):
         raw_visit = raw_visit[0] if raw_visit else {}
     for field in ("customerEmail", "requesterEmail", "primaryEmail"):

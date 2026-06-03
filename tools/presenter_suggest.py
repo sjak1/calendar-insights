@@ -13,18 +13,19 @@ logger = get_logger(__name__)
 ACTIVITIES_INDEX = "activities"
 EVENTS_INDEX = "events"
 
-# Activity index field paths (verified against real documents)
-TOPIC_NAME = "activityInfo.topic.data.topic.textField1"
-PRESENTER_LIST = "activityInfo.topic_presenter"
-PRESENTER_EMAIL_FIELD = "activityInfo.topic_presenter.data.presenter.primaryEmail"
-ACT_IS_CLEVEL = "activityInfo.EVENTS_VISIT_INFO.data.isCLevelAttendee"
+# Activity index field paths (verified against live data — activityData.*, NOT
+# the old empty activityInfo.* tree; the `.data` segment was also dropped).
+TOPIC_NAME = "activityData.topic.topic.textField1"
+PRESENTER_LIST = "activityData.topic_presenter"
+PRESENTER_EMAIL_FIELD = "activityData.topic_presenter.presenter.primaryEmail"
+ACT_IS_CLEVEL = "activityData.EVENTS_VISIT_INFO.isCLevelAttendee"
 EVENT_ID = "eventId"
 START_TIME = "startTime.utcMs"
 
-# Events index field paths
-EVT_CUSTOMER_NAME = "eventData.VISIT_INFO.data.customerName"
-EVT_CUSTOMER_INDUSTRY = "eventData.VISIT_INFO.data.customerIndustry"
-EVT_EVENT_NAME = "eventData.VISIT_INFO.data.eventName"
+# Events index field paths (rich form data now lives under eventFormData.*).
+EVT_CUSTOMER_NAME = "eventFormData.VISIT_INFO.customerName"
+EVT_CUSTOMER_INDUSTRY = "eventFormData.VISIT_INFO.customerIndustry"
+EVT_EVENT_NAME = "eventFormData.VISIT_INFO.eventName"
 
 # Max events to pull when resolving customer/industry → event_ids
 _MAX_SCOPE_EVENTS = 50
@@ -178,32 +179,32 @@ def _extract_presenters_from_hits(
 
     for hit in hits:
         src = hit.get("source", {})
-        activity_info = src.get("activityInfo") or {}
-        presenter_entries = activity_info.get("topic_presenter") or []
-        topic_entries = activity_info.get("topic") or []
+        activity_data = src.get("activityData") or {}
+        presenter_entries = activity_data.get("topic_presenter") or []
+        topic_entries = activity_data.get("topic") or []
 
         # Collect topic names for this activity
         topic_names: List[str] = []
         for t in topic_entries:
-            name = _deep_get(t, "data.topic.textField1")
+            name = _deep_get(t, "topic.textField1")
             if name and name not in topic_names:
                 topic_names.append(name)
         primary_topic = topic_names[0] if topic_names else ""
 
         # Did this activity have a C-level audience? Field is on
-        # activityInfo.EVENTS_VISIT_INFO[].data.isCLevelAttendee (array).
-        visit_infos = activity_info.get("EVENTS_VISIT_INFO") or []
+        # activityData.EVENTS_VISIT_INFO[].isCLevelAttendee (array).
+        visit_infos = activity_data.get("EVENTS_VISIT_INFO") or []
         is_c_level_audience = any(
-            bool(_deep_get(v, "data.isCLevelAttendee")) for v in visit_infos
+            bool(_deep_get(v, "isCLevelAttendee")) for v in visit_infos
         )
 
         eid = src.get("eventId") or ""
         ts = _deep_get(src, START_TIME) or 0
 
         for p_entry in presenter_entries:
-            p_data = p_entry.get("data") or {}
-            presenter = p_data.get("presenter") or {}
-            status = (p_data.get("presenterStatus") or "").strip().lower()
+            # Each topic_presenter entry IS the data object (no nested `.data`).
+            presenter = p_entry.get("presenter") or {}
+            status = (p_entry.get("presenterStatus") or "").strip().lower()
 
             if status in _EXCLUDED_STATUSES:
                 continue
@@ -211,8 +212,8 @@ def _extract_presenters_from_hits(
             first = (presenter.get("firstName") or "").strip()
             last = (presenter.get("lastName") or "").strip()
             full_name = f"{first} {last}".strip()
-            email = (presenter.get("primaryEmail") or p_data.get("presenterEmail") or "").strip()
-            title = (presenter.get("designation") or p_data.get("presenterTitle") or "").strip()
+            email = (presenter.get("primaryEmail") or p_entry.get("presenterEmail") or "").strip()
+            title = (presenter.get("designation") or p_entry.get("presenterTitle") or "").strip()
 
             if not full_name and not email:
                 continue
@@ -375,9 +376,9 @@ def _check_presenter_conflicts(
 
     for hit in result.get("hits", []):
         src = hit.get("source", {})
-        presenter_entries = (src.get("activityInfo") or {}).get("topic_presenter") or []
+        presenter_entries = (src.get("activityData") or {}).get("topic_presenter") or []
         for pe in presenter_entries:
-            email = _deep_get(pe, "data.presenter.primaryEmail") or ""
+            email = _deep_get(pe, "presenter.primaryEmail") or ""
             if email.lower() not in email_set:
                 continue
             start_ms = _deep_get(src, "startTime.utcMs") or 0

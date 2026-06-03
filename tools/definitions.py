@@ -444,14 +444,14 @@ tools = [
         "description": (
             "Generate a table report from OpenSearch. Use ONLY for explicit table/report/grid requests or specific columns. "
             "For 'list them' / 'show them' use search_opensearch. Columns: 4-6, bindings from schema (customer_name, event_name, status, location_name, event_start_time). "
-            "_source: use paths WITHOUT .keyword (e.g. eventName, eventData.VISIT_INFO.data.customerName). Filters/sort: use .keyword. Frontend renders the table."
+            "_source: use paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName). Filters/sort: use .keyword. Frontend renders the table."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "dsl_query": {
                     "type": "object",
-                    "description": "OpenSearch request body: query, size, _source, sort. For _source use stored paths WITHOUT .keyword (e.g. eventName, eventData.VISIT_INFO.data.customerName). For filters/sort use schema paths with .keyword.",
+                    "description": "OpenSearch request body: query, size, _source, sort. For _source use stored paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName). For filters/sort use schema paths with .keyword.",
                 },
                 "columns": {
                     "type": "array",

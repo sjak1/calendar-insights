@@ -21,33 +21,34 @@ REPORT_FIELD_PATHS = {
     "event_duration_days": "duration",
     "timezone": "timezone",
     "is_active": "isActive",
-    "line_of_business": "eventData.VISIT_INFO.data.lineOfBusiness",
-    "region": "eventData.VISIT_INFO.data.region",
-    "customer_industry": "eventData.VISIT_INFO.data.customerIndustry",
-    "visit_focus": "eventData.VISIT_INFO.data.visitFocus",
-    "sales_play": "eventData.VISIT_INFO.data.salesPlay",
-    "customer_name": "eventData.VISIT_INFO.data.customerName",
-    "opportunity_revenue": "eventData.Opportunity.data.opportunityRevenue",
-    "external_attendee_last_name": "eventData.EXTERNAL_ATTENDEES.data.lastName",
-    # Activity-level (when hit is activity)
+    "line_of_business": "eventFormData.VISIT_INFO.lineOfBusiness",
+    "region": "eventFormData.VISIT_INFO.region",
+    "customer_industry": "eventFormData.VISIT_INFO.customerIndustry",
+    "visit_focus": "eventFormData.VISIT_INFO.visitFocus",
+    "sales_play": "eventFormData.VISIT_INFO.salesPlay",
+    "customer_name": "eventFormData.VISIT_INFO.customerName",
+    "opportunity_revenue": "eventFormData.Opportunity.opportunityRevenue",
+    "external_attendee_last_name": "eventFormData.EXTERNAL_ATTENDEES.lastName",
+    # Activity-level (when hit is activity). Nested under the `activites` field
+    # on the events index; data moved activityInfo.*.data.* → activityData.*.
     "event_id": "activites.eventId",
     "activity_id": "activites.activityId",
     "activity_status": "activites.status.stateName",
     "start_time": "activites.startTime.client.clientZoneDate",
     "end_time": "activites.endTime.client.clientZoneDate",
     "duration": "activites.duration",
-    "resource_name": "activites.resource.data.name",
-    "presenter_name": "activites.activityInfo.topic_presenter.data.presenter.presenterName",
-    "topic_name": "activites.activityInfo.topic.data.topic.textField1",
-    "catering_type": "activites.activityInfo.CATERING.data.cateringType",
-    "attendees": "activites.activityInfo.CATERING.data.noOfAttendees",
+    "resource_name": "activites.resource.metaData.searchDisplayText",
+    "presenter_name": "activites.activityData.topic_presenter.presenter.presenterName",
+    "topic_name": "activites.activityData.topic.topic.textField1",
+    "catering_type": "activites.activityData.CATERING.cateringType",
+    "attendees": "activites.activityData.CATERING.noOfAttendees",
 }
 
 
 def _get_nested(obj, path):
     """Get value from nested dict by dot path. Returns None if any segment missing.
     When a segment is a list, uses the first element so paths like
-    eventData.VISIT_INFO.data.customerName work when VISIT_INFO is an array."""
+    eventFormData.VISIT_INFO.customerName work when VISIT_INFO is an array."""
     if not path:
         return obj
     for key in path.split("."):
