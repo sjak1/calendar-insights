@@ -39,6 +39,10 @@ EVENT_SOURCE_FIELDS: List[str] = [
     "location.data",
     "eventFormData.VISIT_INFO",
     "eventFormData.EVENTS_VISIT_INFO",
+    "eventFormData.EXTERNAL_ATTENDEES",
+    "eventFormData.INTERNAL_ATTENDEES",
+    "eventFormData.Opportunity",
+    # Legacy fallbacks — empty in current data, kept for older docs.
     "eventData.VISIT_INFO.data",
     "eventData.EXTERNAL_ATTENDEES.data",
     "eventData.INTERNAL_ATTENDEES.data",
@@ -179,8 +183,16 @@ def fetch_event_data(event_id: Optional[str]) -> Dict[str, Any]:
             return [val]
         return []
 
-    external = _normalize_list(_deep_get(src, "eventData.EXTERNAL_ATTENDEES.data"))
-    internal = _normalize_list(_deep_get(src, "eventData.INTERNAL_ATTENDEES.data"))
+    # Attendees live in eventFormData.{...}_ATTENDEES (a list); fall back to the
+    # empty legacy eventData path only for older docs.
+    external = _normalize_list(
+        src.get("eventFormData", {}).get("EXTERNAL_ATTENDEES")
+        or _deep_get(src, "eventData.EXTERNAL_ATTENDEES.data")
+    )
+    internal = _normalize_list(
+        src.get("eventFormData", {}).get("INTERNAL_ATTENDEES")
+        or _deep_get(src, "eventData.INTERNAL_ATTENDEES.data")
+    )
 
     address = (
         loc.get("addressLine1") or loc.get("address") or loc.get("textField2") or ""

@@ -32,7 +32,7 @@ def main():
             "timezone",
             "status.stateName",
             "location.data.locationName",
-            "eventData.VISIT_INFO.data.customerName",
+            "eventFormData.VISIT_INFO.customerName",
         ],
         "sort": [
             {

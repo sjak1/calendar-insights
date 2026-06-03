@@ -30,7 +30,7 @@ def test_generate_report():
     dsl = {
         "query": {"match_all": {}},
         "size": 5,
-        "_source": ["eventName", "eventId", "status.stateName", "eventData.VISIT_INFO.data.customerName", "location.data.locationName"],
+        "_source": ["eventName", "eventId", "status.stateName", "eventFormData.VISIT_INFO.customerName", "location.data.locationName"],
     }
     columns = [
         {"binding": "event_name", "header": "Event"},

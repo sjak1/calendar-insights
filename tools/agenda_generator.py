@@ -502,8 +502,8 @@ def _fetch_meeting_context_os(
                     "should": [
                         {"term": {"eventName.keyword": company_name}},
                         {"match": {"eventName": {"query": company_name, "fuzziness": "AUTO"}}},
-                        {"term": {"eventData.VISIT_INFO.data.customerName.keyword": company_name}},
-                        {"match": {"eventData.VISIT_INFO.data.customerName": {"query": company_name, "fuzziness": "AUTO"}}},
+                        {"term": {"eventFormData.VISIT_INFO.customerName.keyword": company_name}},
+                        {"match": {"eventFormData.VISIT_INFO.customerName": {"query": company_name, "fuzziness": "AUTO"}}},
                     ],
                     "minimum_should_match": 1,
                 }
@@ -520,7 +520,8 @@ def _fetch_meeting_context_os(
         return context
 
     hit = resp["hits"][0]["source"]
-    visit = _deep_get(hit, "eventData.VISIT_INFO.data") or {}
+    # Rich data lives under eventFormData.VISIT_INFO (a list); take first element.
+    visit = _form_section(hit, "VISIT_INFO")
     context["meeting_details"] = {
         "event_id": hit.get("eventId"),
         "company_name": visit.get("customerName"),
@@ -542,17 +543,10 @@ def _fetch_meeting_context_os(
 
     # 2. Attendees — from the same event document (nested arrays)
     logger.info("Extracting attendees from event document...")
-    ext_attendees = _deep_get(hit, "eventData.EXTERNAL_ATTENDEES.data")
-    int_attendees = _deep_get(hit, "eventData.INTERNAL_ATTENDEES.data")
-    all_raw = []
-    if isinstance(ext_attendees, list):
-        all_raw.extend([(a, "External") for a in ext_attendees])
-    elif isinstance(ext_attendees, dict):
-        all_raw.append((ext_attendees, "External"))
-    if isinstance(int_attendees, list):
-        all_raw.extend([(a, "Internal") for a in int_attendees])
-    elif isinstance(int_attendees, dict):
-        all_raw.append((int_attendees, "Internal"))
+    ext_attendees = _form_section_list(hit, "EXTERNAL_ATTENDEES")
+    int_attendees = _form_section_list(hit, "INTERNAL_ATTENDEES")
+    all_raw = [(a, "External") for a in ext_attendees]
+    all_raw.extend([(a, "Internal") for a in int_attendees])
 
     context["total_attendee_count"] = len(all_raw)
     for att, att_type in all_raw[:AGENDA_MAX_ATTENDEES]:
@@ -575,7 +569,7 @@ def _fetch_meeting_context_os(
             "query": {
                 "bool": {
                     "must": [
-                        {"term": {"eventData.VISIT_INFO.data.customerName.keyword": actual_company}},
+                        {"term": {"eventFormData.VISIT_INFO.customerName.keyword": actual_company}},
                     ],
                     "must_not": [{"term": {"eventId.keyword": actual_event_id}}] if actual_event_id else [],
                 }
@@ -584,17 +578,17 @@ def _fetch_meeting_context_os(
             "size": 5,
             "_source": [
                 "eventId", "startTime",
-                "eventData.VISIT_INFO.data.visitFocus",
-                "eventData.VISIT_INFO.data.salesPlay",
-                "eventData.VISIT_INFO.data.pillars",
-                "eventData.VISIT_INFO.data.meetingObjective",
+                "eventFormData.VISIT_INFO.visitFocus",
+                "eventFormData.VISIT_INFO.salesPlay",
+                "eventFormData.VISIT_INFO.pillars",
+                "eventFormData.VISIT_INFO.meetingObjective",
             ],
         }
         prev_resp = os_search(index="events", body=prev_body, size_cap=5)
         if prev_resp.get("success"):
             for ph in prev_resp.get("hits", []):
                 ps = ph["source"]
-                pv = _deep_get(ps, "eventData.VISIT_INFO.data") or {}
+                pv = _form_section(ps, "VISIT_INFO")
                 start_ms = ps.get("startTime")
                 date_str = ""
                 if isinstance(start_ms, (int, float)) and start_ms > 0:
@@ -621,9 +615,9 @@ def _fetch_meeting_context_os(
 # Source fields we request from the events index
 _EVENT_SOURCE_FIELDS = [
     "eventId", "eventName", "startTime",
-    "eventData.VISIT_INFO.data",
-    "eventData.EXTERNAL_ATTENDEES.data",
-    "eventData.INTERNAL_ATTENDEES.data",
+    "eventFormData.VISIT_INFO",
+    "eventFormData.EXTERNAL_ATTENDEES",
+    "eventFormData.INTERNAL_ATTENDEES",
     "status.stateName",
     "location.data",
 ]
@@ -639,6 +633,30 @@ def _deep_get(obj: Any, dotted_path: str) -> Any:
         else:
             return None
     return obj
+
+
+def _form_section(hit: Dict[str, Any], section: str) -> Dict[str, Any]:
+    """Return the first dict of an eventFormData.{section} list (or {} if absent).
+
+    Rich form data moved from `eventData.{section}.data` (now empty) to
+    `eventFormData.{section}` (a list of dicts).
+    """
+    val = (hit.get("eventFormData") or {}).get(section)
+    if isinstance(val, list):
+        return val[0] if val else {}
+    if isinstance(val, dict):
+        return val
+    return {}
+
+
+def _form_section_list(hit: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
+    """Return all dicts of an eventFormData.{section} list (e.g. attendees)."""
+    val = (hit.get("eventFormData") or {}).get(section)
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        return [val]
+    return []
 
 
 def _fetch_similar_briefings_os(
@@ -657,9 +675,9 @@ def _fetch_similar_briefings_os(
     # Build a should query that scores on multiple dimensions
     should_clauses: list = []
     if industry:
-        should_clauses.append({"term": {"eventData.VISIT_INFO.data.customerIndustry.keyword": {"value": industry, "boost": 2}}})
+        should_clauses.append({"term": {"eventFormData.VISIT_INFO.customerIndustry.keyword": {"value": industry, "boost": 2}}})
     if visit_focus:
-        should_clauses.append({"match": {"eventData.VISIT_INFO.data.visitFocus": {"query": visit_focus, "boost": 3}}})
+        should_clauses.append({"match": {"eventFormData.VISIT_INFO.visitFocus": {"query": visit_focus, "boost": 3}}})
     if pillars:
         if isinstance(pillars, str):
             pillar_str = pillars
@@ -668,11 +686,11 @@ def _fetch_similar_briefings_os(
         else:
             pillar_str = None
         if pillar_str:
-            should_clauses.append({"match": {"eventData.VISIT_INFO.data.pillars": {"query": pillar_str, "boost": 1}}})
+            should_clauses.append({"match": {"eventFormData.VISIT_INFO.pillars": {"query": pillar_str, "boost": 1}}})
 
     must_not = []
     if exclude_company:
-        must_not.append({"term": {"eventData.VISIT_INFO.data.customerName.keyword": exclude_company}})
+        must_not.append({"term": {"eventFormData.VISIT_INFO.customerName.keyword": exclude_company}})
 
     body = {
         "query": {
@@ -685,11 +703,11 @@ def _fetch_similar_briefings_os(
         "size": 5,
         "sort": [{"_score": {"order": "desc"}}, {"startTime": {"order": "desc", "unmapped_type": "long"}}],
         "_source": [
-            "eventData.VISIT_INFO.data.customerName",
-            "eventData.VISIT_INFO.data.customerIndustry",
-            "eventData.VISIT_INFO.data.visitFocus",
-            "eventData.VISIT_INFO.data.salesPlay",
-            "eventData.VISIT_INFO.data.pillars",
+            "eventFormData.VISIT_INFO.customerName",
+            "eventFormData.VISIT_INFO.customerIndustry",
+            "eventFormData.VISIT_INFO.visitFocus",
+            "eventFormData.VISIT_INFO.salesPlay",
+            "eventFormData.VISIT_INFO.pillars",
         ],
     }
 
@@ -699,7 +717,7 @@ def _fetch_similar_briefings_os(
     if resp.get("success"):
         seen = set()
         for h in resp.get("hits", []):
-            sv = _deep_get(h["source"], "eventData.VISIT_INFO.data") or {}
+            sv = _form_section(h["source"], "VISIT_INFO")
             co = sv.get("customerName", "")
             if co in seen:
                 continue

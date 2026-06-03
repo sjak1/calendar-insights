@@ -198,7 +198,7 @@ def process_query(
             'the placeholder string "CURRENT_EVENT" as the event_id value. The backend substitutes '
             "the real event_id before executing. Never invent or display event_id values.\n"
             "[Field paths for CURRENT_EVENT — different per index]\n"
-            '  • events index:     filter on "eventData.VISIT_INFO.eventId.keyword" = "CURRENT_EVENT"\n'
+            '  • events index:     filter on "eventFormData.VISIT_INFO.eventId.keyword" = "CURRENT_EVENT"\n'
             '  • activities index: filter on "eventId.keyword" = "CURRENT_EVENT"\n'
             "[Data] For event-level questions (attendees, customer, industry, status, location, "
             "opportunity, revenue) query the events index. For session-level questions (topics, "
