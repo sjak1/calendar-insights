@@ -11,8 +11,9 @@ Generates an EBC-style agenda for a meeting. Pass `event_id` **or** `company_nam
 
 ### `suggest_presenters`
 Returns ranked presenter recommendations. Pass at least one of: `event_id`, `topic`, `industry`, `customer_name`.  
-Flow: customer/industry → events index for event_ids → activities index filtered by event_ids + topic → ranked by accepted sessions → recency.  
-Falls back to global top-200 most recent activities if scoped search returns 0.
+Flow: customer/industry → events index for event_ids → activities index filtered by event_ids + topic → ranked by on-topic sessions → accepted → recency (audience seniority leads when an `audience_level` is given).  
+Falls back to most-recent activities overall if scoped search returns 0.  
+Full mechanics: [presenter-suggestions.md](presenter-suggestions.md).
 
 ### `push_agenda_to_briefingiq`
 Pushes AI-generated sessions into BriefingIQ as calendar activities.  
