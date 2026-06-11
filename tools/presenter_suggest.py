@@ -77,6 +77,22 @@ def _min_seniority_for_audience(audience_level: Optional[str]) -> int:
     return 0
 
 
+def _topic_matches(topic_name: str, query_topic: Optional[str]) -> bool:
+    """True if an activity's topic name is relevant to the requested topic.
+
+    Case-insensitive, substring either direction so "Cloud Security" matches
+    "Cloud Security Best Practices" and vice versa. Used as a ranking signal,
+    not a hard filter — the search itself stays permissive.
+    """
+    if not topic_name or not query_topic:
+        return False
+    a = topic_name.strip().lower()
+    b = query_topic.strip().lower()
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
 def _deep_get(d: Any, path: str) -> Any:
     """Retrieve a nested value from a dict using dot-separated path."""
     for key in path.split("."):
@@ -170,10 +186,14 @@ def _build_activity_query(
 
 def _extract_presenters_from_hits(
     hits: List[Dict[str, Any]],
+    topic: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Aggregate presenters from activity hits. Iterates the topic_presenter array
     per activity and skips declined entries.
+
+    When `topic` is supplied, counts how many of each presenter's sessions were
+    on a matching topic (`topic_session_count`) — used later for ranking.
     """
     presenters: Dict[str, Dict[str, Any]] = {}
 
@@ -190,6 +210,9 @@ def _extract_presenters_from_hits(
             if name and name not in topic_names:
                 topic_names.append(name)
         primary_topic = topic_names[0] if topic_names else ""
+
+        # Is this activity on the requested topic? (ranking signal only)
+        is_on_topic = any(_topic_matches(tn, topic) for tn in topic_names)
 
         # Did this activity have a C-level audience? Field is on
         # activityData.EVENTS_VISIT_INFO[].isCLevelAttendee (array).
@@ -232,6 +255,7 @@ def _extract_presenters_from_hits(
                     "sample_event_id": "",
                     "accepted_count": 0,
                     "c_level_session_count": 0,
+                    "topic_session_count": 0,
                     "seniority_tier": _presenter_seniority(title),
                 }
 
@@ -241,6 +265,8 @@ def _extract_presenters_from_hits(
                 entry["accepted_count"] += 1
             if is_c_level_audience:
                 entry["c_level_session_count"] += 1
+            if is_on_topic:
+                entry["topic_session_count"] += 1
             if eid:
                 entry["event_ids"].add(eid)
             for tn in topic_names:
@@ -273,10 +299,13 @@ def _rank_presenters(
     min_tier = _min_seniority_for_audience(audience_level)
 
     def sort_key(p: Dict[str, Any]):
+        topic_sessions = p.get("topic_session_count", 0)
         if audience_level:
+            # Audience peers first; among peers, on-topic track record wins.
             meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
             return (
                 -meets_tier,
+                -topic_sessions,
                 -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
                 -p["seniority_tier"],
                 -p["accepted_count"],
@@ -285,6 +314,7 @@ def _rank_presenters(
                 -p["latest_ts"],
             )
         return (
+            -topic_sessions,
             -p["accepted_count"],
             -p["session_count"],
             -len(p["event_ids"]),
@@ -299,6 +329,8 @@ def _rank_presenters(
         if len(p["topics"]) > 3:
             topics_summary += f" (+{len(p['topics']) - 3} more)"
         reason_parts = [f"{p['session_count']} session(s)"]
+        if p.get("topic_session_count"):
+            reason_parts.append(f"{p['topic_session_count']} on-topic")
         if p["accepted_count"]:
             reason_parts.append(f"{p['accepted_count']} accepted")
         if audience_level and p["c_level_session_count"]:
@@ -315,6 +347,7 @@ def _rank_presenters(
                 "session_count": p["session_count"],
                 "event_count": len(p["event_ids"]),
                 "c_level_session_count": p["c_level_session_count"],
+                "topic_session_count": p.get("topic_session_count", 0),
                 "seniority_tier": p["seniority_tier"],
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
@@ -487,7 +520,10 @@ def get_suggested_presenters(
     body = {
         "query": query,
         "size": 100,
-        "sort": [{START_TIME: {"order": "desc", "unmapped_type": "long"}}],
+        # Score first so the topic boost actually decides who survives the size
+        # cap (otherwise on-topic-but-older activities get dropped); recency only
+        # breaks ties. With no topic/should clauses scores are flat → recency.
+        "sort": ["_score", {START_TIME: {"order": "desc", "unmapped_type": "long"}}],
     }
 
     target_index = index or ACTIVITIES_INDEX
@@ -527,7 +563,7 @@ def get_suggested_presenters(
             "message": "No matching activities with presenters found",
         }
 
-    presenters = _extract_presenters_from_hits(hits)
+    presenters = _extract_presenters_from_hits(hits, topic=topic)
     ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
 
     logger.info(
