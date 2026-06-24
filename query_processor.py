@@ -108,6 +108,52 @@ class _ToolCall:
         self.call_id = call_id
 
 
+# OpenSearch DSL keys that mark a JSON object as a pasted raw query body.
+_DSL_MARKER_KEYS = frozenset(
+    {"query", "aggs", "aggregations", "_source", "bool", "must",
+     "must_not", "should", "filter", "term", "terms", "range", "match_all"}
+)
+
+
+def _has_dsl_keys(obj: Any) -> bool:
+    """True if a parsed JSON value contains OpenSearch DSL keys at any depth."""
+    if isinstance(obj, dict):
+        if _DSL_MARKER_KEYS & set(obj.keys()):
+            return True
+        return any(_has_dsl_keys(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_has_dsl_keys(v) for v in obj)
+    return False
+
+
+def _looks_like_raw_dsl(text: str) -> bool:
+    """Detect a pasted OpenSearch query body in user text — structurally.
+
+    Scans for embedded balanced ``{...}`` blocks, parses each as JSON, and
+    flags it only if it is a real JSON object containing DSL keys. Prose with
+    stray braces or the word "query" does not parse as JSON, so it slips
+    through — keeping false positives low.
+    """
+    if not text or "{" not in text:
+        return False
+    for start in (i for i, c in enumerate(text) if c == "{"):
+        depth = 0
+        for end in range(start, len(text)):
+            if text[end] == "{":
+                depth += 1
+            elif text[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = json.loads(text[start:end + 1])
+                    except (ValueError, TypeError):
+                        break  # not valid JSON from this '{'; try the next one
+                    if _has_dsl_keys(parsed):
+                        return True
+                    break
+    return False
+
+
 # AI instructions — minimal; tool-specific rules in tool descriptions
 AI_INSTRUCTIONS = (
     """
@@ -162,6 +208,18 @@ def process_query(
     logger.info(
         f"Starting process_query with query: {query[:100]}... (session_id: {session_id}, event_id: {event_id}, category_id: {category_id})"
     )
+
+    # Refuse pasted raw OpenSearch query bodies before they reach the model.
+    if _looks_like_raw_dsl(query):
+        logger.warning("🛑 Rejected query containing a raw OpenSearch DSL body")
+        return {
+            "text": (
+                "I can't run raw database queries. Tell me what you'd like to "
+                "know in plain language (e.g. \"how many confirmed events this "
+                "month\") and I'll take care of it."
+            ),
+            "type": "text",
+        }
 
     # Get or create session
     session_id = get_or_create_session(session_id)
