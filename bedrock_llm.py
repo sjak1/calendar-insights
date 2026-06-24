@@ -128,6 +128,7 @@ def converse(
     system,
     tool_config: Optional[Dict] = None,
     model_id: Optional[str] = None,
+    on_token=None,
 ) -> Dict:
     """
     Call Bedrock Converse API.
@@ -136,6 +137,12 @@ def converse(
     or a pre-built list of Bedrock system content blocks — use the list form
     to insert ``{"cachePoint": {"type": "default"}}`` markers for prompt
     caching of static prefixes.
+
+    When `on_token` is provided, the streaming API (`converse_stream`) is used
+    and `on_token(text)` is called for each text delta as it arrives. The return
+    value is reassembled into the same shape as the non-streaming response, so
+    callers don't need to change anything else. Tool-call turns emit no text
+    deltas, so `on_token` naturally fires only on final/answer turns.
 
     Returns the raw response dict.
     """
@@ -189,5 +196,68 @@ def converse(
     }
     if tool_config is not None:
         request["toolConfig"] = tool_config
-    response = client.converse(**request)
-    return response
+
+    if on_token is None:
+        return client.converse(**request)
+
+    # ── Streaming path: converse_stream → reassemble into a converse-shaped dict ──
+    return _converse_stream(client, request, on_token)
+
+
+def _converse_stream(client, request: Dict, on_token) -> Dict:
+    """Run converse_stream, call on_token(text) per text delta, and rebuild the
+    same response dict (output.message.content, stopReason, usage) the caller
+    expects from the non-streaming API."""
+    stream = client.converse_stream(**request)
+
+    blocks: Dict[int, Dict] = {}     # contentBlockIndex → assembled block
+    stop_reason = "end_turn"
+    usage: Dict = {}
+
+    for event in stream.get("stream", []):
+        if "contentBlockStart" in event:
+            ev = event["contentBlockStart"]
+            idx = ev.get("contentBlockIndex", 0)
+            start = ev.get("start", {})
+            if "toolUse" in start:
+                tu = start["toolUse"]
+                blocks[idx] = {"toolUse": {"toolUseId": tu.get("toolUseId"),
+                                           "name": tu.get("name"), "_input": ""}}
+            else:
+                blocks[idx] = {"text": ""}
+
+        elif "contentBlockDelta" in event:
+            ev = event["contentBlockDelta"]
+            idx = ev.get("contentBlockIndex", 0)
+            delta = ev.get("delta", {})
+            blk = blocks.setdefault(idx, {"text": ""})
+            if "text" in delta:
+                blk.setdefault("text", "")
+                blk["text"] += delta["text"]
+                on_token(delta["text"])               # ← stream the token out
+            elif "toolUse" in delta:
+                blk.setdefault("toolUse", {"_input": ""})
+                blk["toolUse"]["_input"] += delta["toolUse"].get("input", "")
+
+        elif "messageStop" in event:
+            stop_reason = event["messageStop"].get("stopReason", "end_turn")
+        elif "metadata" in event:
+            usage = event["metadata"].get("usage", {})
+
+    # finalize tool-use inputs (JSON strings → objects)
+    content = []
+    for idx in sorted(blocks):
+        blk = blocks[idx]
+        if "toolUse" in blk:
+            raw = blk["toolUse"].pop("_input", "") or "{}"
+            try:
+                blk["toolUse"]["input"] = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError:
+                blk["toolUse"]["input"] = {}
+        content.append(blk)
+
+    return {
+        "output": {"message": {"role": "assistant", "content": content}},
+        "stopReason": stop_reason,
+        "usage": usage,
+    }

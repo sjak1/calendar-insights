@@ -200,6 +200,24 @@
             }
         }
 
+        /* Live streaming status line */
+        .status-line {
+            color: #8a7a5c;
+            font-style: italic;
+            font-size: 14px;
+        }
+        .status-ellipsis::after {
+            content: '';
+            animation: ellipsis 1.4s infinite steps(4, end);
+        }
+        @keyframes ellipsis {
+            0%   { content: ''; }
+            25%  { content: '.'; }
+            50%  { content: '..'; }
+            75%  { content: '...'; }
+            100% { content: ''; }
+        }
+
         .examples {
             padding: 20px;
             background: #fdfcfa;
@@ -311,6 +329,33 @@
 
     <script>
         const API_URL = '/process_query';
+        const STREAM_URL = '/process_query_stream';
+
+        // Friendly labels for tool names shown in the live status line
+        const TOOL_LABELS = {
+            generate_agenda: 'Generating agenda',
+            push_agenda_to_briefingiq: 'Pushing agenda',
+            suggest_presenters: 'Finding presenters',
+            search_opensearch: 'Searching',
+            count_opensearch: 'Counting',
+            generate_report: 'Building report',
+            format_chart: 'Building chart',
+            generate_pdf: 'Creating PDF',
+            list_rooms: 'Checking rooms',
+            find_vacant_slots: 'Finding free slots',
+            block_calendar: 'Booking room',
+            draft_confirmation_email: 'Drafting email',
+            draft_catering_sheet: 'Drafting catering sheet',
+        };
+
+        function setStatus(text) {
+            const el = document.getElementById('loading-indicator');
+            if (!el) return;
+            const c = el.querySelector('.message-content');
+            c.classList.remove('loading');
+            c.innerHTML = `<span class="status-line">${text}<span class="status-ellipsis"></span></span>`;
+            document.getElementById('chatContainer').scrollTop = 1e9;
+        }
         
         // Session management: get or create session ID
         function getSessionId() {
@@ -439,50 +484,88 @@
             
             try {
                 const sessionId = getSessionId();
-                const response = await fetch(API_URL, {
+                const response = await fetch(STREAM_URL, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        query: query,
-                        headers: {},
-                        session_id: sessionId
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, headers: {}, session_id: sessionId })
                 });
-                
-                removeLoadingIndicator();
-                
-                if (!response.ok) {
+
+                if (!response.ok || !response.body) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                
-                const data = await response.json();
-                
-                // Handle response format: can be string or object with text/chart/pdf
-                let messageText = '';
-                let chartData = null;
-                let pdfBase64 = null;
-                
-                if (typeof data.message === 'string') {
-                    // Simple text response
-                    messageText = data.message;
-                } else if (data.message && typeof data.message === 'object') {
-                    // Object response (chart, report, pdf, or structured)
-                    messageText = data.message.text || data.message.message || JSON.stringify(data.message);
-                    chartData = data.message.chart || null;
-                    pdfBase64 = data.message.pdf || null;
+
+                // Read the SSE stream, updating the live status as events arrive
+                const reader = response.body.getReader();
+                const dec = new TextDecoder();
+                let buf = '';
+                let done = false;
+                let finalEvent = null;
+                let streamBubble = null;   // the growing answer bubble (once tokens arrive)
+                let streamText = '';
+
+                setStatus('Thinking');
+
+                while (!done) {
+                    const { value, done: streamDone } = await reader.read();
+                    if (streamDone) break;
+                    buf += dec.decode(value, { stream: true });
+                    let idx;
+                    while ((idx = buf.indexOf('\n\n')) !== -1) {
+                        const frame = buf.slice(0, idx);
+                        buf = buf.slice(idx + 2);
+                        const dataLines = frame.split('\n').filter(l => l.startsWith('data:'));
+                        if (!dataLines.length) continue;
+                        const data = dataLines.map(l => l.slice(5).trimStart()).join('\n');
+                        if (!data) continue;
+                        let ev;
+                        try { ev = JSON.parse(data); } catch (_) { continue; }
+
+                        if (ev.type === 'token') {
+                            // First token → swap the status bubble for a live answer bubble
+                            if (!streamBubble) {
+                                removeLoadingIndicator();
+                                streamBubble = document.createElement('div');
+                                streamBubble.className = 'message assistant';
+                                const c = document.createElement('div');
+                                c.className = 'message-content';
+                                streamBubble.appendChild(c);
+                                document.getElementById('chatContainer').appendChild(streamBubble);
+                            }
+                            streamText += ev.text || '';
+                            streamBubble.querySelector('.message-content').innerHTML = streamText
+                                .replace(/## (.*)/g, '<h3>$1</h3>')
+                                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                                .replace(/\n/g, '<br>');
+                            document.getElementById('chatContainer').scrollTop = 1e9;
+                        } else if (ev.type === 'tool_start') {
+                            setStatus(TOOL_LABELS[ev.name] || ev.name.replace(/_/g, ' '));
+                        } else if (ev.type === 'llm_start') {
+                            if (!streamBubble) setStatus('Thinking');
+                        } else if (ev.type === 'query_end') {
+                            finalEvent = ev;
+                            done = true;
+                        } else if (ev.type === 'error') {
+                            throw new Error(ev.error || 'stream error');
+                        }
+                    }
+                }
+
+                removeLoadingIndicator();
+
+                // Finalize: if we streamed a bubble, replace it with the fully
+                // formatted final message (so chart/PDF render). Else add fresh.
+                if (streamBubble) streamBubble.remove();
+                if (finalEvent) {
+                    addMessage(
+                        finalEvent.text || streamText || '(no response)',
+                        'assistant',
+                        finalEvent.chart || null,
+                        finalEvent.pdf || null
+                    );
                 } else {
-                    messageText = String(data.message);
+                    addMessage(streamText || '(no response)', 'assistant');
                 }
-                
-                addMessage(messageText, 'assistant', chartData, pdfBase64);
-                
-                // Update session ID if server returned a new one
-                if (data.session_id && data.session_id !== sessionId) {
-                    localStorage.setItem('chat_session_id', data.session_id);
-                }
-                
+
             } catch (error) {
                 removeLoadingIndicator();
                 addMessage(`Error: ${error.message}. Please try again.`, 'assistant error');

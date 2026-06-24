@@ -345,15 +345,20 @@ def process_query(
             # Split system into static (cached) + dynamic (date) so the ~9k-token
             # AI_INSTRUCTIONS + SCHEMA_REFERENCE prefix is reused across iterations
             # and across users via Bedrock prompt caching.
+            # cachePoint is only supported by Anthropic/Nova models on Bedrock;
+            # OSS models (gpt-oss, Llama, Qwen, ...) reject it with a ValidationException.
+            supports_cache = (
+                "anthropic" in BEDROCK_MODEL_ID or "nova" in BEDROCK_MODEL_ID
+            )
             system = [
                 {"text": AI_INSTRUCTIONS},
-                {"cachePoint": {"type": "default"}},
+                *([{"cachePoint": {"type": "default"}}] if supports_cache else []),
                 {"text": time_block},
             ]
             tool_config = {
-                "tools": openai_tools_to_bedrock(tools) + [
-                    {"cachePoint": {"type": "default"}}
-                ],
+                "tools": openai_tools_to_bedrock(tools) + (
+                    [{"cachePoint": {"type": "default"}}] if supports_cache else []
+                ),
                 "toolChoice": {"auto": {}},
             }
             # Route: Sonnet plans on iter 1; Haiku handles post-tool-result turns.
@@ -368,11 +373,15 @@ def process_query(
                 model=(iter_model_id or BEDROCK_MODEL_ID).split(".")[-1],
                 role=("synthesis" if had_tool_results else "planning"),
             )
+            # Stream tokens out as they arrive. Tool-deciding turns emit no text
+            # deltas, so token events only fire on the final answer turn.
+            _stream_tok = (lambda t: _emit("token", text=t)) if on_event else None
             response = bedrock_converse(
                 messages=input_list,
                 system=system,
                 tool_config=tool_config,
                 model_id=iter_model_id,
+                on_token=_stream_tok,
             )
             llm_elapsed = time.time() - llm_start
             usage = response.get("usage", {})
@@ -545,6 +554,8 @@ def process_query(
                 iterations=iteration_count,
                 text=final_response_text,
                 response_type=result.get("type", "text"),
+                chart=result.get("chart"),
+                pdf=result.get("pdf"),
             )
             return result
 

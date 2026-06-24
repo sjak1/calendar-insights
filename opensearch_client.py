@@ -6,7 +6,9 @@ OPENSEARCH_VERIFY_CERTS, OPENSEARCH_TIMEOUT_SECONDS, OPENSEARCH_DEFAULT_INDICES.
 
 import json
 import os
+from datetime import datetime
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -15,6 +17,41 @@ load_dotenv()
 _client: Any = None
 _BANNED = frozenset({"script", "script_fields", "scripted_metric", "runtime_mappings"})
 _MAX_SIZE = 50
+
+# Epoch-ms annotation: time-ish keys holding values in this range get a
+# "<key>Readable" sibling so the LLM never converts raw epochs itself.
+_EPOCH_KEY_HINTS = ("time", "date", "utcms", "zonedate")
+_EPOCH_MS_MIN = 10**12  # ~Sep 2001
+_EPOCH_MS_MAX = 4 * 10**12  # ~2096
+
+
+def _readable_epoch(ms: float, tz_name: str) -> str:
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    dt = datetime.fromtimestamp(ms / 1000, tz=tz)
+    return dt.strftime("%a, %b %d %Y, %I:%M %p %Z")
+
+
+def _annotate_epochs(node: Any, tz_name: str) -> None:
+    """Recursively add '<key>Readable' next to epoch-ms time fields in place."""
+    if isinstance(node, dict):
+        additions = {}
+        for k, v in node.items():
+            if isinstance(v, (dict, list)):
+                _annotate_epochs(v, tz_name)
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                kl = k.lower()
+                if (
+                    any(h in kl for h in _EPOCH_KEY_HINTS)
+                    and _EPOCH_MS_MIN <= v <= _EPOCH_MS_MAX
+                ):
+                    additions[f"{k}Readable"] = _readable_epoch(v, tz_name)
+        node.update(additions)
+    elif isinstance(node, list):
+        for item in node:
+            _annotate_epochs(item, tz_name)
 
 
 def validate_json_string(value: str) -> None:
@@ -157,7 +194,10 @@ def _check_banned(obj: Any, path: str = "") -> None:
 
 
 def search(
-    index: Optional[str], body: Dict[str, Any], size_cap: Optional[int] = _MAX_SIZE
+    index: Optional[str],
+    body: Dict[str, Any],
+    size_cap: Optional[int] = _MAX_SIZE,
+    query_timezone: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run search. Body passed through as-is. Size capped."""
     _check_banned(body)
@@ -187,6 +227,14 @@ def search(
             }
             for h in resp.get("hits", {}).get("hits", [])
         ]
+        # Annotate epoch-ms fields with readable dates. Prefer the event's own
+        # timezone field; fall back to the requester's timezone, then UTC.
+        for h in hits:
+            src = h.get("source") or {}
+            tz = src.get("timezone")
+            if not isinstance(tz, str) or not tz.strip():
+                tz = query_timezone or "UTC"
+            _annotate_epochs(src, tz)
         out: Dict[str, Any] = {"success": True, "total_hits": total_val, "hits": hits}
         if "aggregations" in resp:
             out["aggregations"] = resp["aggregations"]
@@ -256,10 +304,13 @@ def run_raw_dsl(
     dsl_body: Dict[str, Any],
     index: Optional[str] = None,
     size_cap: Optional[int] = _MAX_SIZE,
+    query_timezone: Optional[str] = None,
     **_kwargs,
 ) -> Dict[str, Any]:
-    """Backward-compat: execute raw DSL (no date normalization)."""
-    return search(index=index, body=dsl_body, size_cap=size_cap)
+    """Backward-compat: execute raw DSL. query_timezone drives readable-date annotation."""
+    return search(
+        index=index, body=dsl_body, size_cap=size_cap, query_timezone=query_timezone
+    )
 
 
 def get_suggested_presenters(

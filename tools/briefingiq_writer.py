@@ -33,8 +33,18 @@ logger = get_logger(__name__)
 # ── BriefingIQ constants (Redwood Shores defaults for form templates) ────────
 BASE_URL          = "https://briefings.briefingiq.com/events/api"
 MODULE_ID         = "BFF04CFD-87A4-4CDA-9B76-612A82C8FE5C"
-TOPIC_FORM_ID     = "5622B58C-55BA-4473-9B3A-38D732DDD04B"
+TOPIC_FORM_ID     = "5622B58C-55BA-4473-9B3A-38D732DDD04B"  # activity slot/container form
+# The actual topic sub-form the agenda UI writes to (verified from the UI's own
+# PUT). Topic data is stored here, NOT on the container form above.
+TOPIC_DATA_FORM_ID = "3422EREW-3421-DFCS-ERDW-5E8B8F0B9081"
 PRESENTER_FORM_ID = "ACED1483-82F1-4E30-B4C3-2259338B4EAE"
+
+# Flow context required by the form-data save. Verified against the Oracle DB:
+# these are the "Agenda" journey + page TEMPLATE ids (M_JOURNEY/M_PAGE.UNIQUE_ID,
+# tenant 2) — stable constants for the briefings Agenda flow, NOT per-event.
+# Multi-tenant: resolve by name via M_JOURNEY/M_PAGE.journey_name='Agenda'.
+AGENDA_JOURNEY_ID = "30a1a47e-6b80-11f0-9e02-325096b39f47"
+AGENDA_PAGE_ID    = "e98faa08-6b80-11f0-a966-325096b39f47"
 MASTERS_TYPE_ID   = "B147B2E9-053D-44F9-85F5-914B9F817FEA"
 ROOM_TYPE_ID      = "EAC8F953-99D0-43DF-8E15-CA03F21EA92D"
 
@@ -42,10 +52,20 @@ ROOM_TYPE_ID      = "EAC8F953-99D0-43DF-8E15-CA03F21EA92D"
 CUSTOMER_ID       = "131393dd-0449-4cca-8528-2fed6b79eaed"
 CATEGORY_ID       = "D06189A1-69AF-4D17-AC5B-480F7589D427"
 
+# The Topic module — entry point for resolving the agenda form/journey/page IDs
+# dynamically via /modules/{id}/configs/details (so we don't hardcode form IDs
+# that break when the tenant swaps/recreates a form).
+TOPIC_MODULE_ID = MODULE_ID  # module "Topic" (BFF04CFD), activityType "Topic"
+
 # Cache topics for the process lifetime
 _topics_cache: Optional[List[Dict]] = None
 _topics_cache_ts: float = 0
 _TOPICS_TTL = 3600  # 1 hour
+
+# Cache the resolved agenda form config (journey/page/form ids) per process
+_agenda_cfg_cache: Optional[Dict[str, str]] = None
+_agenda_cfg_cache_ts: float = 0
+_AGENDA_CFG_TTL = 3600  # 1 hour
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -125,22 +145,106 @@ def _fetch_topics(headers: Dict[str, str]) -> List[Dict]:
     if _topics_cache and (time.time() - _topics_cache_ts) < _TOPICS_TTL:
         return _topics_cache
 
-    url = f"{BASE_URL}/mastertypes/{MASTERS_TYPE_ID}/masters"
+    # MUST match the UI's topic dropdown source: fetchType=HIGHER_LEVEL returns
+    # the currently-valid topic tree. Without it we get ALL masters (incl. stale
+    # / child rows) whose uniqueIds don't resolve → 500 "Entity must not be null".
+    url = f"{BASE_URL}/mastertypes/{MASTERS_TYPE_ID}/masters?fetchType=HIGHER_LEVEL&size=1000"
     resp = requests.get(url, headers=headers, timeout=30)
     if resp.status_code != 200:
         logger.warning(f"Failed to fetch topics: {resp.status_code}")
         return []
 
     masters = resp.json().get("_embedded", {}).get("masters", [])
-    topics = [
-        {"name": m["data"]["textField1"], "uniqueId": m["uniqueId"]}
-        for m in masters
-        if m.get("masterType", {}).get("name") == "Topic"
-    ]
+
+    # The enum is nested (Parent Topic → Topic → Sub-Topic → Micro Topic); flatten
+    # every level so fuzzy-match can pick any selectable topic by name.
+    topics: List[Dict] = []
+    seen = set()
+
+    def _collect(node):
+        if not isinstance(node, dict):
+            return
+        uid = node.get("uniqueId")
+        data = node.get("data", {}) or {}
+        name = data.get("textField1") or data.get("topicName") or node.get("name")
+        if uid and uid not in seen:
+            seen.add(uid)
+            topics.append({"name": name, "uniqueId": uid})
+        # children may be nested under a few possible keys
+        for key in ("children", "child", "subMasters", "nestedMasters"):
+            for ch in (node.get(key) or []):
+                _collect(ch)
+        for ch in (data.get("children") or []):
+            _collect(ch)
+
+    for m in masters:
+        _collect(m)
     _topics_cache = topics
     _topics_cache_ts = time.time()
-    logger.info(f"Loaded {len(topics)} topics from masters")
+    logger.info(f"Loaded {len(topics)} topics from masters (HIGHER_LEVEL)")
     return topics
+
+
+# Hardcoded fallbacks — only used if the config endpoint is unreachable.
+_AGENDA_CFG_FALLBACK = {
+    "journey_id": AGENDA_JOURNEY_ID,
+    "page_id": AGENDA_PAGE_ID,
+    "topic_form_id": TOPIC_DATA_FORM_ID,
+    "presenter_form_id": PRESENTER_FORM_ID,
+}
+
+
+def _resolve_agenda_config(headers: Dict[str, str]) -> Dict[str, str]:
+    """Resolve the agenda journey/page/form ids dynamically from the module config.
+
+    Walks `/modules/{TOPIC_MODULE_ID}/configs/details` → journeys → pages → forms
+    and picks the topic + presenter forms by their stable `formType.uniqueId`
+    (`topic` / `topic_presenter`). This avoids hardcoding form ids that change
+    when the tenant swaps/recreates a form. Falls back to constants on failure.
+    """
+    global _agenda_cfg_cache, _agenda_cfg_cache_ts
+    if _agenda_cfg_cache and (time.time() - _agenda_cfg_cache_ts) < _AGENDA_CFG_TTL:
+        return _agenda_cfg_cache
+
+    try:
+        url = f"{BASE_URL}/modules/{TOPIC_MODULE_ID}/configs/details"
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            logger.warning(f"Config details fetch failed {resp.status_code} — using fallback ids")
+            return _AGENDA_CFG_FALLBACK
+        module = resp.json()
+
+        def _pick(items, name_key, want):
+            items = items or []
+            for it in items:
+                if (it.get(name_key) or "").strip().lower() == want:
+                    return it
+            return items[0] if items else {}
+
+        journey = _pick(module.get("journeys"), "journeyName", "agenda")
+        page = _pick(journey.get("pages"), "pageName", "agenda")
+        forms = page.get("forms") or []
+
+        form_by_type: Dict[str, str] = {}
+        for f in forms:
+            ft = ((f.get("formType") or {}).get("uniqueId")
+                  or (f.get("formTypeId") or {}).get("uniqueId") or "").strip()
+            if ft and f.get("uniqueId"):
+                form_by_type[ft] = f["uniqueId"]
+
+        cfg = {
+            "journey_id": journey.get("uniqueId") or AGENDA_JOURNEY_ID,
+            "page_id": page.get("uniqueId") or AGENDA_PAGE_ID,
+            "topic_form_id": form_by_type.get("topic") or TOPIC_DATA_FORM_ID,
+            "presenter_form_id": form_by_type.get("topic_presenter") or PRESENTER_FORM_ID,
+        }
+        _agenda_cfg_cache = cfg
+        _agenda_cfg_cache_ts = time.time()
+        logger.info(f"Resolved agenda config: {cfg}")
+        return cfg
+    except Exception as e:
+        logger.warning(f"Config resolve error ({e}) — using fallback ids")
+        return _AGENDA_CFG_FALLBACK
 
 
 def _fuzzy_match_topic(title: str, topics: List[Dict]) -> Optional[Dict]:
@@ -251,46 +355,68 @@ def _create_activity(headers: Dict, event_id: str, event_date: str, start_iso: s
     return activity_id
 
 
-def _set_topic(headers: Dict, activity_id: str, topic: Dict) -> bool:
-    """Step 2: Set topic on activity via PUT."""
-    topic_payload = {
-        "uniqueId": topic["uniqueId"],
-        "textField1": topic["name"],
-        "textField2": topic["name"],
-    }
-    body = {
+def _set_topic(
+    headers: Dict,
+    activity_id: str,
+    topic: Dict,
+    cfg: Dict[str, str],
+) -> bool:
+    """Step 2: Set topic on activity via PUT to the topic sub-form.
+
+    Verified against the live API: the topic form-data must be CREATED via
+    POST /forms/{form}/data (createFormData) with id:"" + parentId. A freshly
+    created activity has no topic record yet, so PUT .../data/{activityId}
+    (updateFormData) would look one up, get null, and 500 "Entity must not be
+    null". `data.textField2` = the topic master uniqueId (textAreaField1/2 =
+    objective / optional topic). Form/journey/page ids come from `cfg`.
+    """
+    form_id = cfg["topic_form_id"]
+    body: Dict[str, Any] = {
         "moduleId": MODULE_ID,
-        "formId": TOPIC_FORM_ID,
-        "id": activity_id,
-        "formTypeId": "TOPIC_ACTIVITY",
+        "formId": form_id,
+        "journeyId": cfg["journey_id"],
+        "pageId": cfg["page_id"],
+        "id": "",
+        "parentId": activity_id,
+        "childs": [],
+        "files": [],
         "data": {
-            "textField1": topic_payload,
-            "topic": topic_payload,
+            "textField2": topic["uniqueId"],
+            "textAreaField1": topic.get("objective"),
+            "textAreaField2": topic.get("optional_topic"),
         },
     }
-    url = f"{BASE_URL}/forms/{TOPIC_FORM_ID}/data/{activity_id}"
-    resp = requests.put(url, headers=headers, json=body, timeout=30)
+    # Backend resolves the parent activity from the x-cloud-activityid header.
+    save_headers = {**headers, "x-cloud-activityid": activity_id}
+    url = f"{BASE_URL}/forms/{form_id}/data"
+    resp = requests.post(url, headers=save_headers, json=body, timeout=30)
     if resp.status_code not in (200, 201):
-        logger.error(f"Set topic failed {resp.status_code}: {resp.text[:200]}")
+        logger.error(f"Set topic failed {resp.status_code}: {resp.text[:600]}")
         return False
-    logger.info(f"Set topic '{topic['name']}' on activity {activity_id}")
+    logger.info(f"Set topic '{topic['name']}' ({topic['uniqueId']}) on activity {activity_id}")
     return True
 
 
-def _add_presenter(headers: Dict, activity_id: str, presenter_email: str, presenter_title: str = "") -> bool:
+def _add_presenter(headers: Dict, activity_id: str, presenter_email: str,
+                   cfg: Dict[str, str], presenter_title: str = "") -> bool:
     """Step 3: Add a presenter to an activity (optional)."""
+    form_id = cfg["presenter_form_id"]
     body = {
-        "formId": PRESENTER_FORM_ID,
+        "formId": form_id,
         "moduleId": MODULE_ID,
         "parentId": activity_id,
+        "journeyId": cfg["journey_id"],
+        "pageId": cfg["page_id"],
         "data": {
             "textField2": presenter_email,
             "textField3": presenter_title,
             "textField1": "Accepted",
         },
     }
-    url = f"{BASE_URL}/forms/{PRESENTER_FORM_ID}/data"
-    resp = requests.post(url, headers=headers, json=body, timeout=30)
+    # Same as topic: backend resolves the parent activity from this header.
+    save_headers = {**headers, "x-cloud-activityid": activity_id}
+    url = f"{BASE_URL}/forms/{form_id}/data"
+    resp = requests.post(url, headers=save_headers, json=body, timeout=30)
     if resp.status_code not in (200, 201):
         logger.warning(f"Add presenter failed {resp.status_code}: {resp.text[:200]}")
         return False
@@ -326,6 +452,36 @@ def fetch_event_rooms(event_id: str, token: str, schedule_headers: Optional[Dict
     return rooms
 
 
+_BREAK_WORDS = ("break", "lunch", "breakfast", "dinner", "coffee", "networking",
+                "registration", "reception", "tea ", "refreshment")
+
+
+def _is_break_session(title: str) -> bool:
+    """True for non-topic sessions (breaks/meals) that shouldn't get a presenter."""
+    t = (title or "").lower()
+    return any(w in t for w in _BREAK_WORDS)
+
+
+def _auto_presenter_for(title: str, event_id: str) -> Optional[str]:
+    """Pick the best available presenter for a session topic (top suggest_presenters
+    match). Returns an email or None. Used when a session has no explicit presenter."""
+    try:
+        from tools.presenter_suggest import get_suggested_presenters
+    except ImportError:
+        return None
+    try:
+        res = get_suggested_presenters(topic=title, event_id=event_id, limit=5)
+        cands = res.get("suggested_presenters", []) if res.get("success") else []
+        # prefer an available presenter; fall back to the top-ranked one
+        for c in cands:
+            if c.get("email") and c.get("available", True):
+                return c["email"]
+        return cands[0]["email"] if cands and cands[0].get("email") else None
+    except Exception as e:
+        logger.warning(f"auto-presenter lookup failed for '{title}': {e}")
+        return None
+
+
 def push_agenda_to_app(
     event_id: str,
     event_date: str,
@@ -334,6 +490,7 @@ def push_agenda_to_app(
     presenter_emails: Optional[List[str]] = None,
     resource_id: Optional[str] = None,
     schedule_headers: Optional[Dict] = None,
+    auto_presenters: bool = True,
 ) -> Dict[str, Any]:
     """
     Push AI-generated agenda sessions into the BriefingIQ app.
@@ -353,6 +510,8 @@ def push_agenda_to_app(
     """
     headers = _make_headers(token, event_id, schedule_headers)
     topics = _fetch_topics(headers)
+    # Resolve form/journey/page ids dynamically (falls back to constants on error)
+    agenda_cfg = _resolve_agenda_config(headers)
 
     # ── Pre-flight: check room conflicts if a room is specified ──────────
     conflicts = []
@@ -427,20 +586,38 @@ def push_agenda_to_app(
         if not matched_topic:
             matched_topic = _create_topic(headers, title)
         if matched_topic:
-            _set_topic(headers, activity_id, matched_topic)
+            _set_topic(headers, activity_id, matched_topic, agenda_cfg)
         else:
             logger.warning(f"Could not match or create topic for '{title}' — activity created without topic")
 
-        # Step 3: add presenters if provided
-        if presenter_emails:
-            for email in presenter_emails:
-                _add_presenter(headers, activity_id, email)
+        # Step 3: add presenters. Prefer per-session presenters; fall back to the
+        # event-wide list. Each entry may be an email string or {email, title}.
+        session_presenters = (
+            session.get("presenters")
+            or session.get("presenter_emails")
+            or presenter_emails
+            or []
+        )
+        # Auto-assign the best-matched presenter when none was supplied and the
+        # session is a real topic (skip breaks/lunch).
+        if not session_presenters and auto_presenters and matched_topic \
+                and not _is_break_session(title):
+            auto_email = _auto_presenter_for(title, event_id)
+            if auto_email:
+                session_presenters = [auto_email]
+        added_presenters = []
+        for p in session_presenters:
+            email = p.get("email") if isinstance(p, dict) else p
+            p_title = p.get("title", "") if isinstance(p, dict) else ""
+            if email and _add_presenter(headers, activity_id, email, agenda_cfg, p_title):
+                added_presenters.append(email)
 
         created.append({
             "activity_id": activity_id,
             "title": title,
             "time_slot": time_slot,
             "matched_topic": matched_topic["name"] if matched_topic else None,
+            "presenters": added_presenters,
             "resource_id": resource_id,
         })
 

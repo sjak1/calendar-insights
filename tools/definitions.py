@@ -567,10 +567,15 @@ tools = [
                         "properties": {
                             "title": {"type": "string", "description": "Session title."},
                             "time_slot": {"type": "string", "description": "Time range e.g. '10:00 AM - 10:45 AM'."},
+                            "presenters": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional presenter email(s) for THIS session (e.g. from suggest_presenters). Assign the best-matched presenter per topic.",
+                            },
                         },
                         "required": ["title", "time_slot"],
                     },
-                    "description": "List of agenda sessions from generate_agenda output.",
+                    "description": "List of agenda sessions from generate_agenda output. Attach a per-session presenter email when known.",
                 },
                 "resource_id": {
                     "type": "string",
@@ -579,7 +584,7 @@ tools = [
                 "presenter_emails": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of presenter email addresses to add to every session.",
+                    "description": "Optional fallback presenter email(s) applied to sessions that have no per-session presenters.",
                 },
             },
             "required": ["event_id", "event_date", "sessions"],

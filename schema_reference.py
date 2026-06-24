@@ -10,6 +10,9 @@ Rules encoded here:
   • _source paths          → NO .keyword
   • startTime (events)     → epoch ms (long); activities use startTime.utcMs
   • date ranges            → include format: "epoch_millis"
+  • Readable dates         → results add <field>Readable (e.g. startTimeReadable);
+                             ALWAYS use these for display, never convert epochs yourself
+
   • Forbidden keys         → script_fields, scripted_metric, runtime_mappings
 
 ⚠️ SCHEMA MIGRATION NOTE (verified live):
@@ -254,6 +257,7 @@ joining to the events index via `eventId` for customer/industry/C-level context.
 - **_source paths** → NO `.keyword`
 - **events date field** → `startTime` is epoch milliseconds (long). Activities use `startTime.utcMs`.
 - **Date ranges** → include `"format": "epoch_millis"` in range clause
+- **Displaying dates** → search results include a pre-converted `<field>Readable` companion (e.g. `startTimeReadable: "Thu, Dec 10 2026, 09:00 AM PST"`) next to every epoch field. ALWAYS quote these readable values in answers — NEVER convert epoch numbers yourself.
 - **Forbidden** → `script`, `script_fields`, `scripted_metric`, `runtime_mappings`
 - **NO nested queries** → All fields are plain object/array types, NOT nested type. Use `exists`, `term`, `match` directly on the dotted path.
 - **Size cap** → max 50 per request. Use `size: 0` + aggs for counts/breakdowns.
