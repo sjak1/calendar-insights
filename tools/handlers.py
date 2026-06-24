@@ -34,14 +34,12 @@ try:
         count as count_opensearch_fn,
         get_index_mapping as get_index_mapping_fn,
         get_suggested_presenters,
-        list_indices as list_indices_fn,
         run_raw_dsl,
     )
 except ImportError:
     count_opensearch_fn = None
     get_index_mapping_fn = None
     get_suggested_presenters = None
-    list_indices_fn = None
     run_raw_dsl = None
 
 logger = get_logger(__name__)
@@ -497,18 +495,6 @@ def execute_tool(
             logger.info(
                 f"✓ get_time_context returned {len(days_payload)} day(s) starting {first_day['date_iso']} tz {timezone_name}"
             )
-            return output
-
-        elif tool_name == "list_indices":
-            if list_indices_fn is None:
-                output = {"error": "OpenSearch client not available."}
-            else:
-                result = list_indices_fn(
-                    index=args.get("index"),
-                    include_detail=args.get("include_detail", True),
-                )
-                output = {"list_indices": result}
-            logger.info(f"✓ list_indices returned {len(output.get('list_indices', {}).get('indices', []))} indices")
             return output
 
         elif tool_name == "get_index_mapping":
