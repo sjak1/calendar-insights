@@ -591,6 +591,23 @@ def handle_query(
     on_event=None,
 ):
     """Entry point for handling queries."""
+    # Phase 1 (RBAC): resolve the caller's role + data scope from Oracle and log it.
+    # Not yet enforced — filter injection comes in a later phase. See
+    # docs/RBAC_ACCESS_MODEL_GUIDE.md.
+    try:
+        from access import resolve_access_context, compile_access_filter
+
+        access_ctx = resolve_access_context(
+            email=(user_info or {}).get("email"),
+            category_id=category_id,
+            customer_id=(user_info or {}).get("customer_id"),
+        )
+        access_filter = compile_access_filter(access_ctx)
+        logger.info(f"🔐 [rbac] {access_ctx.summary()}")
+        logger.info(f"🔐 [rbac] compiled filter: {json_dumps_safe(access_filter)}")
+    except Exception as e:
+        logger.warning(f"🔐 [rbac] access resolution skipped: {e}")
+
     return process_query(
         query,
         headers,

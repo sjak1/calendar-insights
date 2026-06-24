@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RBAC Architecture — Calendar Insights</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2d3543;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950;
+    --red:#f85149; --amber:#d29922; --purple:#bc8cff; --cyan:#39c5cf;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;padding:32px 20px 80px}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 32px;font-size:15px}
+  h2{font-size:20px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.5px;
+    padding:2px 8px;border-radius:20px;vertical-align:middle;margin-left:8px}
+  .tag.bad{background:rgba(248,81,73,.15);color:var(--red);border:1px solid rgba(248,81,73,.4)}
+  .tag.good{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.4)}
+
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:18px 0}
+  .node{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;min-width:150px;flex:1;position:relative}
+  .node .t{font-weight:600;font-size:14px;margin-bottom:4px}
+  .node .d{font-size:12px;color:var(--muted)}
+  .node.user{border-color:var(--cyan)}
+  .node.llm{border-color:var(--purple)}
+  .node.choke{border-color:var(--green)}
+  .node.data{border-color:var(--accent)}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);
+    font-size:24px;padding:0 10px;flex:0 0 auto}
+  .arrow small{font-size:10px}
+
+  .badge{position:absolute;top:-10px;right:10px;font-size:10px;font-weight:700;
+    padding:2px 7px;border-radius:6px}
+  .badge.x{background:var(--red);color:#fff}
+  .badge.lock{background:var(--green);color:#04210d}
+
+  /* code block */
+  pre{background:#0a0d12;border:1px solid var(--border);border-radius:10px;
+    padding:16px;overflow:auto;font-size:13px;line-height:1.5;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .c-key{color:var(--cyan)} .c-inj{color:var(--green);font-weight:600}
+  .c-llm{color:var(--purple)} .c-cmt{color:var(--muted);font-style:italic}
+  .c-red{color:var(--red)}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .card h3{margin:0 0 8px;font-size:15px}
+  .card.bad{border-color:rgba(248,81,73,.4)}
+  .card.good{border-color:rgba(63,185,80,.4)}
+
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.5px;text-transform:uppercase}
+  code.f{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12px;
+    font-family:"SF Mono",Menlo,monospace;color:var(--cyan)}
+  .role{font-weight:600}
+  .role.admin{color:var(--amber)} .role.rep{color:var(--green)}
+
+  .callout{background:var(--panel2);border-left:3px solid var(--amber);
+    border-radius:6px;padding:12px 16px;margin:16px 0;font-size:14px}
+  .callout b{color:var(--amber)}
+  .lockico{color:var(--green)} .xico{color:var(--red)}
+  .step{display:flex;gap:12px;margin:10px 0;align-items:flex-start}
+  .step .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);
+    color:#04130d;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  .step .body{flex:1}
+  .step .body b{font-size:14px}
+  .step .body p{margin:2px 0 0;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>🔐 Role-Based Access — How it fits our architecture</h1>
+  <p class="sub">Calendar Insights · the LLM writes the query, but the <b>server</b> decides what data it's allowed to touch.</p>
+
+  <!-- ============ TODAY ============ -->
+  <h2>1 · How it works today <span class="tag bad">NO ACCESS CONTROL</span></h2>
+  <p style="font-size:14px;color:var(--muted)">The LLM writes an OpenSearch query and it runs <b>exactly as written</b>. Nothing scopes it to a customer or a person.</p>
+
+  <div class="flow">
+    <div class="node user"><div class="t">👤 User + headers</div><div class="d">email, customer_id arrive… but are only <i>logged</i></div></div>
+    <div class="arrow">→</div>
+    <div class="node llm"><div class="t">🧠 LLM</div><div class="d">writes raw OpenSearch DSL</div></div>
+    <div class="arrow">→</div>
+    <div class="node choke" style="border-color:var(--red)">
+      <span class="badge x">PASS-THROUGH</span>
+      <div class="t">⚙️ search()</div><div class="d">runs the body <b>as-is</b></div></div>
+    <div class="arrow">→</div>
+    <div class="node data"><div class="t">🗄️ OpenSearch</div><div class="d">returns <b class="c-red">anyone's</b> data</div></div>
+  </div>
+
+  <div class="callout" style="border-left-color:var(--red)">
+    <b style="color:var(--red)">The hole:</b> <code class="f">customer_id</code> is read from the header
+    (<code class="f">api.py:164</code>) but never used to filter. If the LLM forgets a filter — or is
+    tricked by "show me all customers" — the data comes back. Everyone effectively sees everything.
+  </div>
+
+  <!-- ============ PROPOSED ============ -->
+  <h2>2 · Proposed: enforce at ONE chokepoint <span class="tag good">SERVER-ENFORCED</span></h2>
+  <p style="font-size:14px;color:var(--muted)">We never ask the LLM to behave. We let it write whatever it wants, then <b>wrap</b> its query in a filter it can't escape — at the single function every query flows through.</p>
+
+  <div class="flow">
+    <div class="node user">
+      <div class="t">👤 User + headers</div>
+      <div class="d">email + <b class="c-inj">role</b> (from briefing app)</div></div>
+    <div class="arrow">→<br><small>resolve policy</small></div>
+    <div class="node" style="border-color:var(--amber)">
+      <div class="t">📋 Policy map</div>
+      <div class="d">role → <i>which filter</i></div></div>
+    <div class="arrow">↓</div>
+    <div class="node llm"><div class="t">🧠 LLM</div><div class="d">writes raw DSL (untrusted)</div></div>
+    <div class="arrow">→</div>
+    <div class="node choke">
+      <span class="badge lock">🔒 INJECTS FILTER</span>
+      <div class="t">⚙️ search()</div>
+      <div class="d">wraps LLM query in mandatory filter</div></div>
+    <div class="arrow">→</div>
+    <div class="node data"><div class="t">🗄️ OpenSearch</div><div class="d">returns <b class="c-inj">only allowed</b> data</div></div>
+  </div>
+
+  <!-- ============ THE WRAP ============ -->
+  <h2>3 · What "wrapping" actually means</h2>
+  <p style="font-size:14px;color:var(--muted)">The LLM's query gets <b>demoted</b> into a sub-clause. The green lines are what the server adds — the LLM never sees them and can't remove them. OpenSearch ANDs them together, so the LLM can only ever <i>narrow within</i> the allowed box.</p>
+
+  <pre>{ <span class="c-key">"query"</span>: {
+    <span class="c-key">"bool"</span>: {
+      <span class="c-cmt">// ▼▼▼ server injects this — the user can't touch it ▼▼▼</span>
+      <span class="c-inj">"filter"</span>: [
+        <span class="c-inj">{ "term": { "...customerName.keyword": "ACME" } },   // tenant — EVERYONE gets this</span>
+        <span class="c-inj">{ "bool": { "should": [                              // ownership — only for sales_rep</span>
+          <span class="c-inj">{ "term": { "...oracleHostEmail.keyword": "me@acme.com" } },</span>
+          <span class="c-inj">{ "term": { "...requesterEmail.keyword":  "me@acme.com" } }</span>
+        <span class="c-inj">] } }</span>
+      ],
+      <span class="c-cmt">// ▼ whatever the LLM wrote — now just a sub-clause ▼</span>
+      <span class="c-llm">"must": [ { /* LLM's original query: "events about cloud migration" */ } ]</span>
+    }
+} }</pre>
+
+  <div class="callout">
+    <b>Key idea:</b> we are <u>not</u> adding a "role" field to the data. The <b>role</b> is just an
+    <code class="f">if-statement on the server</code> that decides <i>which filter conditions</i> to inject.
+    The conditions themselves are matched against fields that already exist (customer, host email, etc).
+  </div>
+
+  <!-- ============ TWO LAYERS ============ -->
+  <h2>4 · Two layers of scope (they stack)</h2>
+  <div class="grid2">
+    <div class="card good">
+      <h3>🅰️ Layer A — Tenant isolation</h3>
+      <p style="font-size:13px;color:var(--muted)">"You only see your own company." Applies to <b>everyone</b>, admin included. This is the urgent gap today. <b>Ship first.</b></p>
+      <p style="font-size:13px">Filter: <code class="f">customerName = ACME</code></p>
+    </div>
+    <div class="card good">
+      <h3>🅱️ Layer B — Role / ownership</h3>
+      <p style="font-size:13px;color:var(--muted)">Within a company, roles see different rows. Built on top of Layer A.</p>
+      <p style="font-size:13px">Extra filter: <code class="f">host/requester = me</code> (only for restricted roles)</p>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>Role</th><th>Injected filter</th><th>Sees</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="role admin">admin</span></td>
+        <td><code class="f">customerName = ACME</code></td>
+        <td>Everything for their company</td>
+      </tr>
+      <tr>
+        <td><span class="role rep">sales_rep</span></td>
+        <td><code class="f">customerName = ACME</code> <b>AND</b> <code class="f">(host = me OR requester = me)</code></td>
+        <td>Only events they own / requested / present</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ============ WHICH FIELDS ============ -->
+  <h2>5 · "Identity-based conditions" = these real fields</h2>
+  <p style="font-size:14px;color:var(--muted)">We match the email we already extract from <code class="f">x-cloud-user</code> against fields that already exist in your schema:</p>
+  <table>
+    <thead><tr><th>Purpose</th><th>OpenSearch field</th></tr></thead>
+    <tbody>
+      <tr><td>Tenant (company)</td><td><code class="f">eventFormData.VISIT_INFO.customerName.keyword</code></td></tr>
+      <tr><td>Host owns it</td><td><code class="f">eventFormData.VISIT_INFO.oracleHostEmail.keyword</code></td></tr>
+      <tr><td>Requested it</td><td><code class="f">eventFormData.VISIT_INFO.requesterEmail.keyword</code></td></tr>
+      <tr><td>Assigned manager</td><td><code class="f">eventFormData.VISIT_INFO.briefingManager</code></td></tr>
+      <tr><td>On internal attendee list</td><td><code class="f">eventFormData.INTERNAL_ATTENDEES.email.keyword</code></td></tr>
+      <tr><td>Presenter (activities idx)</td><td><code class="f">presenterEmail.keyword</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <b>⚠️ One thing to fix first:</b> there's no clean indexed <code class="f">customerId</code> —
+    only a company-<i>name</i> string. For security-grade isolation, matching on a free-text name is
+    brittle. Ideally index a stable <code class="f">customerId</code> on the documents.
+  </div>
+
+  <!-- ============ BUILD ORDER ============ -->
+  <h2>6 · How I'd build it</h2>
+  <div class="step"><div class="n">1</div><div class="body"><b>Trust the role header</b><p>Briefing app injects <code class="f">x-cloud-user-role</code> like the other headers. (Add JWT verification only if the endpoint is reachable directly & spoofable.)</p></div></div>
+  <div class="step"><div class="n">2</div><div class="body"><b>Resolve an access_context at request entry</b><p>In <code class="f">api.py</code>, alongside <code class="f">user_info</code>, build {role, email, customer} → thread it down like user_info already flows.</p></div></div>
+  <div class="step"><div class="n">3</div><div class="body"><b>Add a policy map: role → filter clauses</b><p>One small function. Admin → tenant only. sales_rep → tenant + ownership.</p></div></div>
+  <div class="step"><div class="n">4</div><div class="body"><b>Inject in <code class="f">search()</code> / <code class="f">count()</code></b><p>The single chokepoint. Wrap the LLM body in the bool/filter. Tenant filter goes in <b>regardless of role</b>.</p></div></div>
+  <div class="step"><div class="n">5</div><div class="body"><b>(Later) field-level redaction</b><p>Strip sensitive fields (revenue, opportunity) from <code class="f">_source</code> per role.</p></div></div>
+
+  <p style="margin-top:36px;color:var(--muted);font-size:13px;text-align:center">
+    Additive &amp; centralized — one inject function + one policy map + threading a context object. No rewrite of the LLM/tool layer.
+  </p>
+
+</div>
+</body>
+</html>
