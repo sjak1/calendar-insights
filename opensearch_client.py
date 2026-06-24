@@ -137,12 +137,36 @@ def _get_client():
     return _client
 
 
-def _index(index: Optional[str]) -> str:
-    return (
-        (index or "").strip()
-        or os.getenv("OPENSEARCH_DEFAULT_INDICES", "").strip()
-        or "*,-.*"
-    )
+# Indices the assistant is allowed to touch. Everything else in the cluster
+# (system/.security/.kibana/ML-plugin/test indices) is off-limits — see the
+# security review on branch fix/opensearch-index-allowlist.
+_ALLOWED_INDICES = frozenset({"events", "activities"})
+
+
+class IndexNotAllowed(ValueError):
+    """Raised when a caller requests an index outside the allowlist."""
+
+
+def _resolve_index(index: Optional[str]) -> str:
+    """Resolve + validate the target index against the allowlist.
+
+    - Empty/omitted -> the full allowlist (events,activities), never '*'.
+    - Each requested token must be an EXACT allowlisted name; wildcards
+      ('events*', '*'), system indices ('.opendistro_security') and any other
+      name are rejected. This is the single server-side chokepoint that all
+      query entry points funnel through.
+    """
+    raw = (index or "").strip() or os.getenv("OPENSEARCH_DEFAULT_INDICES", "").strip()
+    if not raw:
+        return ",".join(sorted(_ALLOWED_INDICES))
+    requested = [t.strip() for t in raw.split(",") if t.strip()]
+    disallowed = [t for t in requested if t not in _ALLOWED_INDICES]
+    if disallowed:
+        raise IndexNotAllowed(
+            f"Index access denied: {disallowed}. "
+            f"Allowed indices: {sorted(_ALLOWED_INDICES)}"
+        )
+    return ",".join(requested)
 
 
 def _check_banned(obj: Any, path: str = "") -> None:
@@ -175,7 +199,7 @@ def search(
     else:
         b.setdefault("size", 10)
     try:
-        resp = _get_client().search(index=_index(index), body=b)
+        resp = _get_client().search(index=_resolve_index(index), body=b)
         total = resp.get("hits", {}).get("total", {})
         total_val = total.get("value", total) if isinstance(total, dict) else total
         hits = [
@@ -200,7 +224,7 @@ def count(
 ) -> Dict[str, Any]:
     """Run count."""
     try:
-        resp = _get_client().count(index=_index(index), body=body or {})
+        resp = _get_client().count(index=_resolve_index(index), body=body or {})
         return {"success": True, "count": resp.get("count", 0)}
     except Exception as e:
         return {"success": False, "error": str(e), "count": 0}
@@ -209,11 +233,17 @@ def count(
 def list_indices(
     index: Optional[str] = None, include_detail: bool = True
 ) -> Dict[str, Any]:
-    """List indices. index: pattern (e.g. events* or empty for all). include_detail: full metadata vs names only."""
+    """List indices — hard-scoped to the allowlist (events, activities).
+
+    No longer exposed as an LLM tool; kept for internal/ops use. The caller's
+    `index` argument is ignored so this can never enumerate system/security
+    indices.
+    """
     try:
-        params = {"format": "json"}
-        if index and index.strip():
-            params["index"] = index.strip()
+        params = {
+            "format": "json",
+            "index": ",".join(sorted(_ALLOWED_INDICES)),
+        }
         resp = _get_client().transport.perform_request(
             method="GET", url="/_cat/indices", params=params
         )
@@ -226,21 +256,38 @@ def list_indices(
 
 
 def get_index_mapping(index: str) -> Dict[str, Any]:
-    """Get index mapping."""
+    """Get index mapping — restricted to the allowlist."""
     try:
-        resp = _get_client().indices.get(index=(index or "").strip())
-        return {"success": True, "index": (index or "").strip(), "mapping": resp}
+        resolved = _resolve_index(index)
+        resp = _get_client().indices.get(index=resolved)
+        return {"success": True, "index": resolved, "mapping": resp}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# Cluster-level / system endpoints generic_api must never reach.
+_GENERIC_API_DENIED_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH", "HEAD"})
 
 
 def generic_api(
     path: str, method: str = "GET", body: Any = None, params: Optional[Dict] = None
 ) -> Dict[str, Any]:
-    """Call any OpenSearch API."""
+    """Call a read-only OpenSearch API, restricted to allowlisted indices.
+
+    Not exposed as an LLM tool. Guarded defensively: write methods and any
+    path that targets a system/cluster endpoint (e.g. '/_cat', '/_cluster',
+    '.opendistro_security') or a non-allowlisted index are rejected.
+    """
     try:
+        m = method.upper()
+        if m in _GENERIC_API_DENIED_METHODS:
+            raise IndexNotAllowed(f"Method {m} not permitted via generic_api")
+        first = (path or "").lstrip("/").split("/", 1)[0].strip()
+        if not first or first.startswith("_") or first.startswith("."):
+            raise IndexNotAllowed(f"Endpoint '{path}' not permitted")
+        _resolve_index(first)  # raises if outside the allowlist
         resp = _get_client().transport.perform_request(
-            method=method.upper(), url=path, body=body, params=params
+            method=m, url=path, body=body, params=params
         )
         return {
             "success": True,

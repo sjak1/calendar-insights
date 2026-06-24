@@ -395,28 +395,6 @@ tools = [
     },
     {
         "type": "function",
-        "name": "list_indices",
-        "description": (
-            "List OpenSearch indices. Use when the user asks what indices exist, how many indices, or index stats (docs.count, store.size). "
-            "Optionally filter by index pattern (e.g. events*)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "index": {
-                    "type": "string",
-                    "description": "Index name or pattern (e.g. events*). Omit to list all indices.",
-                },
-                "include_detail": {
-                    "type": "boolean",
-                    "description": "If true (default), return full metadata (health, docs.count, store.size). If false, return only index names.",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
         "name": "generate_pdf",
         "description": (
             "Generate a PDF document from text content for the user to download. "
