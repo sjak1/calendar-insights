@@ -193,6 +193,90 @@ def _check_banned(obj: Any, path: str = "") -> None:
             _check_banned(item, f"{path}[{i}]")
 
 
+_DENY = {"bool": {"must_not": {"match_all": {}}}}
+
+
+def _raw_search(index: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
+    """Search via the raw client, bypassing access enforcement (used by the
+    enforcement layer itself for permission checks — avoids recursion)."""
+    resp = _get_client().search(index=_index(index), body=body)
+    total = resp.get("hits", {}).get("total", {})
+    total_val = total.get("value", total) if isinstance(total, dict) else total
+    hits = [{"source": h.get("_source", {})} for h in resp.get("hits", {}).get("hits", [])]
+    return {"total_hits": total_val, "hits": hits}
+
+
+def _event_allowed(ctx, event_id: str) -> bool:
+    """Case 2: may this user see this one event? (cheap single check)."""
+    from access import compile_access_filter
+
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": compile_access_filter(ctx),
+                           "must": [{"term": {"eventId.keyword": event_id}}]}},
+    }
+    return (_raw_search("events", body).get("total_hits") or 0) > 0
+
+
+def _apply_access(index: Optional[str], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Inject the caller's access filter into the query (Phase 3 enforcement).
+
+    Runs AFTER normalize_query_structure so our nested bool clauses are not mangled
+    by that normalizer. No-op when no request context is set (scripts/tests).
+    """
+    try:
+        from access.context import get_access, get_pinned_event_id
+        from access import compile_access_filter
+        from access.policy import is_unrestricted, allowed_event_ids, ACTIVITY_EVENT_FIELD
+    except Exception as e:  # access layer unavailable → don't break queries
+        logger.warning(f"[rbac] enforcement unavailable: {e}")
+        return b
+
+    ctx = get_access()
+    if ctx is None:
+        return b  # not in a request context — preserve legacy behavior
+
+    target = (index or "").lower()
+    user_query = b.get("query") or {"match_all": {}}
+
+    if "activit" in target:
+        # Case 1: see-everything → no activity restriction.
+        if is_unrestricted(ctx):
+            return b
+        pinned = get_pinned_event_id()
+        if pinned:
+            # Case 2: one pinned event — check it, then scope activities to it.
+            if _event_allowed(ctx, pinned):
+                b["query"] = {"bool": {"must": [user_query],
+                                       "filter": [{"term": {ACTIVITY_EVENT_FIELD: pinned}}]}}
+            else:
+                b["query"] = _DENY
+            return b
+        # Case 3: broad — scope activities to the events the user may see.
+        ids, overflow = allowed_event_ids(ctx, _raw_search)
+        if overflow:
+            logger.warning("[rbac] allowed-event cap exceeded; denying activities query")
+            b["query"] = _DENY
+        elif not ids:
+            b["query"] = _DENY
+        else:
+            b["query"] = {"bool": {"must": [user_query],
+                                   "filter": [{"terms": {ACTIVITY_EVENT_FIELD: ids}}]}}
+        return b
+
+    if "event" in target:
+        b["query"] = {"bool": {"must": [user_query], "filter": compile_access_filter(ctx)}}
+        return b
+
+    # Unknown / wildcard index: fail closed if unresolved, else pass through (v1).
+    if not getattr(ctx, "resolved", False):
+        logger.warning(f"[rbac] unresolved context on index '{index}' → deny")
+        b["query"] = _DENY
+    else:
+        logger.warning(f"[rbac] no enforcement mapping for index '{index}' → pass-through")
+    return b
+
+
 def search(
     index: Optional[str],
     body: Dict[str, Any],
@@ -209,6 +293,7 @@ def search(
 
     b = normalize_scientific_notation(b)
     b = normalize_query_structure(b)
+    b = _apply_access(index, b)
 
     if "size" in b:
         b["size"] = min(int(b["size"]), size_cap or 9999)
@@ -248,7 +333,9 @@ def count(
 ) -> Dict[str, Any]:
     """Run count."""
     try:
-        resp = _get_client().count(index=_index(index), body=body or {})
+        b = dict(body or {})
+        b = _apply_access(index, b)
+        resp = _get_client().count(index=_index(index), body=b)
         return {"success": True, "count": resp.get("count", 0)}
     except Exception as e:
         return {"success": False, "error": str(e), "count": 0}

@@ -44,7 +44,7 @@ see* and staples it on right before the DB, where the LLM can't touch it.
 | **0** | Verify scoping fields exist in OpenSearch | ✅ done |
 | **1** | Resolve caller's role + scope from Oracle (resolve + log only) | ✅ done |
 | **2** | Compile role → OpenSearch filter clauses | ✅ done |
-| **3** | Inject filter at `search()` chokepoint (real enforcement) | ⬜ todo |
+| **3** | Inject filter at `search()` chokepoint (real enforcement) | ✅ events done · ⚠️ activities join unverified |
 | **4** | Tests + fail-closed guard + (optional) pre-check | ⬜ todo |
 
 ---
@@ -90,7 +90,37 @@ see* and staples it on right before the DB, where the LLM can't touch it.
 
 ---
 
-## ⚠️ Open items before Phase 3
+## What's built so far (Phase 3 — enforcement)
+
+- `access/context.py` — request-scoped contextvar; `set_access(ctx, event_id)` in
+  `handle_query`, read at the `search()`/`count()` chokepoint. Unset (scripts/tests)
+  → no enforcement (legacy behavior preserved).
+- `opensearch_client._apply_access()` — injects the filter **after**
+  `normalize_query_structure` (sidesteps the normalizer bug):
+  - **events** → wrap `{bool: {must:[LLM query], filter:[access clauses]}}`.
+  - **activities** → 3 cases: (1) unrestricted role → no filter; (2) pinned eventId
+    (header) → check that one event, scope to it or deny; (3) broad → scope to
+    `allowed_event_ids` (capped at 1024 → deny on overflow).
+  - other/wildcard index → deny if unresolved, else pass-through (v1).
+- `access/policy.py` — added `is_unrestricted(ctx)` (per-role, OR-aware) and
+  `allowed_event_ids(ctx, search_fn, cap)`.
+
+**Verified live (enforced via search()):**
+| user | events | activities |
+|------|--------|------------|
+| no context (legacy) | 146 | 3975 |
+| Super User | 59 (non-draft) | 3975 (unrestricted) |
+| Requester (own only) | 34 | 0 (fail-closed) |
+| unknown | 0 (deny) | 0 (deny) |
+
+**🚧 Activities join is UNVERIFIED in this environment.** In the test data,
+`activities.eventId` is a GUID while `events.eventId` is a CBR code with no matching
+GUID — the two indices are non-joinable snapshots, so Case 3 yields 0 (fails closed,
+safe). The join field is now configurable via `RBAC_EVENT_JOIN_FIELD` /
+`RBAC_ACTIVITY_EVENT_FIELD`; **must be confirmed against real prod data** before
+activities scoping can be trusted as correct (vs merely safe).
+
+## ⚠️ Open items / Phase 4
 
 - **🚨 Normalizer bug (BLOCKER):** `normalize_query_structure()` in
   `opensearch_client.py` strips the `bool` wrapper from items inside a `filter`

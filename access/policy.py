@@ -18,6 +18,7 @@ Combination policy (decided with the user):
                               (own/hosted requests only)
 """
 
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -174,3 +175,72 @@ def compile_access_filter(ctx) -> List[dict]:
             filters.append({"bool": {"must_not": {"match_all": {}}}})  # deny-all
 
     return filters
+
+
+# --- enforcement helpers (Phase 3) ---------------------------------------------
+# A clause that references an ownership or location field constrains *which events*
+# a user can see (so activities must be scoped too). A clause that only touches
+# status does not narrow the set of events by identity — every user with that role
+# sees the same events. We use this to spot "see-everything" users cheaply.
+def _clause_is_event_narrowing(clause: dict) -> bool:
+    """True if a clause restricts the set of events by who/where (not just status)."""
+    import json
+    blob = json.dumps(clause)
+    if _LOCATION_FIELD in blob:
+        return True
+    return any(f in blob for f in _OWNERSHIP_FIELDS)
+
+
+def is_unrestricted(ctx) -> bool:
+    """True if the user can see every event in scope (no identity/location narrowing).
+
+    Roles combine with OR, so a single non-narrowing role (e.g. Super User, whose
+    only rule is a status filter) means the user effectively sees all events —
+    regardless of ownership clauses contributed by their other roles. Such users
+    need no activities lookup. (A status-only filter still applies on the events
+    index; for activities we treat these users as unrestricted — an accepted
+    approximation for high-privilege roles.)
+    """
+    if not getattr(ctx, "resolved", False):
+        return False
+    if getattr(ctx, "location_guids", None):
+        return False  # location AND-limits events, so not fully unrestricted
+    role_rules = _load_role_rules(getattr(ctx, "role_ids", None) or [])
+    email = getattr(ctx, "email", None)
+    for rules in role_rules.values():
+        clause = _compile_role(rules, email)
+        # a role with no rules, or one that only filters by status, is non-narrowing
+        if clause is None or not _clause_is_event_narrowing(clause):
+            return True
+    return False
+
+
+# Join key between events and activities (Case 3). `activities.eventId` references
+# the parent event; EVENT_JOIN_FIELD is the events-index _source field whose value
+# equals that reference. In production these must align — VERIFY in the target
+# environment (in some snapshots events use a CBR code while activities use a GUID,
+# in which case this must point at the events-side GUID field).
+EVENT_JOIN_FIELD = os.getenv("RBAC_EVENT_JOIN_FIELD", "eventId")
+ACTIVITY_EVENT_FIELD = os.getenv("RBAC_ACTIVITY_EVENT_FIELD", "eventId.keyword")
+
+
+def allowed_event_ids(ctx, search_fn, cap: int = 1024):
+    """Case 3: the event ids this user may see, for scoping activities.
+
+    Runs the event-access filter against the events index asking only for the join
+    field. Returns (ids, overflow): overflow=True when the count exceeds `cap`,
+    signalling the caller to fail closed rather than ship a giant terms query.
+    """
+    filt = compile_access_filter(ctx)
+    body = {
+        "size": cap + 1,
+        "_source": [EVENT_JOIN_FIELD],
+        "query": {"bool": {"filter": filt, "must": [{"match_all": {}}]}},
+    }
+    resp = search_fn("events", body)
+    hits = resp.get("hits", []) if isinstance(resp, dict) else []
+    ids = [h.get("source", {}).get(EVENT_JOIN_FIELD) for h in hits]
+    ids = [i for i in ids if i]
+    if len(ids) > cap:
+        return [], True
+    return ids, False

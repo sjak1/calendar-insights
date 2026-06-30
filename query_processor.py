@@ -607,17 +607,30 @@ def handle_query(
     # docs/RBAC_ACCESS_MODEL_GUIDE.md.
     try:
         from access import resolve_access_context, compile_access_filter
+        from access.context import set_access
 
         access_ctx = resolve_access_context(
             email=(user_info or {}).get("email"),
             category_id=category_id,
             customer_id=(user_info or {}).get("customer_id"),
         )
-        access_filter = compile_access_filter(access_ctx)
+        # Enable enforcement for this request: search()/count() read this context.
+        set_access(access_ctx, event_id=event_id)
         logger.info(f"🔐 [rbac] {access_ctx.summary()}")
-        logger.info(f"🔐 [rbac] compiled filter: {json_dumps_safe(access_filter)}")
+        logger.info(
+            f"🔐 [rbac] compiled filter: {json_dumps_safe(compile_access_filter(access_ctx))}"
+        )
     except Exception as e:
-        logger.warning(f"🔐 [rbac] access resolution skipped: {e}")
+        # Fail closed: if resolution/compilation errors, set an unresolved context so
+        # the search() chokepoint denies rather than running unfiltered.
+        logger.warning(f"🔐 [rbac] access resolution failed — enforcing deny: {e}")
+        try:
+            from access.context import set_access
+            from access.resolver import AccessContext
+
+            set_access(AccessContext(email=(user_info or {}).get("email")), event_id=event_id)
+        except Exception:
+            pass
 
     return process_query(
         query,
