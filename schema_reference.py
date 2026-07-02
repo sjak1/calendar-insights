@@ -27,7 +27,7 @@ Rules encoded here:
 """
 
 SCHEMA_REFERENCE = """
-## OpenSearch Index: events (54 docs)
+## OpenSearch Index: events
 
 ### Event Core (top-level — always populated)
 | Field | Type | Notes |
@@ -178,7 +178,7 @@ Post-visit wrap-up. (~15/54 populated)
 
 ---
 
-## OpenSearch Index: activities (539 docs)
+## OpenSearch Index: activities
 
 Each document is ONE activity/session. Use this index for **per-activity questions**
 (topics, room utilization, presenter lookups, catering per session). Links to parent

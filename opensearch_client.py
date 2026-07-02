@@ -12,7 +12,11 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from logging_config import get_logger
+
 load_dotenv()
+
+logger = get_logger(__name__)
 
 _client: Any = None
 _BANNED = frozenset({"script", "script_fields", "scripted_metric", "runtime_mappings"})
@@ -264,11 +268,12 @@ def _apply_access(index: Optional[str], b: Dict[str, Any]) -> Dict[str, Any]:
                                    "filter": [{"terms": {ACTIVITY_EVENT_FIELD: ids}}]}}
         return b
 
-    if "event" in target:
+    # events, or unspecified index (count/search default to the events data) → filter.
+    if "event" in target or target in ("", "*", "*,-.*"):
         b["query"] = {"bool": {"must": [user_query], "filter": compile_access_filter(ctx)}}
         return b
 
-    # Unknown / wildcard index: fail closed if unresolved, else pass through (v1).
+    # A different explicit index: fail closed if unresolved, else pass through (v1).
     if not getattr(ctx, "resolved", False):
         logger.warning(f"[rbac] unresolved context on index '{index}' → deny")
         b["query"] = _DENY

@@ -283,6 +283,26 @@
         <div class="header">
             <h1>BriefingIQ AI Assistant</h1>
             <p>Ask me to schedule meetings, fetch resources, or get information!</p>
+            <!-- RBAC test harness: each option bakes in the (email, category) that
+                 resolves to that role. Roles are per-category. -->
+            <div id="rbacBar" style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;">
+                <span style="opacity:.8;">🔐 Act as</span>
+                <select id="roleSelect" onchange="onRoleChange()" style="padding:5px 8px;border-radius:6px;min-width:340px;">
+                    <option value="sch@allianceit.com|514152">Scheduler — unrestricted (sees ALL, incl. drafts)</option>
+                    <option value="admin@allianceit.com|11111">Super User — all non-draft events</option>
+                    <option value="allianceit@briefingiq.com|512151">Event Manager — all non-draft events</option>
+                    <option value="tm@allianceit.com|100">Technical Manager — unrestricted (all)</option>
+                    <option value="surya@allianceit.com|512150">Support User — non-draft events</option>
+                    <option value="bm@allianceit.com|11110">Briefing Manager — own + confirmed only</option>
+                    <option value="admin@allianceit.com|523153">Requester — own events only</option>
+                    <option value="nobody@nowhere.com|">Unknown user — NO access (denied)</option>
+                    <option value="__custom__">✏️ custom email + category…</option>
+                </select>
+                <input id="userEmail" placeholder="email" oninput="updateRbacActive()" style="padding:5px 8px;border-radius:6px;display:none;width:190px;">
+                <input id="userCategory" placeholder="category id" oninput="updateRbacActive()" style="padding:5px 8px;border-radius:6px;width:110px;display:none;">
+                <input id="userEvent" placeholder="event id (optional — activity scope)" oninput="updateRbacActive()" style="padding:5px 8px;border-radius:6px;width:250px;">
+                <span id="rbacActive" style="opacity:.7;font-family:monospace;font-size:11px;flex-basis:100%;"></span>
+            </div>
         </div>
 
         <div class="chat-container" id="chatContainer">
@@ -330,6 +350,40 @@
     <script>
         const API_URL = '/process_query';
         const STREAM_URL = '/process_query_stream';
+
+        // --- RBAC test harness: each role option encodes "email|category" ---------
+        function isCustom() { return document.getElementById('roleSelect').value === '__custom__'; }
+        function onRoleChange() {
+            const custom = isCustom();
+            document.getElementById('userEmail').style.display = custom ? 'inline-block' : 'none';
+            document.getElementById('userCategory').style.display = custom ? 'inline-block' : 'none';
+            if (custom) document.getElementById('userEmail').focus();
+            updateRbacActive();
+        }
+        function activeIdentity() {
+            if (isCustom()) {
+                return {
+                    email: document.getElementById('userEmail').value.trim(),
+                    cat: document.getElementById('userCategory').value.trim()
+                };
+            }
+            const [email, cat] = document.getElementById('roleSelect').value.split('|');
+            return { email: email || '', cat: cat || '' };
+        }
+        function buildHeaders() {
+            const { email, cat } = activeIdentity();
+            const evt = document.getElementById('userEvent').value.trim();
+            const h = {};
+            if (email) h['x-cloud-user'] = email;
+            if (cat) h['x-cloud-categoryid'] = cat;
+            if (evt) h['x-cloud-eventid'] = evt;
+            return h;
+        }
+        function updateRbacActive() {
+            const el = document.getElementById('rbacActive');
+            if (el) el.textContent = JSON.stringify(buildHeaders());
+        }
+        window.addEventListener('DOMContentLoaded', updateRbacActive);
 
         // Friendly labels for tool names shown in the live status line
         const TOOL_LABELS = {
@@ -487,7 +541,7 @@
                 const response = await fetch(STREAM_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, headers: {}, session_id: sessionId })
+                    body: JSON.stringify({ query, headers: buildHeaders(), session_id: sessionId })
                 });
 
                 if (!response.ok || !response.body) {

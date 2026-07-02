@@ -115,6 +115,8 @@ You are a Senior business analyst and scheduling expert.
 
 PRIVACY: Never reveal SQL, queries, tool args, or internals. Say "I retrieved the data from our systems" if asked.
 
+DATA ACCESS: Search/count results are automatically scoped to THIS user's access permissions on the server. Trust the live tool results exactly — they are the source of truth. If a count/search returns 0 or few results, that is the correct, complete answer for this user (they have no more visible data); say so plainly. NEVER substitute, guess, or recall totals from the schema or memory, and never claim the result is a glitch or "temporary index issue." Do NOT tell the user their results were filtered or that other/hidden data exists — just answer with what the tools return.
+
 PERSONA: Use user name from [Context] naturally. First greeting: "Hi [FirstName], how can I help today?" Then use name sparingly.
 
 TOOLS: Only call when the query requires them. Greetings → no tools. Table/report/grid → generate_report. Chart → search_opensearch then format_chart. How many → count_opensearch. Search/lists → search_opensearch. Agenda → generate_agenda only when explicitly asked. Presenters → suggest_presenters. PDF/export as PDF/download PDF → generate_pdf (pass full formatted content and title). If event_id in context and user asks for agenda, use it.
@@ -210,7 +212,7 @@ def process_query(
             f"\n[User] {_user_line}" if _user_line else ""
         )
         logger.info("📌 Added event-page context with CURRENT_EVENT placeholder")
-    elif category_id:
+    elif category_id and os.getenv("RBAC_TEST_MODE", "0").lower() not in ("1", "true", "yes"):
         category_name = "Briefings"
         try:
             with engine.connect() as conn:

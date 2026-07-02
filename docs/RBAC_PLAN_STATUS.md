@@ -16,7 +16,7 @@ A one-look view of the architecture and how far we've gotten.
      (access/resolver.py)
      │
      ▼
-  [2] BUILD FILTER                         ← ⬜ TODO (Phase 2)
+  [2] BUILD FILTER                         ← ✅ DONE (Phase 2)
      role  →  its rules  →  list of OpenSearch conditions
      (e.g. location in [my locations], my own requests, etc.)
      │
@@ -24,7 +24,7 @@ A one-look view of the architecture and how far we've gotten.
   [3] LLM WRITES SEARCH  (untrusted — only knows WHAT you asked)
      │
      ▼
-  [4] INJECT FILTER AT CHOKEPOINT          ← ⬜ TODO (Phase 3)
+  [4] INJECT FILTER AT CHOKEPOINT          ← ✅ DONE (Phase 3, events)
      search() wraps:  { filter: [my filter], must: [LLM query] }
      (opensearch_client.py)
      │
@@ -120,18 +120,66 @@ safe). The join field is now configurable via `RBAC_EVENT_JOIN_FIELD` /
 `RBAC_ACTIVITY_EVENT_FIELD`; **must be confirmed against real prod data** before
 activities scoping can be trusted as correct (vs merely safe).
 
-## ⚠️ Open items / Phase 4
+## Resolved during Phase 3
 
-- **🚨 Normalizer bug (BLOCKER):** `normalize_query_structure()` in
-  `opensearch_client.py` strips the `bool` wrapper from items inside a `filter`
-  array — turning `filter:[{bool:{must_not:…}}]` into the invalid
-  `filter:[{must_not:…}]`, which silently matches nothing. Our compiled filters
-  use nested `bool`/`must_not`/`should`, so Phase 3 must either fix that
-  normalizer or inject in a structure that survives it.
-- **Fail-closed:** today a resolution failure is fail-*open* (query runs unfiltered).
-  When enforcement lands, a failure must **deny / return nothing** instead.
-- **`createdBy` gap:** events have no top-level `createdBy` in OpenSearch; using
-  `oracleHostEmail` / `requesterEmail` as the ownership proxy (implemented).
-- **Two rule tables:** Phase 2 uses `M_EVENT_ROLE_DATA_ACCESS_MAP` only.
-  `BI_ROLE_REQUEST_ACCESS_MAP` (older/global, conflicting combine semantics) is
-  ignored for now — reconcile in Phase 3 if needed.
+- **Normalizer bug — sidestepped.** `_apply_access()` injects the filter *after*
+  `normalize_query_structure()` runs, so our nested `bool`/`must_not`/`should` is
+  never mangled. (The normalizer is still buggy for LLM-written nested bool-in-filter,
+  but that's a separate pre-existing issue.)
+- **Fail-closed — done.** On resolution error, `handle_query` sets an unresolved
+  context so the chokepoint denies rather than running unfiltered.
+- **`logger` NameError — fixed.** `opensearch_client.py` now defines a logger.
+- **count() leak — fixed.** No-index count/search now defaults to the events filter
+  instead of passing through unfiltered.
+- **`createdBy` gap — handled.** Proxied as `oracleHostEmail OR requesterEmail`.
+
+---
+
+## The dimensions of access control (full picture)
+
+RBAC can act at shrinking levels of zoom. We built the outermost only.
+
+| Dimension | Controls | Mechanism | Source table | Status |
+|-----------|----------|-----------|--------------|--------|
+| **Row access** | which events | WHERE filter | `M_EVENT_ROLE_DATA_ACCESS_MAP` | ✅ built |
+| **Private records** | creator-only records | WHERE filter | `BI_ROLE_DATA_ACCESS_MAP.PRIVATE_ACCESS` + event `isPrivate` | ❌ |
+| **Location scoping** | your sites only | WHERE filter | `BI_LOCATION_USER`→`M_LOCATION` (GUIDs resolved) | ⚠️ partial |
+| **Entity access** | notes / audit / attendees | strip from result | `BI_ROLE_DATA_ACCESS_MAP.READ_ACCESS` per resource | ❌ |
+| **Field redaction** | hide revenue etc. | strip from result | `BI_ROLE_DATA_ACCESS_MAP` (field config) | ❌ |
+| **CRUD / write** | create/edit/delete | permission check | `BI_ROLE_DATA_ACCESS_MAP.CREATE/UPDATE` | ➖ read-only |
+
+**Key insight:** row/private/location are all the same **WHERE-filter** mechanism (easy,
+extend `_apply_access`). Entity + field redaction are a **new "strip from results"**
+mechanism (post-`search()`). CRUD only matters for the one agenda-push write path.
+
+---
+
+## Remaining TODOs (roadmap)
+
+| # | Task | Source table / field | Where to apply | Mechanism | Phase | Effort |
+|---|------|----------------------|----------------|-----------|-------|--------|
+| 1 | Verify activities join | `activities.eventId` vs events | `opensearch_client` activities path | confirm key in prod, set `RBAC_EVENT_JOIN_FIELD` | 3 finish | S |
+| 2 | Finish location scoping | `BI_LOCATION_USER`→`M_LOCATION` | `_apply_access` (events) | add `terms: location.uniqueId ∈ my GUIDs` | 4 | S |
+| 3 | Private records | `BI_ROLE_DATA_ACCESS_MAP.PRIVATE_ACCESS` + `isPrivate` | `_apply_access` (events) | WHERE: `isPrivate=false OR creator=me` | 4 | S |
+| 4 | Fail-closed hardening | — | `_apply_access` (other/wildcard idx) | deny unknown indices | 4 | S |
+| 5 | Automated test suite | — | `tests/` | pytest matrix per role | 4 | M |
+| 6 | Entity access (notes/audit) | `BI_ROLE_DATA_ACCESS_MAP.READ_ACCESS` | after `search()` | strip sub-objects | 5 | M |
+| 7 | Field redaction (revenue) | `BI_ROLE_DATA_ACCESS_MAP` (fields) | after `search()` | `_source` strip | 5 | M |
+| 8 | Agenda-push write gate | `BI_ROLE_DATA_ACCESS_MAP.CREATE/UPDATE` | `tools/handlers.py` push_agenda | one "can write?" check | 6 | S |
+| 9 | Reconcile 2nd rule table | `BI_ROLE_REQUEST_ACCESS_MAP` | `access/policy.py` loader | decide merge vs ignore | 4 | S |
+| 10 | Pre-check (nice UX) | — | `api.py` before LLM | "you don't have access to X" msg | opt | S |
+
+### Phasing
+```
+Phase 3 (finish):  #1 activities join verify
+Phase 4 (row-level polish):  #2 location · #3 private · #4 fail-closed · #5 tests · #9 reconcile
+Phase 5 (redaction — new mechanism):  #6 entity access · #7 field redaction
+Phase 6 (writes):  #8 agenda-push gate
+Optional:  #10 pre-check
+```
+
+### Suggested next-session pickup order
+1. **#3 Private records** — cheap, real gap, same filter style
+2. **#2 Location scoping** — already half-resolved
+3. **#5 Tests** — lock in what works before adding more
+4. **#6/#7 Redaction** — when roles should differ on *content*, not just which events
