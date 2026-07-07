@@ -3,8 +3,8 @@
 A natural-language **AI agent** for the BriefingIQ event-management platform. Users
 ask questions in plain English ("what rooms are free Friday afternoon?", "draft a
 confirmation email for the keynote presenter") and the agent plans a response,
-calls a suite of tools against BriefingIQ APIs, OpenSearch, and SQL backends —
-iterating over as many tool rounds as the task needs — then synthesises an answer
+calls a suite of tools against BriefingIQ APIs, OpenSearch, and SQL backends,
+iterating over as many tool rounds as the task needs. then synthesises an answer
 or takes the action.
 
 It's a full tool-calling agent loop, not a single prompt: the model decides which
