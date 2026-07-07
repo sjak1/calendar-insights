@@ -1,14 +1,19 @@
 # BriefingIQ AI Assistant (calender-insights)
 
-Natural-language AI assistant for the BriefingIQ event-management platform. Users
+A natural-language **AI agent** for the BriefingIQ event-management platform. Users
 ask questions in plain English ("what rooms are free Friday afternoon?", "draft a
-confirmation email for the keynote presenter") and the assistant calls a suite of
-tools against BriefingIQ APIs, OpenSearch, and SQL backends to answer or take
-action.
+confirmation email for the keynote presenter") and the agent plans a response,
+calls a suite of tools against BriefingIQ APIs, OpenSearch, and SQL backends —
+iterating over as many tool rounds as the task needs — then synthesises an answer
+or takes the action.
 
-Backed by AWS Bedrock (Claude Sonnet 4.6 by default, with optional OpenAI
-fallback). Deployed as an AWS Lambda container; runnable locally as a FastAPI
-service.
+It's a full tool-calling agent loop, not a single prompt: the model decides which
+tools to call, the server runs them (in parallel when it can), feeds the results
+back, and the model keeps going until it has enough to respond.
+
+Backed by AWS Bedrock (Claude Sonnet 4.6 by default), with optional OpenAI and
+GLM-5.2 providers behind the same loop. Deployed as an AWS Lambda container;
+runnable locally as a FastAPI service.
 
 ## Architecture
 
@@ -18,9 +23,9 @@ service.
                   └──────────┬─────────────┘
                              │
                   ┌──────────▼─────────────┐
-                  │  query_processor.py    │  agent loop: LLM ↔ tools
-                  │  • Bedrock Converse    │
-                  │  • session + memory    │
+                  │  query_processor.py    │  agent loop: LLM ↔ tools (≤15 rounds)
+                  │  • Bedrock/OpenAI/GLM  │  prompt caching · parallel tools
+                  │  • session + memory    │  identity → access scope · cost accounting
                   └──────────┬─────────────┘
                              │
         ┌────────────────────┼────────────────────────┐
@@ -28,10 +33,13 @@ service.
   tools/handlers.py    opensearch_client.py    database.py (SQL)
   • list_rooms         • event/activity        • session store
   • find_vacant_slots    history search        • user memories
-  • push_agenda
-  • drafts (email/catering)
+  • block_calendar     • search()/count() with
+  • push_agenda          RBAC filter injected
+  • drafts (email/…)     (server-side, mandatory)
   • presenter_suggest
   • briefingiq_writer
+  • generate_agenda
+  • reports (chart/PDF)
 ```
 
 Key modules:
@@ -49,6 +57,43 @@ Key modules:
 - [opensearch_client.py](opensearch_client.py) — wraps the events/activities
   index for history and similarity search.
 - [lambda_handler.py](lambda_handler.py) — Mangum adapter for AWS Lambda.
+
+## What the agent can do
+
+The core of the service is an agentic tool-calling loop
+([query_processor.py](query_processor.py)), not a one-shot prompt. Highlights:
+
+- **Multi-step reasoning + tool use** — up to 15 LLM↔tool iterations per query;
+  the agent decides at each step which tools to call and when it has enough to
+  answer.
+- **Parallel tool execution** — when the model requests several tools at once, the
+  server fans them out on a thread pool, turning total latency into
+  `max(tool_time)` instead of the sum ([tools/handlers.py](tools/handlers.py)).
+- **17 first-class tools** — room/resource discovery, vacant-slot finding, calendar
+  blocking, OpenSearch search/count, agenda generation, presenter suggestion,
+  chart/PDF/report generation, and drafting (confirmation emails, catering sheets).
+  See [docs/tools.md](docs/tools.md).
+- **Pluggable LLM backend** — one loop, three providers: AWS Bedrock (Claude Sonnet
+  4.6, default), OpenAI, or GLM-5.2 via NVIDIA's OpenAI-compatible API (`USE_GLM=1`).
+  An optional split-model mode can route synthesis to Claude Haiku.
+- **Prompt caching** — the static ~9k-token system prefix (instructions + schema
+  reference) is marked with Bedrock `cachePoint`s and reused across every
+  iteration, so only the per-query delta is re-billed.
+- **Live streaming waterfall** — `/process_query_stream` emits SSE lifecycle events
+  (`llm_start`/`llm_end`, `tool_start`/`tool_end`, `query_end`) so a client can
+  render, in real time, exactly where each millisecond went.
+- **Per-query token + cost accounting** — responses carry input/output token counts
+  and an estimated Bedrock dollar cost.
+- **Server-side date resolution** — relative-date tokens (`TOMORROW_START`,
+  `THIS_WEEK_END`, …) and ISO dates in the model's OpenSearch queries are
+  substituted to epoch-millis on the server, saving a `get_time_context`
+  round-trip.
+- **Role-based access enforcement (RBAC)** — the caller's identity (from the
+  `X-Cloud-*` headers) is resolved to a data scope from the briefing app's Oracle
+  access model, compiled into a mandatory OpenSearch filter, and injected at the
+  single `search()`/`count()` chokepoint — *server-side, so the LLM can't remove or
+  bypass it*. Access-resolution failures fail closed (deny). See the
+  [access model guide](docs/RBAC_ACCESS_MODEL_GUIDE.md).
 
 ## Quick start (local)
 
@@ -85,6 +130,8 @@ the full list. Highlights:
 | Variable | Purpose |
 |---|---|
 | `USE_BEDROCK` | `1` (default) uses AWS Bedrock; `0` falls back to OpenAI |
+| `USE_GLM` / `LLM_PROVIDER=glm` | Route the loop through GLM-5.2 (NVIDIA OpenAI-compatible API); takes precedence over Bedrock |
+| `GLM_MODEL_ID` | GLM model id (default `z-ai/glm-5.2`) |
 | `BEDROCK_MODEL_ID` | Defaults to `us.anthropic.claude-sonnet-4-6` |
 | `bedrock_api_key` | Bedrock API key (boto3 reads as `AWS_BEARER_TOKEN_BEDROCK`) |
 | `AWS_REGION` | AWS region for Bedrock + Lambda (default `us-west-2`) |
