@@ -1,4 +1,4 @@
-# BriefingIQ AI Assistant (calender-insights)
+# BriefingIQ AI Assistant
 
 A natural-language **AI agent** for the BriefingIQ event-management platform. Users
 ask questions in plain English ("what rooms are free Friday afternoon?", "draft a
