@@ -623,6 +623,9 @@ def _fetch_meeting_context_os(
         context["meeting_details"], actual_company
     )
 
+    # 5. Example agendas — actual session lineups from the top similar briefings
+    context["example_agendas"] = _fetch_example_agendas(context["similar_briefings"])
+
     return context
 
 
@@ -717,6 +720,7 @@ def _fetch_similar_briefings_os(
         "size": 5,
         "sort": [{"_score": {"order": "desc"}}, {"startTime": {"order": "desc", "unmapped_type": "long"}}],
         "_source": [
+            "eventId",
             "eventFormData.VISIT_INFO.customerName",
             "eventFormData.VISIT_INFO.customerIndustry",
             "eventFormData.VISIT_INFO.visitFocus",
@@ -737,6 +741,7 @@ def _fetch_similar_briefings_os(
                 continue
             seen.add(co)
             results.append({
+                "event_id": h["source"].get("eventId"),
                 "company": co,
                 "industry": sv.get("customerIndustry"),
                 "visit_focus": sv.get("visitFocus"),
@@ -748,6 +753,90 @@ def _fetch_similar_briefings_os(
         logger.warning(f"Similar briefings query failed: {resp.get('error', 'unknown error')}")
     logger.info(f"Found {len(results)} similar briefings via OpenSearch")
     return results
+
+
+def _fetch_example_agendas(
+    similar: List[Dict[str, Any]], limit_events: int = 2, max_sessions: int = 12
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve the ACTUAL session lineups of the top similar briefings so the LLM
+    can learn from agendas that really ran at the center (retrieval-based
+    few-shot), instead of only seeing focus/pillar metadata.
+
+    Returns [{company, event_id, sessions: ["10:00 AM (30 min) — Title — Presenter", ...]}].
+    """
+    if os_search is None or not similar:
+        return []
+
+    examples: List[Dict[str, Any]] = []
+    for s in similar:
+        if len(examples) >= limit_events:
+            break
+        event_id = s.get("event_id")
+        if not event_id:
+            continue
+        try:
+            resp = os_search(
+                index="events",
+                body={
+                    "query": {"term": {"eventId.keyword": event_id}},
+                    "size": 1,
+                    "_source": ["activites"],
+                },
+                size_cap=1,
+            )
+        except Exception as e:
+            logger.warning(f"Example agenda fetch failed for {event_id}: {e}")
+            continue
+        if not resp.get("success") or not resp.get("hits"):
+            continue
+
+        acts = resp["hits"][0]["source"].get("activites") or []
+        if not isinstance(acts, list) or not acts:
+            continue
+
+        # Each activity carries a display-ready metadata block:
+        # displayText2 = date, displayText3 = start time, duration (min), title, presenters.
+        from datetime import datetime as _dt
+
+        def _sort_key(a):
+            md = (a.get("metadata") or {}) if isinstance(a, dict) else {}
+            try:
+                return _dt.strptime(
+                    f"{md.get('displayText2') or ''} {md.get('displayText3') or ''}",
+                    "%d-%b-%Y %I:%M %p",
+                )
+            except ValueError:
+                return _dt.max
+
+        lines: List[str] = []
+        for a in sorted([a for a in acts if isinstance(a, dict)], key=_sort_key):
+            md = a.get("metadata") or {}
+            title = md.get("title")
+            if not title:
+                continue
+            time_s = md.get("displayText3") or "?"
+            duration = a.get("duration") or md.get("displayText4")
+            presenters = ", ".join(
+                p.get("presenterName", "")
+                for p in (md.get("presenters") or [])
+                if isinstance(p, dict) and p.get("status") != "Declined" and p.get("presenterName")
+            )
+            dur_s = f" ({duration} min)" if duration else ""
+            lines.append(f"{time_s}{dur_s} — {title}" + (f" — {presenters}" if presenters else ""))
+            if len(lines) >= max_sessions:
+                break
+
+        if lines:
+            examples.append({
+                "company": s.get("company"),
+                "event_id": event_id,
+                "total_sessions": len(acts),
+                "sessions": lines,
+            })
+
+    logger.info(f"Fetched {len(examples)} example agendas from similar briefings")
+    return examples
 
 
 def _fetch_meeting_context_sql(
@@ -1216,6 +1305,7 @@ def _generate_agenda_with_llm(
     attendees = context["attendees"]
     previous = _rank_previous_meetings(context["previous_meetings"], meeting)
     similar = context["similar_briefings"]
+    example_agendas = context.get("example_agendas", [])
     presenter_recommendations = context.get("presenter_recommendations", [])
 
     # Analyze attendee mix
@@ -1293,6 +1383,7 @@ the title as TBD instead of inventing one.
         correction_note=correction_note,
         num_days=num_days,
         missing_fields=missing_fields,
+        example_agendas=example_agendas,
     )
 
     logger.info("Generating structured agenda with LLM...")
@@ -1390,9 +1481,24 @@ def _build_agenda_prompt(
     decision_makers, technical_attendees, remote_attendees, external_attendees,
     previous, similar, presenter_section, ebd_section, has_ebd,
     presenter_recommendations, correction_note=None, num_days=1, missing_fields=None,
+    example_agendas=None,
 ) -> str:
     """Build the user prompt for the LLM."""
     correction_section = f"\n\n## CORRECTIONS REQUIRED\n\n{correction_note}\n" if correction_note else ""
+    examples_section = ""
+    if example_agendas:
+        blocks = []
+        for ex in example_agendas:
+            header = f"{ex.get('company')} ({ex.get('total_sessions')} sessions total, showing {len(ex.get('sessions', []))})"
+            blocks.append(header + ":\n" + "\n".join(f"  - {line}" for line in ex.get("sessions", [])))
+        examples_section = (
+            "\n\n## EXAMPLE AGENDAS FROM PAST SIMILAR BRIEFINGS\n\n"
+            "These are REAL session lineups previously run at this briefing center for "
+            "similar customers. Use them as a style/structure reference — session length, "
+            "pacing, phrasing, and presenter pairing — but ADAPT topics to this customer. "
+            "Do not copy sessions verbatim.\n\n"
+            + "\n\n".join(blocks) + "\n"
+        )
     gaps_section = ""
     if missing_fields:
         gaps_section = (
@@ -1445,6 +1551,7 @@ External: {len(external_attendees)}
 ## SIMILAR BRIEFINGS
 
 {json.dumps(similar, indent=2) if similar else 'None'}
+{examples_section}
 {presenter_section}
 {ebd_section}
 
@@ -1574,6 +1681,11 @@ def _call_llm_bedrock(
                     "## SIMILAR BRIEFINGS\n\nOmitted.\n\n",
                     user_text, flags=re.DOTALL,
                 )
+                user_text = re.sub(
+                    r"## EXAMPLE AGENDAS.*?(?=## )",
+                    "## EXAMPLE AGENDAS\n\nOmitted.\n\n",
+                    user_text, flags=re.DOTALL,
+                )
                 messages = [{"role": "user", "content": user_text}]
             else:
                 raise
@@ -1643,6 +1755,10 @@ def _strip_prompt_sections(messages: list) -> list:
                 r"## SIMILAR BRIEFINGS.*?(?=## )", "## SIMILAR BRIEFINGS\n\nOmitted for brevity.\n\n",
                 content, flags=re.DOTALL,
             )
+            content = re.sub(
+                r"## EXAMPLE AGENDAS.*?(?=## )", "## EXAMPLE AGENDAS\n\nOmitted for brevity.\n\n",
+                content, flags=re.DOTALL,
+            )
             new_messages.append({**msg, "content": content})
         else:
             # multipart content (file + text) — strip from the text part
@@ -1656,6 +1772,10 @@ def _strip_prompt_sections(messages: list) -> list:
                     )
                     t = re.sub(
                         r"## SIMILAR BRIEFINGS.*?(?=## )", "## SIMILAR BRIEFINGS\n\nOmitted.\n\n",
+                        t, flags=re.DOTALL,
+                    )
+                    t = re.sub(
+                        r"## EXAMPLE AGENDAS.*?(?=## )", "## EXAMPLE AGENDAS\n\nOmitted.\n\n",
                         t, flags=re.DOTALL,
                     )
                     new_parts.append({**part, "text": t})
@@ -1975,6 +2095,10 @@ def generate_agenda(
             "presenter_recommendations": presenter_recommendations,
             "confidence": confidence,
             "validation_issues": validation_issues,
+            "example_agendas_used": [
+                {"company": ex.get("company"), "event_id": ex.get("event_id")}
+                for ex in context.get("example_agendas", [])
+            ],
         }
 
         if output_format in ("structured", "both"):
