@@ -536,6 +536,7 @@ def _fetch_meeting_context_os(
         "region": visit.get("region"),
         "tier": visit.get("tier"),
         "start_time_ms": hit.get("startTime"),
+        "timezone": hit.get("timezone"),
     }
     actual_event_id = hit.get("eventId")
     actual_company = visit.get("customerName") or company_name
@@ -614,7 +615,7 @@ def _fetch_meeting_context_os(
 
 # Source fields we request from the events index
 _EVENT_SOURCE_FIELDS = [
-    "eventId", "eventName", "startTime",
+    "eventId", "eventName", "startTime", "timezone",
     "eventFormData.VISIT_INFO",
     "eventFormData.EXTERNAL_ATTENDEES",
     "eventFormData.INTERNAL_ATTENDEES",
@@ -973,17 +974,22 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
 
     # Compute event-day availability window so we can flag double-booked presenters.
     # Use start-of-day → end-of-day for the event date (covers the full briefing day).
+    # Anchor the day to the EVENT's own timezone (falls back to UTC, not a hardcoded
+    # region) so the window is correct for non-US briefings.
     check_start_ms = None
     check_end_ms = None
     if start_time_ms:
         try:
             from datetime import timezone as _tz
             from datetime import datetime as _dt, timedelta as _td, time as _t
-            try:
-                from zoneinfo import ZoneInfo as _ZI
-                _tz_obj = _ZI("America/Los_Angeles")
-            except Exception:
-                _tz_obj = _tz.utc
+            _tz_obj = _tz.utc
+            _event_tz = meeting.get("timezone")
+            if _event_tz:
+                try:
+                    from zoneinfo import ZoneInfo as _ZI
+                    _tz_obj = _ZI(str(_event_tz))
+                except Exception:
+                    logger.debug(f"Unknown event timezone '{_event_tz}', using UTC for availability window")
             _event_dt = _dt.fromtimestamp(start_time_ms / 1000, tz=_tz_obj)
             _sod = _dt.combine(_event_dt.date(), _t(0, 0, 0), tzinfo=_tz_obj)
             check_start_ms = int(_sod.timestamp() * 1000)
