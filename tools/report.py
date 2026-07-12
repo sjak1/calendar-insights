@@ -8,6 +8,28 @@ import datetime
 # Bindings that store Unix epoch milliseconds (converted to ISO for display)
 EPOCH_BINDINGS = frozenset(["event_start_time"])
 
+# Per-binding column typing so the grid can sort/format numerically instead of
+# treating everything as a String. Maps alias -> (dataType, optional wijmo format).
+# dataType is one of: String, Number, Boolean, Date.
+_CURRENCY_BINDINGS = frozenset(["opportunity_revenue"])
+_NUMBER_BINDINGS = frozenset(["event_duration_days", "duration", "attendees"])
+_DATE_BINDINGS = frozenset(["event_start_time", "start_time", "end_time"])
+_BOOLEAN_BINDINGS = frozenset(["is_active", "is_remote", "decision_maker", "influencer", "technical"])
+
+
+def _infer_column_meta(binding):
+    """Return (dataType, format) for a binding so numbers/dates/booleans render
+    and sort correctly. format is a Wijmo format string or None."""
+    if binding in _CURRENCY_BINDINGS:
+        return "Number", "c0"
+    if binding in _NUMBER_BINDINGS:
+        return "Number", "n0"
+    if binding in _DATE_BINDINGS:
+        return "Date", None
+    if binding in _BOOLEAN_BINDINGS:
+        return "Boolean", None
+    return "String", None
+
 # Alias → dot path into _source (path without .keyword for stored doc; we try both)
 REPORT_FIELD_PATHS = {
     # Event-level
@@ -170,11 +192,17 @@ def format_report(
 
     grid_columns = []
     for c in columns:
+        binding = c.get("binding", c) if isinstance(c, dict) else c
+        inferred_type, inferred_format = _infer_column_meta(binding)
         col = {
-            "binding": c.get("binding", c) if isinstance(c, dict) else c,
+            "binding": binding,
             "header": c.get("header") if isinstance(c, dict) else str(c),
-            "dataType": c.get("dataType", "String"),
+            # Explicit dataType/format from caller wins; otherwise infer from binding.
+            "dataType": (c.get("dataType") if isinstance(c, dict) else None) or inferred_type,
         }
+        fmt = (c.get("format") if isinstance(c, dict) else None) or inferred_format
+        if fmt:
+            col["format"] = fmt
         if col["header"] is None:
             col["header"] = col["binding"].replace("_", " ").title()
         grid_columns.append(col)
@@ -203,6 +231,28 @@ def format_report(
     }
 
 
+def _build_group_descriptions(group_by):
+    """Convert a simple list of bindings into Wijmo groupDescriptions."""
+    if not group_by:
+        return []
+    return [{"binding": b} for b in group_by if isinstance(b, str) and b]
+
+
+def _build_sort_descriptions(sort_by):
+    """Convert [{binding, direction}] (or bare binding strings) into Wijmo
+    sortDescriptions. direction defaults to ascending."""
+    if not sort_by:
+        return []
+    descriptions = []
+    for s in sort_by:
+        if isinstance(s, str):
+            descriptions.append({"binding": s, "ascending": True})
+        elif isinstance(s, dict) and s.get("binding"):
+            direction = str(s.get("direction", "asc")).lower()
+            descriptions.append({"binding": s["binding"], "ascending": direction != "desc"})
+    return descriptions
+
+
 def generate_report(
     dsl_query,
     columns,
@@ -211,10 +261,15 @@ def generate_report(
     index=None,
     max_rows=None,
     query_timezone=None,
+    group_by=None,
+    sort_by=None,
 ):
     """
     Run an OpenSearch DSL query, flatten hits to rows, and return reportUiConfig + reportData.
     Use from the generate_report tool so the LLM does not send large payloads.
+
+    group_by: optional list of column bindings to group rows by (e.g. ["region"]).
+    sort_by: optional list of {"binding": str, "direction": "asc"|"desc"} for grid sorting.
     """
     try:
         from opensearch_client import run_raw_dsl
@@ -248,4 +303,11 @@ def generate_report(
 
     hits = result.get("hits", [])
     rows = build_report_rows(hits, columns, max_rows=max_rows)
-    return format_report(rows, columns, title=title, subtitle=subtitle)
+    return format_report(
+        rows,
+        columns,
+        title=title,
+        subtitle=subtitle,
+        group_descriptions=_build_group_descriptions(group_by),
+        sort_descriptions=_build_sort_descriptions(sort_by),
+    )

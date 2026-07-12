@@ -557,6 +557,8 @@ def execute_tool(
                 subtitle=args.get("subtitle"),
                 index=args.get("index"),
                 query_timezone=_get_query_timezone(schedule_headers),
+                group_by=args.get("group_by"),
+                sort_by=args.get("sort_by"),
             )
             output = {"generate_report": _summarize_report_for_llm(result)}
             logger.info(
