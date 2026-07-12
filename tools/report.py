@@ -38,13 +38,26 @@ _ATTENDEE_ITEM_FIELDS = {
     "influencer": "influencer",
 }
 
+# Synthetic binding: not read from the item — stamped with the source list's
+# label ("Internal"/"External") so mixed reports can show/group by attendee type.
+ATTENDEE_TYPE_BINDING = "attendee_type"
+
+# Each entry lists (path, type_label) pairs; rows are emitted in pair order
+# (Internal before External, matching the native grid).
 ROW_EXPAND = {
     "external_attendees": {
-        "path": "eventFormData.EXTERNAL_ATTENDEES",
+        "paths": [("eventFormData.EXTERNAL_ATTENDEES", "External")],
         "item_fields": _ATTENDEE_ITEM_FIELDS,
     },
     "internal_attendees": {
-        "path": "eventFormData.INTERNAL_ATTENDEES",
+        "paths": [("eventFormData.INTERNAL_ATTENDEES", "Internal")],
+        "item_fields": _ATTENDEE_ITEM_FIELDS,
+    },
+    "all_attendees": {
+        "paths": [
+            ("eventFormData.INTERNAL_ATTENDEES", "Internal"),
+            ("eventFormData.EXTERNAL_ATTENDEES", "External"),
+        ],
         "item_fields": _ATTENDEE_ITEM_FIELDS,
     },
 }
@@ -203,26 +216,46 @@ def _expand_hit_to_rows(source, bindings, expand_cfg, paths):
     """Fan one event source into one row per nested array element.
 
     Event-level bindings are resolved once from the hit; item-level bindings
-    (those in expand_cfg.item_fields) are resolved per element. An event with
-    no elements still yields one row (item columns null) so it isn't dropped.
+    (those in expand_cfg.item_fields) are resolved per element; the synthetic
+    attendee_type binding is stamped with the source list's label. An event
+    with no elements still yields one row (item columns null) so it isn't
+    dropped. Multiple source lists (e.g. internal + external attendees) are
+    concatenated in configured order.
     """
     item_fields = expand_cfg.get("item_fields", {})
-    event_bindings = [b for b in bindings if b not in item_fields]
+    special = {ATTENDEE_TYPE_BINDING}
+    event_bindings = [b for b in bindings if b not in item_fields and b not in special]
     item_bindings = [b for b in bindings if b in item_fields]
+    want_type = ATTENDEE_TYPE_BINDING in bindings
     base_row = flatten_source_to_row(source, event_bindings, paths)
 
-    items = _get_list(source, expand_cfg["path"])
-    if not items:
+    labeled_items = []
+    for list_path, type_label in expand_cfg["paths"]:
+        for item in _get_list(source, list_path):
+            labeled_items.append((item, type_label))
+
+    if not labeled_items:
         row = dict(base_row)
         for b in item_bindings:
             row[b] = None
+        if want_type:
+            row[ATTENDEE_TYPE_BINDING] = None
         return [row]
 
     rows = []
-    for item in items:
+    for item, type_label in labeled_items:
         row = dict(base_row)
         for b in item_bindings:
             row[b] = _get_nested(item, item_fields[b]) if isinstance(item, dict) else None
+        # INTERNAL_ATTENDEES items carry no attendeeName — compose it from
+        # prefix + firstName + lastName so both types render a name.
+        if "attendee_name" in item_bindings and not row.get("attendee_name") and isinstance(item, dict):
+            composed = " ".join(
+                p for p in (item.get("prefix"), item.get("firstName"), item.get("lastName")) if p
+            )
+            row["attendee_name"] = composed or None
+        if want_type:
+            row[ATTENDEE_TYPE_BINDING] = type_label
         rows.append(row)
     return rows
 

@@ -424,7 +424,7 @@ tools = [
             "For 'list them' / 'show them' use search_opensearch. "
             "COLUMNS: default to the FULL relevant set for the entity (typically 8-12), not a minimal one — users expect complete grids and can hide columns in the UI. "
             "Event reports: event_name, customer_name, status, category_name, location_name, event_start_time, region, customer_industry, line_of_business, opportunity_revenue. "
-            "Attendee reports (expand set): attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker, is_technical. "
+            "Attendee reports (expand set): attendee_type, attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker, is_technical. "
             "Only narrow the columns when the user explicitly names the fields they want. "
             "_source: use paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName) and include every path the columns need. Filters/sort: use .keyword. Frontend renders the table."
         ),
@@ -479,8 +479,8 @@ tools = [
                 },
                 "expand": {
                     "type": "string",
-                    "enum": ["external_attendees", "internal_attendees"],
-                    "description": "Optional. Fan each event into one row per nested attendee for an attendee-level report. Use item-level column bindings like attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker. Omit for a normal one-row-per-event report.",
+                    "enum": ["all_attendees", "external_attendees", "internal_attendees"],
+                    "description": "Optional. Fan each event into one row per nested attendee for an attendee-level report. Prefer 'all_attendees' (internal + external combined, with an attendee_type column of Internal/External) unless the user asks for only one type. Use item-level column bindings like attendee_type, attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker. To mirror the native contact grid, also pass group_by: [\"event_id_top\", \"attendee_type\"]. When expanding, include the attendee arrays in _source (eventFormData.INTERNAL_ATTENDEES and/or eventFormData.EXTERNAL_ATTENDEES). Omit for a normal one-row-per-event report.",
                 },
             },
             "required": ["dsl_query", "columns", "title"],
