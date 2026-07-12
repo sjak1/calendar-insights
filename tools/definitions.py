@@ -421,8 +421,12 @@ tools = [
         "name": "generate_report",
         "description": (
             "Generate a table report from OpenSearch. Use ONLY for explicit table/report/grid requests or specific columns. "
-            "For 'list them' / 'show them' use search_opensearch. Columns: 4-6, bindings from schema (customer_name, event_name, status, location_name, event_start_time). "
-            "_source: use paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName). Filters/sort: use .keyword. Frontend renders the table."
+            "For 'list them' / 'show them' use search_opensearch. "
+            "COLUMNS: default to the FULL relevant set for the entity (typically 8-12), not a minimal one — users expect complete grids and can hide columns in the UI. "
+            "Event reports: event_name, customer_name, status, category_name, location_name, event_start_time, region, customer_industry, line_of_business, opportunity_revenue. "
+            "Attendee reports (expand set): attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker, is_technical. "
+            "Only narrow the columns when the user explicitly names the fields they want. "
+            "_source: use paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName) and include every path the columns need. Filters/sort: use .keyword. Frontend renders the table."
         ),
         "parameters": {
             "type": "object",
@@ -446,7 +450,7 @@ tools = [
                             },
                         },
                     },
-                    "description": "Columns to show in the table; binding must match schema aliases. Pick the minimum useful set for the question.",
+                    "description": "Columns to show in the table; binding must match schema aliases. Default to the full relevant set for the entity (8-12 columns); only narrow when the user names specific fields.",
                 },
                 "title": {"type": "string", "description": "Report title."},
                 "subtitle": {
