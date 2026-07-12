@@ -536,13 +536,22 @@ def execute_tool(
             return output, pdf_bytes
 
         elif tool_name == "generate_report":
+            timezone_name = _get_query_timezone(schedule_headers)
+            report_dsl = args["dsl_query"]
+            if isinstance(report_dsl, str):
+                import json as _json
+                report_dsl = _json.loads(report_dsl)
+            # Substitute time placeholder tokens (THIS_MONTH_START, ISO dates, ...)
+            # exactly like search_opensearch does — run_raw_dsl does no normalization,
+            # so without this the raw token strings reach OpenSearch and match nothing.
+            report_dsl = _substitute_time_tokens(report_dsl, timezone_name)
             result = generate_report(
-                args["dsl_query"],
+                report_dsl,
                 args["columns"],
                 title=args.get("title", "Report"),
                 subtitle=args.get("subtitle"),
                 index=args.get("index"),
-                query_timezone=_get_query_timezone(schedule_headers),
+                query_timezone=timezone_name,
                 group_by=args.get("group_by"),
                 sort_by=args.get("sort_by"),
                 expand=args.get("expand"),
