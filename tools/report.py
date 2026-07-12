@@ -8,6 +8,61 @@ import datetime
 # Bindings that store Unix epoch milliseconds (converted to ISO for display)
 EPOCH_BINDINGS = frozenset(["event_start_time"])
 
+# Per-binding column typing so the grid can sort/format numerically instead of
+# treating everything as a String. Maps alias -> (dataType, optional wijmo format).
+# dataType is one of: String, Number, Boolean, Date.
+_CURRENCY_BINDINGS = frozenset(["opportunity_revenue"])
+_NUMBER_BINDINGS = frozenset(["event_duration_days", "duration", "attendees"])
+_DATE_BINDINGS = frozenset(["event_start_time", "start_time", "end_time"])
+_BOOLEAN_BINDINGS = frozenset(
+    ["is_active", "is_remote", "decision_maker", "influencer", "technical", "is_technical"]
+)
+
+# Row-expand registry: fan one event hit into one row per nested array element
+# (e.g. one row per attendee). Bindings listed in an entry's item_fields resolve
+# against each array element; all other bindings resolve against the event hit.
+# NOTE: item field paths are seeded from known attendee shapes and should be
+# validated against live OpenSearch data before relying on every column.
+_ATTENDEE_ITEM_FIELDS = {
+    "attendee_name": "attendeeName",
+    "attendee_first_name": "firstName",
+    "attendee_last_name": "lastName",
+    "attendee_title": "businessTitle",
+    "attendee_email": "email",
+    "attendee_company": "company",
+    "attendee_prefix": "prefix",
+    "chief_officer_title": "chiefOfficerTitle",
+    "is_remote": "isRemote",
+    "decision_maker": "decisionMaker",
+    "is_technical": "isTechnical",
+    "influencer": "influencer",
+}
+
+ROW_EXPAND = {
+    "external_attendees": {
+        "path": "eventFormData.EXTERNAL_ATTENDEES",
+        "item_fields": _ATTENDEE_ITEM_FIELDS,
+    },
+    "internal_attendees": {
+        "path": "eventFormData.INTERNAL_ATTENDEES",
+        "item_fields": _ATTENDEE_ITEM_FIELDS,
+    },
+}
+
+
+def _infer_column_meta(binding):
+    """Return (dataType, format) for a binding so numbers/dates/booleans render
+    and sort correctly. format is a Wijmo format string or None."""
+    if binding in _CURRENCY_BINDINGS:
+        return "Number", "c0"
+    if binding in _NUMBER_BINDINGS:
+        return "Number", "n0"
+    if binding in _DATE_BINDINGS:
+        return "Date", None
+    if binding in _BOOLEAN_BINDINGS:
+        return "Boolean", None
+    return "String", None
+
 # Alias → dot path into _source (path without .keyword for stored doc; we try both)
 REPORT_FIELD_PATHS = {
     # Event-level
@@ -128,20 +183,69 @@ def flatten_source_to_row(source, bindings, field_paths=None):
     return row
 
 
-def build_report_rows(hits, columns, max_rows=None, field_paths=None):
+def _get_list(obj, path):
+    """Traverse a dot path and return the list found at the end (or [] if none).
+    Unlike _get_nested, this does not collapse the final list to its first item."""
+    for key in path.split("."):
+        if isinstance(obj, list):
+            obj = obj[0] if obj else None
+        if not isinstance(obj, dict):
+            return []
+        obj = obj.get(key)
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        return [obj]
+    return []
+
+
+def _expand_hit_to_rows(source, bindings, expand_cfg, paths):
+    """Fan one event source into one row per nested array element.
+
+    Event-level bindings are resolved once from the hit; item-level bindings
+    (those in expand_cfg.item_fields) are resolved per element. An event with
+    no elements still yields one row (item columns null) so it isn't dropped.
+    """
+    item_fields = expand_cfg.get("item_fields", {})
+    event_bindings = [b for b in bindings if b not in item_fields]
+    item_bindings = [b for b in bindings if b in item_fields]
+    base_row = flatten_source_to_row(source, event_bindings, paths)
+
+    items = _get_list(source, expand_cfg["path"])
+    if not items:
+        row = dict(base_row)
+        for b in item_bindings:
+            row[b] = None
+        return [row]
+
+    rows = []
+    for item in items:
+        row = dict(base_row)
+        for b in item_bindings:
+            row[b] = _get_nested(item, item_fields[b]) if isinstance(item, dict) else None
+        rows.append(row)
+    return rows
+
+
+def build_report_rows(hits, columns, max_rows=None, field_paths=None, expand=None):
     """
     Convert OpenSearch run_raw_dsl hits to list of flat row dicts.
     hits: list of { "source": {...}, ... }
     columns: list of { "binding": str, "header": str (optional), "dataType": str (optional) }
+    expand: optional key into ROW_EXPAND to fan each hit into one row per nested
+            array element (e.g. "external_attendees" → one row per attendee).
     """
     bindings = [c.get("binding", c) if isinstance(c, dict) else c for c in columns]
     paths = field_paths or REPORT_FIELD_PATHS
+    expand_cfg = ROW_EXPAND.get(expand) if expand else None
     rows = []
     selected_hits = hits[:max_rows] if max_rows is not None else hits
     for h in selected_hits:
         source = h.get("source", h.get("_source", {}))
-        row = flatten_source_to_row(source, bindings, paths)
-        rows.append(row)
+        if expand_cfg:
+            rows.extend(_expand_hit_to_rows(source, bindings, expand_cfg, paths))
+        else:
+            rows.append(flatten_source_to_row(source, bindings, paths))
     return rows
 
 
@@ -170,11 +274,17 @@ def format_report(
 
     grid_columns = []
     for c in columns:
+        binding = c.get("binding", c) if isinstance(c, dict) else c
+        inferred_type, inferred_format = _infer_column_meta(binding)
         col = {
-            "binding": c.get("binding", c) if isinstance(c, dict) else c,
+            "binding": binding,
             "header": c.get("header") if isinstance(c, dict) else str(c),
-            "dataType": c.get("dataType", "String"),
+            # Explicit dataType/format from caller wins; otherwise infer from binding.
+            "dataType": (c.get("dataType") if isinstance(c, dict) else None) or inferred_type,
         }
+        fmt = (c.get("format") if isinstance(c, dict) else None) or inferred_format
+        if fmt:
+            col["format"] = fmt
         if col["header"] is None:
             col["header"] = col["binding"].replace("_", " ").title()
         grid_columns.append(col)
@@ -203,6 +313,28 @@ def format_report(
     }
 
 
+def _build_group_descriptions(group_by):
+    """Convert a simple list of bindings into Wijmo groupDescriptions."""
+    if not group_by:
+        return []
+    return [{"binding": b} for b in group_by if isinstance(b, str) and b]
+
+
+def _build_sort_descriptions(sort_by):
+    """Convert [{binding, direction}] (or bare binding strings) into Wijmo
+    sortDescriptions. direction defaults to ascending."""
+    if not sort_by:
+        return []
+    descriptions = []
+    for s in sort_by:
+        if isinstance(s, str):
+            descriptions.append({"binding": s, "ascending": True})
+        elif isinstance(s, dict) and s.get("binding"):
+            direction = str(s.get("direction", "asc")).lower()
+            descriptions.append({"binding": s["binding"], "ascending": direction != "desc"})
+    return descriptions
+
+
 def generate_report(
     dsl_query,
     columns,
@@ -211,10 +343,18 @@ def generate_report(
     index=None,
     max_rows=None,
     query_timezone=None,
+    group_by=None,
+    sort_by=None,
+    expand=None,
 ):
     """
     Run an OpenSearch DSL query, flatten hits to rows, and return reportUiConfig + reportData.
     Use from the generate_report tool so the LLM does not send large payloads.
+
+    group_by: optional list of column bindings to group rows by (e.g. ["region"]).
+    sort_by: optional list of {"binding": str, "direction": "asc"|"desc"} for grid sorting.
+    expand: optional ROW_EXPAND key to fan each event into one row per nested array
+            element (e.g. "external_attendees" for an attendee-level report).
     """
     try:
         from opensearch_client import run_raw_dsl
@@ -247,5 +387,12 @@ def generate_report(
         }
 
     hits = result.get("hits", [])
-    rows = build_report_rows(hits, columns, max_rows=max_rows)
-    return format_report(rows, columns, title=title, subtitle=subtitle)
+    rows = build_report_rows(hits, columns, max_rows=max_rows, expand=expand)
+    return format_report(
+        rows,
+        columns,
+        title=title,
+        subtitle=subtitle,
+        group_descriptions=_build_group_descriptions(group_by),
+        sort_descriptions=_build_sort_descriptions(sort_by),
+    )

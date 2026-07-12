@@ -457,6 +457,27 @@ tools = [
                     "type": "string",
                     "description": "OpenSearch index. Omit for default.",
                 },
+                "group_by": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of column bindings to group rows by in the grid (e.g. [\"region\"] or [\"status\"]). Use when the user asks to group/break down the report by a field.",
+                },
+                "sort_by": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "binding": {"type": "string", "description": "Column binding to sort on."},
+                            "direction": {"type": "string", "enum": ["asc", "desc"], "description": "Sort direction. Default asc."},
+                        },
+                    },
+                    "description": "Optional grid sort order, e.g. [{\"binding\": \"opportunity_revenue\", \"direction\": \"desc\"}].",
+                },
+                "expand": {
+                    "type": "string",
+                    "enum": ["external_attendees", "internal_attendees"],
+                    "description": "Optional. Fan each event into one row per nested attendee for an attendee-level report. Use item-level column bindings like attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker. Omit for a normal one-row-per-event report.",
+                },
             },
             "required": ["dsl_query", "columns", "title"],
         },
