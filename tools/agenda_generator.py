@@ -93,6 +93,10 @@ class OraclePresenter(BaseModel):
 
 class AgendaSession(BaseModel):
     """A single session in the agenda."""
+    day: int = Field(
+        default=1,
+        description="Day of the briefing this session belongs to (1-based). Always 1 for single-day events.",
+    )
     time_slot: str = Field(description="Time range, e.g., '10:00 AM - 10:45 AM'")
     title: str = Field(description="Action-oriented session title")
     format: Literal["Presentation", "Demo", "Roundtable", "Working Session"] = Field(
@@ -127,6 +131,14 @@ class StrategicNotes(BaseModel):
     follow_up_actions: List[str] = Field(
         default_factory=list,
         description="Recommended follow-up actions"
+    )
+    assumptions: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Assumptions made because source data was missing (e.g. 'No meeting "
+            "objective on file — assumed evaluation-stage briefing'). Empty when "
+            "all key data was available."
+        ),
     )
 
 
@@ -537,6 +549,7 @@ def _fetch_meeting_context_os(
         "tier": visit.get("tier"),
         "start_time_ms": hit.get("startTime"),
         "timezone": hit.get("timezone"),
+        "duration_days": hit.get("duration"),
     }
     actual_event_id = hit.get("eventId")
     actual_company = visit.get("customerName") or company_name
@@ -615,7 +628,7 @@ def _fetch_meeting_context_os(
 
 # Source fields we request from the events index
 _EVENT_SOURCE_FIELDS = [
-    "eventId", "eventName", "startTime", "timezone",
+    "eventId", "eventName", "startTime", "timezone", "duration",
     "eventFormData.VISIT_INFO",
     "eventFormData.EXTERNAL_ATTENDEES",
     "eventFormData.INTERNAL_ATTENDEES",
@@ -1100,40 +1113,70 @@ def _parse_time_slot(slot: str) -> Optional[tuple]:
     return start, end
 
 
-def _validate_agenda_sessions(agenda: "GeneratedAgenda") -> List[str]:
+def _validate_agenda_sessions(agenda: "GeneratedAgenda", expected_days: int = 1) -> List[str]:
     """
     Deterministically check the LLM's session times. Returns a list of
     human-readable issues (empty list = agenda is well-formed).
 
-    Checks: parseable slots, end-after-start, within the configured day window,
-    no overlap with the previous session, and a lunch break present.
+    Checks (per day): parseable slots, end-after-start, within the configured
+    day window, no overlap with the previous session on the same day, and a
+    lunch break present. For multi-day events, also checks every expected day
+    has sessions.
     """
     issues: List[str] = []
     day_start = _parse_clock(AGENDA_DAY_START)
     day_end = _parse_clock(AGENDA_DAY_END)
-    prev_end: Optional[int] = None
 
+    # Group sessions by day, preserving order within each day
+    by_day: Dict[int, list] = {}
     for i, s in enumerate(agenda.sessions, 1):
-        label = f"Session {i} ('{s.title}')"
-        parsed = _parse_time_slot(s.time_slot)
-        if parsed is None:
-            issues.append(f"{label} has an unparseable time_slot '{s.time_slot}'. Use format 'H:MM AM - H:MM PM'.")
-            continue
-        start, end = parsed
-        if end <= start:
-            issues.append(f"{label} ends at or before it starts ({s.time_slot}).")
-        if day_start is not None and start < day_start:
-            issues.append(f"{label} starts before the day window ({AGENDA_DAY_START}).")
-        if day_end is not None and end > day_end:
-            issues.append(f"{label} ends after the day window ({AGENDA_DAY_END}).")
-        if prev_end is not None and start < prev_end:
-            issues.append(f"{label} overlaps the previous session (it starts before the prior session ends).")
-        prev_end = end
+        day = s.day if isinstance(getattr(s, "day", None), int) and s.day >= 1 else 1
+        by_day.setdefault(day, []).append((i, s))
 
-    if not any("lunch" in (s.title or "").lower() for s in agenda.sessions):
-        issues.append(f"No lunch break is scheduled. Add a lunch session between {AGENDA_DAY_START} and {AGENDA_DAY_END}.")
+    for day in sorted(by_day):
+        day_label = f" on day {day}" if expected_days > 1 or len(by_day) > 1 else ""
+        prev_end: Optional[int] = None
+        for i, s in by_day[day]:
+            label = f"Session {i} ('{s.title}'){day_label}"
+            parsed = _parse_time_slot(s.time_slot)
+            if parsed is None:
+                issues.append(f"{label} has an unparseable time_slot '{s.time_slot}'. Use format 'H:MM AM - H:MM PM'.")
+                continue
+            start, end = parsed
+            if end <= start:
+                issues.append(f"{label} ends at or before it starts ({s.time_slot}).")
+            if day_start is not None and start < day_start:
+                issues.append(f"{label} starts before the day window ({AGENDA_DAY_START}).")
+            if day_end is not None and end > day_end:
+                issues.append(f"{label} ends after the day window ({AGENDA_DAY_END}).")
+            if prev_end is not None and start < prev_end:
+                issues.append(f"{label} overlaps the previous session (it starts before the prior session ends).")
+            prev_end = end
+
+        if not any("lunch" in (s.title or "").lower() for _, s in by_day[day]):
+            issues.append(
+                f"No lunch break is scheduled{day_label or ' '}. Add a lunch session between {AGENDA_DAY_START} and {AGENDA_DAY_END}."
+            )
+
+    # Multi-day coverage: every expected day must have sessions
+    for day in range(1, max(1, expected_days) + 1):
+        if day not in by_day:
+            issues.append(
+                f"This is a {expected_days}-day briefing but day {day} has no sessions. "
+                f"Create sessions for every day (set the day field 1..{expected_days})."
+            )
 
     return issues
+
+
+def _event_num_days(meeting: Optional[Dict[str, Any]]) -> int:
+    """Number of briefing days to schedule, from the event's duration field.
+    Clamped to 1..5 (longer durations are almost certainly data errors)."""
+    try:
+        days = int((meeting or {}).get("duration_days") or 1)
+    except (TypeError, ValueError):
+        days = 1
+    return max(1, min(days, 5))
 
 
 def _format_correction_note(issues: List[str]) -> str:
@@ -1219,6 +1262,16 @@ the title as TBD instead of inventing one.
 {json.dumps(presenter_recommendations, indent=2)}
 """
 
+    # Multi-day: how many briefing days to schedule (from the event's duration)
+    num_days = _event_num_days(meeting)
+
+    # Data gaps: critical fields missing from the meeting record — the LLM is
+    # told to state its assumptions instead of silently filling with generics.
+    missing_fields = [
+        f for f in ("industry", "visit_focus", "meeting_objective", "sales_plays", "pillars")
+        if not meeting.get(f)
+    ]
+
     # ------------------------------------------------------------------ #
     #  Build prompt
     # ------------------------------------------------------------------ #
@@ -1238,6 +1291,8 @@ the title as TBD instead of inventing one.
         has_ebd=has_ebd,
         presenter_recommendations=presenter_recommendations,
         correction_note=correction_note,
+        num_days=num_days,
+        missing_fields=missing_fields,
     )
 
     logger.info("Generating structured agenda with LLM...")
@@ -1334,11 +1389,32 @@ def _build_agenda_prompt(
     *, meeting, total_attendee_count, attendees, c_level_attendees,
     decision_makers, technical_attendees, remote_attendees, external_attendees,
     previous, similar, presenter_section, ebd_section, has_ebd,
-    presenter_recommendations, correction_note=None,
+    presenter_recommendations, correction_note=None, num_days=1, missing_fields=None,
 ) -> str:
     """Build the user prompt for the LLM."""
     correction_section = f"\n\n## CORRECTIONS REQUIRED\n\n{correction_note}\n" if correction_note else ""
-    return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}
+    gaps_section = ""
+    if missing_fields:
+        gaps_section = (
+            "\n\n## DATA GAPS\n\n"
+            f"The following fields are missing from the meeting record: {', '.join(missing_fields)}. "
+            "Do NOT invent values for them. Where you have to assume something to build the agenda, "
+            "record each assumption as a short bullet in strategic_notes.assumptions so the requester "
+            "can confirm or correct it.\n"
+        )
+    if num_days > 1:
+        day_requirement = (
+            f"1. This is a {num_days}-DAY briefing. Create sessions for EVERY day: set the day field "
+            f"(1..{num_days}) on each session. Each day runs {AGENDA_DAY_START} - {AGENDA_DAY_END} with "
+            f"{AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions AND its own lunch break. Give each day a "
+            "coherent theme (e.g. day 1 = vision/strategy, day 2 = deep-dives/planning) and avoid repeating sessions across days."
+        )
+    else:
+        day_requirement = (
+            f"1. Create {AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions covering "
+            f"{AGENDA_DAY_START} - {AGENDA_DAY_END} (single day; day field = 1)."
+        )
+    return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}{gaps_section}
 
 ## MEETING CONTEXT
 
@@ -1374,8 +1450,8 @@ External: {len(external_attendees)}
 
 ## REQUIREMENTS
 
-1. Create {AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions covering {AGENDA_DAY_START} - {AGENDA_DAY_END}.
-2. Include a lunch break.
+{day_requirement}
+2. Include a lunch break{' each day' if num_days > 1 else ''}.
 3. Tailor to {meeting.get('industry')} industry.
 4. Address visit focus: {meeting.get('visit_focus')}.
 5. Incorporate sales plays: {meeting.get('sales_plays')}.
@@ -1630,13 +1706,21 @@ def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
     lines.append(agenda.executive_summary)
     lines.append("")
     
-    # Sessions
+    # Sessions (grouped by day when the briefing spans multiple days)
     lines.append("---")
     lines.append("")
     lines.append("## Agenda Sessions")
     lines.append("")
-    
+
+    multi_day = len({getattr(s, "day", 1) or 1 for s in agenda.sessions}) > 1
+    current_day = None
     for session in agenda.sessions:
+        if multi_day:
+            day = getattr(session, "day", 1) or 1
+            if day != current_day:
+                current_day = day
+                lines.append(f"## Day {day}")
+                lines.append("")
         lines.append(f"### {session.time_slot}")
         lines.append(f"**Title:** {session.title}  ")
         lines.append(f"**Format:** {session.format}  ")
@@ -1671,7 +1755,13 @@ def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
         for action in agenda.strategic_notes.follow_up_actions:
             lines.append(f"- {action}")
         lines.append("")
-    
+
+    if agenda.strategic_notes.assumptions:
+        lines.append("**Assumptions Made (missing data — please confirm):**")
+        for assumption in agenda.strategic_notes.assumptions:
+            lines.append(f"- {assumption}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -1840,7 +1930,8 @@ def generate_agenda(
         )
 
         # Step 3b: Validate session times; attempt one deterministic repair pass.
-        validation_issues = _validate_agenda_sessions(agenda)
+        expected_days = _event_num_days(meeting)
+        validation_issues = _validate_agenda_sessions(agenda, expected_days=expected_days)
         if validation_issues:
             logger.warning(
                 f"Agenda validation found {len(validation_issues)} issue(s); attempting one repair pass: {validation_issues}"
@@ -1853,7 +1944,7 @@ def generate_agenda(
                     ebd_file_id=ebd_file_id,
                     correction_note=_format_correction_note(validation_issues),
                 )
-                repaired_issues = _validate_agenda_sessions(repaired)
+                repaired_issues = _validate_agenda_sessions(repaired, expected_days=expected_days)
                 # Keep the repair only if it's no worse than the original.
                 if len(repaired_issues) <= len(validation_issues):
                     agenda = repaired
