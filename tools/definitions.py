@@ -495,6 +495,11 @@ tools = [
                     },
                     "description": "Optional grid sort order, e.g. [{\"binding\": \"opportunity_revenue\", \"direction\": \"desc\"}].",
                 },
+                "expand": {
+                    "type": "string",
+                    "enum": ["external_attendees", "internal_attendees"],
+                    "description": "Optional. Fan each event into one row per nested attendee for an attendee-level report. Use item-level column bindings like attendee_name, attendee_title, chief_officer_title, is_remote, decision_maker. Omit for a normal one-row-per-event report.",
+                },
             },
             "required": ["dsl_query", "columns", "title"],
         },

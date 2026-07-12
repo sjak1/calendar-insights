@@ -559,6 +559,7 @@ def execute_tool(
                 query_timezone=_get_query_timezone(schedule_headers),
                 group_by=args.get("group_by"),
                 sort_by=args.get("sort_by"),
+                expand=args.get("expand"),
             )
             output = {"generate_report": _summarize_report_for_llm(result)}
             logger.info(
