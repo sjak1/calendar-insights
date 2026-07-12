@@ -1064,11 +1064,90 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
     return recommendations
 
 
+_TIME_RE = re.compile(r"(\d{1,2}:\d{2}\s*[APap]\.?[Mm]\.?)")
+
+
+def _parse_clock(value: str) -> Optional[int]:
+    """Parse a clock string like '10:00 AM' into minutes-since-midnight, or None."""
+    if not value:
+        return None
+    cleaned = value.strip().upper().replace(".", "").replace(" ", "")
+    try:
+        from datetime import datetime as _dt
+        parsed = _dt.strptime(cleaned, "%I:%M%p")
+        return parsed.hour * 60 + parsed.minute
+    except ValueError:
+        return None
+
+
+def _parse_time_slot(slot: str) -> Optional[tuple]:
+    """Parse 'H:MM AM - H:MM PM' into (start_minutes, end_minutes), or None."""
+    if not slot:
+        return None
+    times = _TIME_RE.findall(slot)
+    if len(times) < 2:
+        return None
+    start = _parse_clock(times[0])
+    end = _parse_clock(times[1])
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def _validate_agenda_sessions(agenda: "GeneratedAgenda") -> List[str]:
+    """
+    Deterministically check the LLM's session times. Returns a list of
+    human-readable issues (empty list = agenda is well-formed).
+
+    Checks: parseable slots, end-after-start, within the configured day window,
+    no overlap with the previous session, and a lunch break present.
+    """
+    issues: List[str] = []
+    day_start = _parse_clock(AGENDA_DAY_START)
+    day_end = _parse_clock(AGENDA_DAY_END)
+    prev_end: Optional[int] = None
+
+    for i, s in enumerate(agenda.sessions, 1):
+        label = f"Session {i} ('{s.title}')"
+        parsed = _parse_time_slot(s.time_slot)
+        if parsed is None:
+            issues.append(f"{label} has an unparseable time_slot '{s.time_slot}'. Use format 'H:MM AM - H:MM PM'.")
+            continue
+        start, end = parsed
+        if end <= start:
+            issues.append(f"{label} ends at or before it starts ({s.time_slot}).")
+        if day_start is not None and start < day_start:
+            issues.append(f"{label} starts before the day window ({AGENDA_DAY_START}).")
+        if day_end is not None and end > day_end:
+            issues.append(f"{label} ends after the day window ({AGENDA_DAY_END}).")
+        if prev_end is not None and start < prev_end:
+            issues.append(f"{label} overlaps the previous session (it starts before the prior session ends).")
+        prev_end = end
+
+    if not any("lunch" in (s.title or "").lower() for s in agenda.sessions):
+        issues.append(f"No lunch break is scheduled. Add a lunch session between {AGENDA_DAY_START} and {AGENDA_DAY_END}.")
+
+    return issues
+
+
+def _format_correction_note(issues: List[str]) -> str:
+    """Build a correction section instructing the LLM to fix specific time issues."""
+    bullets = "\n".join(f"- {issue}" for issue in issues)
+    return (
+        "The previous draft of this agenda had scheduling problems. "
+        "Regenerate the full agenda fixing ALL of the following, while keeping the "
+        "same topics and presenters where possible. Sessions must be in chronological "
+        "order, non-overlapping, contiguous within the day window, and include a lunch break:\n"
+        f"{bullets}"
+    )
+
+
 def _generate_agenda_with_llm(
     context: Dict[str, Any],
     ebd_context: Optional[Dict[str, Any]] = None,
     ebd_file_url: Optional[str] = None,
     ebd_file_id: Optional[str] = None,
+    correction_note: Optional[str] = None,
 ) -> GeneratedAgenda:
     """
     Use LLM to generate a tailored agenda based on the context.
@@ -1152,6 +1231,7 @@ the title as TBD instead of inventing one.
         ebd_section=ebd_section,
         has_ebd=has_ebd,
         presenter_recommendations=presenter_recommendations,
+        correction_note=correction_note,
     )
 
     logger.info("Generating structured agenda with LLM...")
@@ -1248,10 +1328,11 @@ def _build_agenda_prompt(
     *, meeting, total_attendee_count, attendees, c_level_attendees,
     decision_makers, technical_attendees, remote_attendees, external_attendees,
     previous, similar, presenter_section, ebd_section, has_ebd,
-    presenter_recommendations,
+    presenter_recommendations, correction_note=None,
 ) -> str:
     """Build the user prompt for the LLM."""
-    return f"""Generate a professional executive briefing agenda based on the data below.
+    correction_section = f"\n\n## CORRECTIONS REQUIRED\n\n{correction_note}\n" if correction_note else ""
+    return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}
 
 ## MEETING CONTEXT
 
@@ -1752,6 +1833,28 @@ def generate_agenda(
             ebd_file_id=ebd_file_id,
         )
 
+        # Step 3b: Validate session times; attempt one deterministic repair pass.
+        validation_issues = _validate_agenda_sessions(agenda)
+        if validation_issues:
+            logger.warning(
+                f"Agenda validation found {len(validation_issues)} issue(s); attempting one repair pass: {validation_issues}"
+            )
+            try:
+                repaired = _generate_agenda_with_llm(
+                    context,
+                    ebd_context=ebd_context,
+                    ebd_file_url=ebd_file_url,
+                    ebd_file_id=ebd_file_id,
+                    correction_note=_format_correction_note(validation_issues),
+                )
+                repaired_issues = _validate_agenda_sessions(repaired)
+                # Keep the repair only if it's no worse than the original.
+                if len(repaired_issues) <= len(validation_issues):
+                    agenda = repaired
+                    validation_issues = repaired_issues
+            except Exception as e:
+                logger.warning(f"Agenda repair pass failed ({e}); keeping original agenda.")
+
         logger.info(f"Successfully generated agenda for {meeting.get('company_name')}")
 
         # Step 4: Compute confidence score
@@ -1774,6 +1877,7 @@ def generate_agenda(
             "session_count": len(agenda.sessions),
             "presenter_recommendations": presenter_recommendations,
             "confidence": confidence,
+            "validation_issues": validation_issues,
         }
 
         if output_format in ("structured", "both"):
