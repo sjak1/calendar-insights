@@ -686,6 +686,63 @@ def execute_tool(
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")
             return output
 
+        elif tool_name == "search_briefingiq_endpoints":
+            from tools.api_catalog import search_endpoints
+            result = search_endpoints(args["query"])
+            output = {"search_briefingiq_endpoints": result}
+            logger.info(
+                f"✓ {tool_name} returned {len(result)} endpoints for query={args.get('query')!r}"
+            )
+            return output
+
+        elif tool_name == "call_briefingiq_endpoint":
+            from tools.api_catalog import call_endpoint
+            path_params = dict(args.get("path_params") or {})
+            # Default event-id placeholders to the current event from header context.
+            if context_event_id:
+                path_params.setdefault("eventid", context_event_id)
+                path_params.setdefault("eventId", context_event_id)
+            result = call_endpoint(
+                endpoint_id=args["endpoint_id"],
+                path_params=path_params,
+                query_params=args.get("query_params"),
+                schedule_headers=schedule_headers,
+            )
+            output = {"call_briefingiq_endpoint": result}
+            output_str = json.dumps(output, default=str)
+            logger.info(
+                f"✓ {tool_name} {args.get('endpoint_id')} returned {len(output_str)} chars"
+            )
+            return output
+
+        elif tool_name == "search_briefingiq_endpoints":
+            from tools.api_catalog import search_endpoints
+            result = search_endpoints(args["query"])
+            output = {"search_briefingiq_endpoints": result}
+            logger.info(
+                f"✓ {tool_name} returned {len(result)} endpoints for query={args.get('query')!r}"
+            )
+            return output
+
+        elif tool_name == "call_briefingiq_endpoint":
+            from tools.api_catalog import call_endpoint
+            path_params = dict(args.get("path_params") or {})
+            # Default event-id placeholders to the current event from header context.
+            if context_event_id:
+                path_params.setdefault("eventid", context_event_id)
+                path_params.setdefault("eventId", context_event_id)
+            result = call_endpoint(
+                endpoint_id=args["endpoint_id"],
+                path_params=path_params,
+                query_params=args.get("query_params"),
+                schedule_headers=schedule_headers,
+            )
+            output = {"call_briefingiq_endpoint": result}
+            logger.info(
+                f"✓ {tool_name} {args.get('endpoint_id')} returned {len(json.dumps(output, default=str))} chars"
+            )
+            return output
+
         else:
             logger.warning(f"Unknown tool: {tool_name}")
             return {"error": f"Unknown tool: {tool_name}"}

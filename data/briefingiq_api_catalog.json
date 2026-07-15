@@ -1,0 +1,4202 @@
+{
+ "endpoints": [
+  {
+   "id": "get_actions",
+   "method": "GET",
+   "path": "/actions",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Action API'S",
+   "summary": "1. API is used to fetch all records from the M_ACTION table and check whether each record is present in the M_EVENT_ACTION table. If a record is associated with a category or event, the isEnabled flag is returned as tru\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Action Name"
+    }
+   ]
+  },
+  {
+   "id": "get_activities",
+   "method": "GET",
+   "path": "/activities",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Activities",
+   "summary": "This API is used to fetch all event field mappings based on x-cloud-eventid and x-cloud-customerid from the request headers, with the default sorting applied in ascending order of displayText.",
+   "params": [
+    {
+     "name": "activityType",
+     "in": "query",
+     "required": true,
+     "description": "Activity type should be category / agenda"
+    },
+    {
+     "name": "endDate",
+     "in": "query",
+     "required": true,
+     "description": "Activity end date"
+    },
+    {
+     "name": "resourceType",
+     "in": "query",
+     "required": true,
+     "description": "resource type"
+    },
+    {
+     "name": "startDate",
+     "in": "query",
+     "required": true,
+     "description": "Activity start date"
+    },
+    {
+     "name": "view",
+     "in": "query",
+     "required": true,
+     "description": "activities view liek calendar view or list view"
+    }
+   ]
+  },
+  {
+   "id": "get_activities_previewDigitalSignage",
+   "method": "GET",
+   "path": "/activities/previewDigitalSignage",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Activities",
+   "summary": "Preview digital signage slides for the current event",
+   "params": []
+  },
+  {
+   "id": "get_activitydays_activitydayid_resources",
+   "method": "GET",
+   "path": "/activitydays/{activitydayid}/resources",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Activity Day Resource API'S",
+   "summary": "1. API is used to fetch all Activity Day Resources from T_EVENT_ACT_DAY_RESOURCE Table and sorted in startTime based asc order.",
+   "params": [
+    {
+     "name": "activitydayid",
+     "in": "path",
+     "required": true,
+     "description": "Activity Day UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_activitydays_activitydayid_resources_resourceid",
+   "method": "GET",
+   "path": "/activitydays/{activitydayid}/resources/{resourceid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Activity Day Resource API'S",
+   "summary": "API is Used to fetch a specific template Based on eventId and templateId.",
+   "params": [
+    {
+     "name": "activitydayid",
+     "in": "path",
+     "required": true,
+     "description": "Activity Day UniqueId"
+    },
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_activitytypes",
+   "method": "GET",
+   "path": "/activitytypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Activity Type API'S",
+   "summary": "1. API is used to fetch all active and inactive activity types records along with passed headers, sorted by activityTypeName ASC order. 2. If the UI passes the query parameter isActive=true, then all active activity typ\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Activity Type Name"
+    }
+   ]
+  },
+  {
+   "id": "get_admin_features",
+   "method": "GET",
+   "path": "/admin/features",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Feature Access API'S",
+   "summary": "1. The API is used to fetch all isActive true records from the M_FEATURE table in case-insensitive ascending order by \"featureName\".",
+   "params": []
+  },
+  {
+   "id": "get_admin_reports",
+   "method": "GET",
+   "path": "/admin/reports",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Report API's",
+   "summary": "1. The API fetches all active reports from the M_REPORT table, ordered by sortOrder and displayText in ascending order. 2. To retrieve reports of a specific type, the UI can pass the query parameter reportType=DASHBOARD\u2026",
+   "params": []
+  },
+  {
+   "id": "get_admin_reports_reportId_data",
+   "method": "GET",
+   "path": "/admin/reports/{reportId}/data",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get Report for Event",
+   "summary": "This API is used to get the report data for the given report unique id. fromDate and toDate query parameters are used to get if the report data is required for the particular period. x-cloud-eventid header is used to se\u2026",
+   "params": [
+    {
+     "name": "reportId",
+     "in": "path",
+     "required": true,
+     "description": "Report Uniqueid"
+    },
+    {
+     "name": "fromDate",
+     "in": "query",
+     "required": true,
+     "description": "From Date"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort"
+    },
+    {
+     "name": "sortType",
+     "in": "query",
+     "required": false,
+     "description": "Sort Type"
+    },
+    {
+     "name": "toDate",
+     "in": "query",
+     "required": true,
+     "description": "To Date"
+    }
+   ]
+  },
+  {
+   "id": "get_admin_reports_reportid",
+   "method": "GET",
+   "path": "/admin/reports/{reportid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Report API's",
+   "summary": "API is Used to fetch a specific Report based on given reportId in path variable.",
+   "params": [
+    {
+     "name": "reportid",
+     "in": "path",
+     "required": true,
+     "description": "Report UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_aliasnames",
+   "method": "GET",
+   "path": "/aliasnames",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Alias Name API'S",
+   "summary": "1. The API fetches all Alias Name Records from the M_ALIAS_NAME table and sorts them by case-insensitive aliasName ASC order. Search by Alias Name: http://localhost:8080/event/api/aliasnames?q=Customer",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Alias Name"
+    }
+   ]
+  },
+  {
+   "id": "get_aliasnames_aliasnameid",
+   "method": "GET",
+   "path": "/aliasnames/{aliasnameid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Alias Name API'S",
+   "summary": "API is Used to fetch a specific Alias Name based on given aliasnameid in the url.",
+   "params": [
+    {
+     "name": "aliasnameid",
+     "in": "path",
+     "required": true,
+     "description": "Alias Name UiqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_categorytypes",
+   "method": "GET",
+   "path": "/categorytypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Type API'S",
+   "summary": "The API is used to fetch all isActive = true categoryTypes from M_CATEGORY_TYPE Table in categoryTypeName case-insensitive asc order.",
+   "params": []
+  },
+  {
+   "id": "get_categorytypes_categorytypeid_categories",
+   "method": "GET",
+   "path": "/categorytypes/{categorytypeid}/categories",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category API'S",
+   "summary": "1. The API fetches all category records from the M_CATEGORY table based on the categoryType from the header and sorts them by categoryName in a case-insensitive and sortOrder in ascending order. 2. The isActive query pa\u2026",
+   "params": [
+    {
+     "name": "categorytypeid",
+     "in": "path",
+     "required": true,
+     "description": "Categorytype UniqueId"
+    },
+    {
+     "name": "IsActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "identifier",
+     "in": "query",
+     "required": false,
+     "description": "Filter by Identifier"
+    },
+    {
+     "name": "parent",
+     "in": "query",
+     "required": false,
+     "description": "Filter by Parent"
+    }
+   ]
+  },
+  {
+   "id": "get_categorytypes_categorytypeid_categories_categoryid",
+   "method": "GET",
+   "path": "/categorytypes/{categorytypeid}/categories/{categoryid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category API'S",
+   "summary": "API is Used to fetch a specific category based on given categoryid in the url.",
+   "params": [
+    {
+     "name": "categoryid",
+     "in": "path",
+     "required": true,
+     "description": "Category UniqueId"
+    },
+    {
+     "name": "categorytypeid",
+     "in": "path",
+     "required": true,
+     "description": "CategoryType UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_colorcodes",
+   "method": "GET",
+   "path": "/colorcodes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Color Code API",
+   "summary": "1. API is used to fetch all records from M_COLOR_CODE Table. 2. All records are fetched in ascending order of description field. 3. Search by Description - http://localhost:8080/event/api/colorcodes?q=Blue",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Description"
+    }
+   ]
+  },
+  {
+   "id": "get_countries",
+   "method": "GET",
+   "path": "/countries",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get All Countries API",
+   "summary": "API to Get All Countries Information",
+   "params": []
+  },
+  {
+   "id": "get_dashboardaccess",
+   "method": "GET",
+   "path": "/dashboardaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Role Dasboard Access API'S",
+   "summary": "1. The API fetches all records, regardless of role, from the M_ROLE_DASHBOARD_ACCESS table based on categorytype, category, and tenant from the header. 2. If the UI passes a role as a query parameter, role-specific reco\u2026",
+   "params": []
+  },
+  {
+   "id": "get_dashboardaccess_dashboardaccessid",
+   "method": "GET",
+   "path": "/dashboardaccess/{dashboardaccessid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Role Dasboard Access API'S",
+   "summary": "API is Used to fetch a specific dashboard access based on given dashboardaccessid in the url.",
+   "params": [
+    {
+     "name": "dashboardaccessid",
+     "in": "path",
+     "required": true,
+     "description": "Dashboard Access UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_dashboards",
+   "method": "GET",
+   "path": "/dashboards",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Dashboard API'S",
+   "summary": "1. The API is used to fetch all dashboard records based on the categorytype, category and tenant/customer ID from the header. 2. If the role is passed as a query parameter, the api checks the M_ROLE_DASHBOARD_ACCESS tab\u2026",
+   "params": []
+  },
+  {
+   "id": "get_dashboards_dashboardid",
+   "method": "GET",
+   "path": "/dashboards/{dashboardid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Dashboard API'S",
+   "summary": "API is used to fetch a specific dashboard based on given dashboardid in the url.",
+   "params": [
+    {
+     "name": "dashboardid",
+     "in": "path",
+     "required": true,
+     "description": "Dashboard UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_dashboards_dashboardid_layouts",
+   "method": "GET",
+   "path": "/dashboards/{dashboardid}/layouts",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Dashboard",
+   "summary": "API is Used to retrieve a specific dashboard layout config based on dashboardid in the url.",
+   "params": [
+    {
+     "name": "dashboardid",
+     "in": "path",
+     "required": true,
+     "description": "Dashboard UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_directory_users",
+   "method": "GET",
+   "path": "/directory/users",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Directory API",
+   "summary": "To read user information from exchange server by email",
+   "params": [
+    {
+     "name": "email",
+     "in": "query",
+     "required": true,
+     "description": "Email address of user"
+    }
+   ]
+  },
+  {
+   "id": "get_documenttypes",
+   "method": "GET",
+   "path": "/documenttypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "uploadTypes",
+   "summary": "1. The api fetches all upload types from the T_UPLOAD_TYPE table. 2. The api returns upload type details along with mimeTypes, contentTypes, roles and template information.",
+   "params": []
+  },
+  {
+   "id": "get_documenttypes_documenttypeid",
+   "method": "GET",
+   "path": "/documenttypes/{documenttypeid}",
+   "spec": "biq-admin.yaml",
+   "tag": "",
+   "summary": "Used to retrieve the upload type based on id.",
+   "params": [
+    {
+     "name": "documenttypeid",
+     "in": "path",
+     "required": true,
+     "description": "ID of the upload type"
+    }
+   ]
+  },
+  {
+   "id": "get_documenttypes_documenttypeid_mimetypes",
+   "method": "GET",
+   "path": "/documenttypes/{documenttypeid}/mimetypes",
+   "spec": "biq-admin.yaml",
+   "tag": "",
+   "summary": "Used to retrieve all mime types based on upload type.",
+   "params": [
+    {
+     "name": "documenttypeid",
+     "in": "path",
+     "required": true,
+     "description": "ID of the upload type"
+    }
+   ]
+  },
+  {
+   "id": "get_documenttypes_documenttypeid_mimetypes_mimetypeid",
+   "method": "GET",
+   "path": "/documenttypes/{documenttypeid}/mimetypes/{mimetypeid}",
+   "spec": "biq-admin.yaml",
+   "tag": "",
+   "summary": "Used to the upload mime type based on id.",
+   "params": [
+    {
+     "name": "documenttypeid",
+     "in": "path",
+     "required": true,
+     "description": "ID of the required mime type"
+    },
+    {
+     "name": "mimetypeid",
+     "in": "path",
+     "required": true,
+     "description": "ID of the required mime type"
+    }
+   ]
+  },
+  {
+   "id": "get_eventcategories",
+   "method": "GET",
+   "path": "/eventcategories",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Category API",
+   "summary": "The API is used to fetch all records from M_EVENT_CATEGORY Table.",
+   "params": []
+  },
+  {
+   "id": "get_eventconfigpageforms",
+   "method": "GET",
+   "path": "/eventconfigpageforms",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Configuration Page Form API'S",
+   "summary": "1. The API is used to fetch all records from the M_EVENT_CONFIG_PAGE_FORM table.",
+   "params": []
+  },
+  {
+   "id": "get_eventconfigpageforms_eventconfigpageformid",
+   "method": "GET",
+   "path": "/eventconfigpageforms/{eventconfigpageformid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Configuration Page Form API'S",
+   "summary": "API is Used to fetch a specific eventconfigpageform based on given eventconfigpageformid in the url.",
+   "params": [
+    {
+     "name": "eventconfigpageformid",
+     "in": "path",
+     "required": true,
+     "description": "Event Config Page Form UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_eventconfigs",
+   "method": "GET",
+   "path": "/eventconfigs",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Configuration Master API'S",
+   "summary": "1. By default the API is used to fetch all records from the M_EVENT_CONFIG_MASTER table based on customer/tenant ID from header in eventConfigName case-insensitive asc order. 2. If the UI sends a category, subcategory,\u2026",
+   "params": [
+    {
+     "name": "category / subcategory / location",
+     "in": "query",
+     "required": false,
+     "description": "Filter by category or subcategory or location"
+    }
+   ]
+  },
+  {
+   "id": "get_eventconfigs_eventconfigid",
+   "method": "GET",
+   "path": "/eventconfigs/{eventconfigid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Configuration Master API'S",
+   "summary": "API is Used to fetch a specific eventconfigmaster based on given eventconfigid in the url.",
+   "params": [
+    {
+     "name": "eventconfigid",
+     "in": "path",
+     "required": true,
+     "description": "Event Config Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_eventpresenters",
+   "method": "GET",
+   "path": "/eventpresenters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Manage Presenter Module - Presenter APIS",
+   "summary": "Used to get all presenters for the given search criteria. The following query params that can be used. status -> can be used to filter by a particular field. Value can be active/inactive/all q -> can be used to pass the\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Q"
+    },
+    {
+     "name": "status",
+     "in": "query",
+     "required": false,
+     "description": "Presenter Status"
+    },
+    {
+     "name": "type",
+     "in": "query",
+     "required": false,
+     "description": "Type of Presenter"
+    }
+   ]
+  },
+  {
+   "id": "get_eventpresenters_presenterId",
+   "method": "GET",
+   "path": "/eventpresenters/{presenterId}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Manage Presenter Module - Presenter APIS",
+   "summary": "Used to get details of a particular presenter by id and type param can take value of permanent/temporary.",
+   "params": [
+    {
+     "name": "presenterId",
+     "in": "path",
+     "required": true,
+     "description": "presenter id"
+    },
+    {
+     "name": "type",
+     "in": "query",
+     "required": true,
+     "description": "Type of Presenter"
+    }
+   ]
+  },
+  {
+   "id": "get_eventrequest_requestId_attendeeType",
+   "method": "GET",
+   "path": "/eventrequest/{requestId}/{attendeeType}",
+   "spec": "biq-event.yaml",
+   "tag": "Attendee Controller",
+   "summary": "API is used to fetch all internal/external attendees based on attendeeType for a given Request. For internal attendee attndeeType = internalattende and for external attendee attendeeType = externalattendees.",
+   "params": [
+    {
+     "name": "attendeeType",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee"
+    },
+    {
+     "name": "requestId",
+     "in": "path",
+     "required": true,
+     "description": "requestId"
+    }
+   ]
+  },
+  {
+   "id": "get_eventrequest_requestId_attendeeType_attendeeId_portlalinvite",
+   "method": "GET",
+   "path": "/eventrequest/{requestId}/{attendeeType}/{attendeeId}/portlalinvite",
+   "spec": "biq-event.yaml",
+   "tag": "Attendee Controller",
+   "summary": "API is used to send Customer Portal Invitation link to a specific external attendee through Email based on attendeeId in path variable. In path varibale attendeeType = externalattendees.",
+   "params": [
+    {
+     "name": "attendeeId",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee ID"
+    },
+    {
+     "name": "attendeeType",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee"
+    },
+    {
+     "name": "requestId",
+     "in": "path",
+     "required": true,
+     "description": "requestId"
+    }
+   ]
+  },
+  {
+   "id": "get_eventrequests_requestId_topics_topicId_presenters",
+   "method": "GET",
+   "path": "/eventrequests/{requestId}/topics/{topicId}/presenters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get Presenters for Topic - Agenda Module",
+   "summary": "Used to get temporary and permanent presenters for a given topic considering request id sent in the path for temporary presenter Example - http://localhost:8080/event/api/eventrequests/FCDACB4C-E110-4F2E-A275-FF1022AD71\u2026",
+   "params": [
+    {
+     "name": "requestId",
+     "in": "path",
+     "required": true,
+     "description": "Request ID"
+    },
+    {
+     "name": "topicId",
+     "in": "path",
+     "required": true,
+     "description": "Topic ID"
+    }
+   ]
+  },
+  {
+   "id": "get_events",
+   "method": "GET",
+   "path": "/events",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event API'S",
+   "summary": "1. By default, the API fetches all events where isActive=true and tenant specific from header and the status (Live,Show setup,Testing,Data setup) mentioned in M_PROPERTY table(KEY_NAME = events.defaults.status). 2. For\u2026",
+   "params": []
+  },
+  {
+   "id": "get_events_details",
+   "method": "GET",
+   "path": "/events/details",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event API'S",
+   "summary": "The API is used to fetch all events related to a tenant and category. The categoryid is query param and it is mandatory url - https://events.briefingiq.com/events/api/events/details?categoryid=4a1b637d-a1e1-4e14-a88b-8e\u2026",
+   "params": [
+    {
+     "name": "categoryid",
+     "in": "query",
+     "required": false,
+     "description": "Filter Category"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventId_reportmappings",
+   "method": "GET",
+   "path": "/events/{eventId}/reportmappings",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Report Mapping API",
+   "summary": "This API is used to fetch all report mappings from BI_EVENT_FIELD_DTLS, T_EVENT_REPORT_MAPPING Tables and Global records from BI_CATEGORY_TYPE_REPORT_MAPPING Table.",
+   "params": [
+    {
+     "name": "eventId",
+     "in": "path",
+     "required": true,
+     "description": "Event Uniqueid"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventId_states",
+   "method": "GET",
+   "path": "/events/{eventId}/states",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get List of states for Event",
+   "summary": "This API is used to get the list of active States based on SHOW and IS_EXPOSABLE flag in the search bar. In response UniqueId, State code, State name is returned.",
+   "params": [
+    {
+     "name": "eventId",
+     "in": "path",
+     "required": true,
+     "description": "Event Uniqueid"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid",
+   "method": "GET",
+   "path": "/events/{eventid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event API'S",
+   "summary": "API is Used to fetch a specific event details based on eventId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_documenttypes",
+   "method": "GET",
+   "path": "/events/{eventid}/documenttypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Document API'S",
+   "summary": "API to fetch document types. Use downloadTemplate link, to download a template.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_documenttypes_documenttypeid",
+   "method": "GET",
+   "path": "/events/{eventid}/documenttypes/{documenttypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Document API'S",
+   "summary": "API to fetch document types. Use downloadTemplate link, to download a template.",
+   "params": [
+    {
+     "name": "documenttypeid",
+     "in": "path",
+     "required": true,
+     "description": "Docuement Type UniqueId"
+    },
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_eventcalendar",
+   "method": "GET",
+   "path": "/events/{eventid}/eventcalendar",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get event Calendar",
+   "summary": "To retrive list of event room calendar.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event ID"
+    },
+    {
+     "name": "eventDate",
+     "in": "query",
+     "required": true,
+     "description": "Event Date"
+    },
+    {
+     "name": "location",
+     "in": "query",
+     "required": true,
+     "description": "Main Location Id"
+    },
+    {
+     "name": "presenter",
+     "in": "query",
+     "required": false,
+     "description": "selected presenter unique identification"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_eventdates",
+   "method": "GET",
+   "path": "/events/{eventid}/eventdates",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Date API'S",
+   "summary": "API is used to fetch all event dates based on eventId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_eventforms",
+   "method": "GET",
+   "path": "/events/{eventid}/eventforms",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event API'S",
+   "summary": "API is Used to fetch a specific event form based on given eventId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_history",
+   "method": "GET",
+   "path": "/events/{eventid}/history",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event API'S",
+   "summary": "",
+   "params": []
+  },
+  {
+   "id": "get_events_eventid_locations",
+   "method": "GET",
+   "path": "/events/{eventid}/locations",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Location API'S",
+   "summary": "By Default this API is used to fetch all active/inactive Main locations and rooms. 1. Here eventid is REQUEST_MASTER uniqueId. 2. If parent and isActive is present in request as RequestParam then it returns all active r\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "name",
+     "in": "query",
+     "required": false,
+     "description": "Location / Room Name"
+    },
+    {
+     "name": "parent",
+     "in": "query",
+     "required": false,
+     "description": "Parent UniqueId"
+    },
+    {
+     "name": "type",
+     "in": "query",
+     "required": false,
+     "description": "LocationType UniqueId - EVENT_LOCATION / ROOM"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_locations_locationid_calendars",
+   "method": "GET",
+   "path": "/events/{eventid}/locations/{locationid}/calendars",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Location Calendar API'S",
+   "summary": "API is used to fetch all Blocked/Restricted slots based on Eventid and locationid.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "locationid",
+     "in": "path",
+     "required": true,
+     "description": "Room UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_locations_locationid_users",
+   "method": "GET",
+   "path": "/events/{eventid}/locations/{locationid}/users",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Location User API",
+   "summary": "The API is used to fetch all users for a given eventId and locationId provided in the path variable, sorted in ascending order by the user's first and last name.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "locationid",
+     "in": "path",
+     "required": true,
+     "description": "Location UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetinglocations",
+   "method": "GET",
+   "path": "/events/{eventid}/meetinglocations",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get vacant timeslots",
+   "summary": "### 1. **Selecting Event Date:** - **Input**: - Event Date (`requestDate`) - **Output**: - All available time slots on that specific `Event Date` group by time slot. ### 2. **Selecting Time Frame:** - **Input**: - `requ\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event ID"
+    },
+    {
+     "name": "interval",
+     "in": "query",
+     "required": true,
+     "description": "Timeslot interval. Currentrly supports 30 / 60"
+    },
+    {
+     "name": "location",
+     "in": "query",
+     "required": true,
+     "description": "location identification"
+    },
+    {
+     "name": "mode",
+     "in": "query",
+     "required": true,
+     "description": "Mode of slot, currently supporting VACANT only."
+    },
+    {
+     "name": "requestDate",
+     "in": "query",
+     "required": true,
+     "description": "Event Date"
+    },
+    {
+     "name": "requestEndDate",
+     "in": "query",
+     "required": false,
+     "description": "Time range end time"
+    },
+    {
+     "name": "requestStartAt",
+     "in": "query",
+     "required": false,
+     "description": "Start time"
+    },
+    {
+     "name": "requestStartDate",
+     "in": "query",
+     "required": false,
+     "description": "Time range start time"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Events",
+   "summary": "Read all meeting of event and filter",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "eventid uniqueId"
+    },
+    {
+     "name": "eventDate",
+     "in": "query",
+     "required": false,
+     "description": "Selected event date as millis"
+    },
+    {
+     "name": "filter",
+     "in": "query",
+     "required": false,
+     "description": "Filter param name"
+    },
+    {
+     "name": "location",
+     "in": "query",
+     "required": false,
+     "description": "location identification"
+    },
+    {
+     "name": "meetingstatus",
+     "in": "query",
+     "required": false,
+     "description": "Filter on meetin status"
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "page number"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "search string"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "page size"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Events",
+   "summary": "1. If module.presenter.enabled event parameter is \"false\" then we return presenters object array in the API Response. 2. If module.opportunityinfo.enabled event parameter is \"false\" then we return opportunities object a\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "event uniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting uniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_documents",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/documents",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Document API'S",
+   "summary": "API to fetch List of Documents based on eventId, meetingId. Use downloadDocument link to download a specific Document.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_opportunities",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/opportunities",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Meeting Opportunity API'S",
+   "summary": "API to get list of Meeting Opportunities i.e both the primary and the secondary opportunity.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_opportunities_opportunityid",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/opportunities/{opportunityid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Meeting Opportunity API'S",
+   "summary": "API to get details of a particular Meeting Opportunity. Opportunity is of two types, primary and the secondary opportunity.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    },
+    {
+     "name": "opportunityid",
+     "in": "path",
+     "required": true,
+     "description": "Event Opportunity UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_presenters",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/presenters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Request Presenter API'S",
+   "summary": "API is Used to fetch all Request Presenters Based on eventId and meetingId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_presenters_presenterid",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/presenters/{presenterid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Request Presenter API'S",
+   "summary": "API is Used to fetch a specific Request Presenter Details based on eventId, meetingId and presenterId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    },
+    {
+     "name": "presenterid",
+     "in": "path",
+     "required": true,
+     "description": "Presenter UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_virtualconnection",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/virtualconnection",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Virtual connection APIS",
+   "summary": "Used to get all the virtual connection information of a meeting",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_virtualconnection_virtualconnectionid",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/virtualconnection/{virtualconnectionid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Virtual connection APIS",
+   "summary": "Used to get virtual connection information of a meeting",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    },
+    {
+     "name": "virtualconnectionid",
+     "in": "path",
+     "required": true,
+     "description": "Virtual Connection UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_attendeetype",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/{attendeetype}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Meeting Attendee API'S",
+   "summary": "API to fetch all Internal / External Attendees based on eventid meetingid and attendeeType.",
+   "params": [
+    {
+     "name": "attendeetype",
+     "in": "path",
+     "required": true,
+     "description": "Type of Attendee"
+    },
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Request Agenda Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_meetings_meetingid_attendeetype_attendeeid",
+   "method": "GET",
+   "path": "/events/{eventid}/meetings/{meetingid}/{attendeetype}/{attendeeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Meeting Attendee API'S",
+   "summary": "API to fetch a particular Internal / External Attendee based on eventId and MeetingId and AttendeeId.",
+   "params": [
+    {
+     "name": "attendeeid",
+     "in": "path",
+     "required": true,
+     "description": "Attendee Id"
+    },
+    {
+     "name": "attendeetype",
+     "in": "path",
+     "required": true,
+     "description": "Type of Attendee"
+    },
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Request Agenda Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_notificationparameters",
+   "method": "GET",
+   "path": "/events/{eventid}/notificationparameters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Notification Parameter API",
+   "summary": "1. This API is used to fetch all Notification Parameter records based on the given eventId from the BI_REQUEST_TYPE_NOTIF_PARAM table. If records for the eventId are not found, it fetches records based on the request ty\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_presentercalendar",
+   "method": "GET",
+   "path": "/events/{eventid}/presentercalendar",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Presenter Calendar",
+   "summary": "To retrive list of event presenter calendar.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event Unique ID"
+    },
+    {
+     "name": "eventDate",
+     "in": "query",
+     "required": true,
+     "description": "Event Date"
+    },
+    {
+     "name": "location",
+     "in": "query",
+     "required": true,
+     "description": "Room Unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_presenters",
+   "method": "GET",
+   "path": "/events/{eventid}/presenters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Presenter APIS",
+   "summary": "1. By default api fetch all active presenters from BI_PRESENTER Table by firstName and lastName asc order. 2. If isActive=true is present in url as RequestParam then it returns all active presenters by firstName and las\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event Unique ID"
+    },
+    {
+     "name": "includeBookedPresenter",
+     "in": "query",
+     "required": false,
+     "description": "If this prameter value is true, returns all presenter of the event, if value is false, returns only available presenters for the selected meeting."
+    },
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "filter presenters on acive attribute"
+    },
+    {
+     "name": "meetingId",
+     "in": "query",
+     "required": false,
+     "description": "Filter the available presetners for the selected meeting"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search string. filters on name and email address"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_presenters_presenterid",
+   "method": "GET",
+   "path": "/events/{eventid}/presenters/{presenterid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Presenter APIS",
+   "summary": "To get presenter details for a show",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event Unique ID"
+    },
+    {
+     "name": "presenterid",
+     "in": "path",
+     "required": true,
+     "description": "Presenter Unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_presenters_presenterid_topics",
+   "method": "GET",
+   "path": "/events/{eventid}/presenters/{presenterid}/topics",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Manage Presenter Module - Event Presenter Topic APIS",
+   "summary": "Used to get list of topics associated with the Event presenter",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event ID"
+    },
+    {
+     "name": "presenterid",
+     "in": "path",
+     "required": true,
+     "description": "Presenter ID"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_reportaccess",
+   "method": "GET",
+   "path": "/events/{eventid}/reportaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Report Role Access API'S",
+   "summary": "1. The API fetches all reports for a group of the specified event from the V_EVENT_REPORT_MAPPING view. If any of the report or reports from ReportRoleAccessEntity are associated with the role provided in the query para\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": true,
+     "description": "Filter by Role UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_reportaccess_reportaccessid",
+   "method": "GET",
+   "path": "/events/{eventid}/reportaccess/{reportaccessid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Report Role Access API'S",
+   "summary": "API is Used to fetch a specific Report Role Access based on given reportaccessid in the url.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "reportaccessid",
+     "in": "path",
+     "required": true,
+     "description": "Report Access UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_requestdtls",
+   "method": "GET",
+   "path": "/events/{eventid}/requestdtls",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Request API'S",
+   "summary": "API is Used to fetch all the Event Requests based on eventid and requestdtlsid in path variable.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_requestdtls_requestdtlsid",
+   "method": "GET",
+   "path": "/events/{eventid}/requestdtls/{requestdtlsid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Request API'S",
+   "summary": "API is Used to fetch details of a particular eventRequest based on eventid and requestdtlsid in path variable.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "requestdtlsid",
+     "in": "path",
+     "required": true,
+     "description": "Event Request UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_roomcalendar",
+   "method": "GET",
+   "path": "/events/{eventid}/roomcalendar",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get event Room Calendar",
+   "summary": "To retrive list of event room calendar.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event ID"
+    },
+    {
+     "name": "eventDate",
+     "in": "query",
+     "required": true,
+     "description": "Event Date"
+    },
+    {
+     "name": "location",
+     "in": "query",
+     "required": true,
+     "description": "Main Location Id"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_search",
+   "method": "GET",
+   "path": "/events/{eventid}/search",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Events",
+   "summary": "Read all search fields of an event",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "eventid uniqueId"
+    },
+    {
+     "name": "filter",
+     "in": "query",
+     "required": true,
+     "description": "filter attribute name"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": true,
+     "description": "search string"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_searchfields",
+   "method": "GET",
+   "path": "/events/{eventid}/searchfields",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Events",
+   "summary": "Read all search fields of an event",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "eventid uniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_templates",
+   "method": "GET",
+   "path": "/events/{eventid}/templates",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Request Template API'S",
+   "summary": "1. By default API is used to fetch all records for a show in displayText based asc order. 2. For Search by Display Text - http://localhost:8080/event/api/events/ED95205E-17A9-32D7-E053-0100007FC262/templates?q=Agenda",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Display Text"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_templates_templateid",
+   "method": "GET",
+   "path": "/events/{eventid}/templates/{templateid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Request Template API'S",
+   "summary": "API is Used to fetch a specific template Based on eventId and templateId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "templateid",
+     "in": "path",
+     "required": true,
+     "description": "Event Template UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_topictypes_topictypeid_topics",
+   "method": "GET",
+   "path": "/events/{eventid}/topictypes/{topictypeid}/topics",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Topic API'S",
+   "summary": "1. By default, the API fetches all active and inactive parent topics based on eventId and topicTypeId , with case-insensitive name-based sorting. 2. Use this API to fetch only active parent topics: http://localhost:8080\u2026",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "topictypeid",
+     "in": "path",
+     "required": true,
+     "description": "TopicType UniqueId"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Name or Description"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_topictypes_topictypeid_topics_topicid",
+   "method": "GET",
+   "path": "/events/{eventid}/topictypes/{topictypeid}/topics/{topicid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Topic API'S",
+   "summary": "API is Used to fetch a specific Topic Based on EventId, TopicTypeId and topicId.",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Event UniqueId"
+    },
+    {
+     "name": "topicid",
+     "in": "path",
+     "required": true,
+     "description": "Topic UniqueId"
+    },
+    {
+     "name": "topictypeid",
+     "in": "path",
+     "required": true,
+     "description": "Topic Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_users_userid_locations",
+   "method": "GET",
+   "path": "/events/{eventid}/users/{userid}/locations",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event User API'S",
+   "summary": "1. API is Used to read rooms assigned to a user",
+   "params": [
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    },
+    {
+     "name": "userid",
+     "in": "path",
+     "required": true,
+     "description": "User UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_attendeetype",
+   "method": "GET",
+   "path": "/events/{eventid}/{attendeetype}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Attendee API'S",
+   "summary": "API to fetch all Internal / External Attendees based on eventid and attendeeType.",
+   "params": [
+    {
+     "name": "attendeetype",
+     "in": "path",
+     "required": true,
+     "description": "Type of Attendee"
+    },
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_events_eventid_attendeetype_attendeeid",
+   "method": "GET",
+   "path": "/events/{eventid}/{attendeetype}/{attendeeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Attendee API'S",
+   "summary": "API to fetch a particular Internal / External Attendee based on eventId, attendeeType and attendeeId.",
+   "params": [
+    {
+     "name": "attendeeid",
+     "in": "path",
+     "required": true,
+     "description": "Attendee Id"
+    },
+    {
+     "name": "attendeetype",
+     "in": "path",
+     "required": true,
+     "description": "Type of Attendee"
+    },
+    {
+     "name": "eventid",
+     "in": "path",
+     "required": true,
+     "description": "Request Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_eventtemplates",
+   "method": "GET",
+   "path": "/eventtemplates",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Template API",
+   "summary": "Api is used to fetch all event templates based on templateName and templateId asc order.",
+   "params": []
+  },
+  {
+   "id": "get_executivesponsors",
+   "method": "GET",
+   "path": "/executivesponsors",
+   "spec": "biq-admin.yaml",
+   "tag": "Executive sponsors",
+   "summary": "Used to get all the executive sponsors.",
+   "params": [
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "page number"
+    },
+    {
+     "name": "search",
+     "in": "query",
+     "required": false,
+     "description": "search param for executive sponsor name"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "each page size"
+    }
+   ]
+  },
+  {
+   "id": "get_executivesponsors_executivesponsorid",
+   "method": "GET",
+   "path": "/executivesponsors/{executivesponsorid}",
+   "spec": "biq-admin.yaml",
+   "tag": "Executive sponsors",
+   "summary": "Used to get executive sponsor details by its id.",
+   "params": [
+    {
+     "name": "executivesponsorid",
+     "in": "path",
+     "required": true,
+     "description": "executive sponsor id"
+    }
+   ]
+  },
+  {
+   "id": "get_faqs",
+   "method": "GET",
+   "path": "/faqs",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Faq API'S",
+   "summary": "1. The api fetches all active and inactive independent data which does not have any parent, from AI_FREQUENTLY_ASKED_QUESTIONS table. 2. The api fetches all active and inactive childs of a parent from AI_FREQUENTLY_ASKE\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "true or false"
+    },
+    {
+     "name": "parent",
+     "in": "query",
+     "required": false,
+     "description": "parentId"
+    }
+   ]
+  },
+  {
+   "id": "get_featureaccess",
+   "method": "GET",
+   "path": "/featureaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Feature Access API'S",
+   "summary": "1. By default API is used to fetch all isactive true records from M_ROLE_FEATURE_ACCESS Table based on given header x-cloud-eventid and x-cloud-customerid. 2. Filter by Role - http://localhost:8080/event/api/featureacce\u2026",
+   "params": [
+    {
+     "name": "feature",
+     "in": "query",
+     "required": false,
+     "description": "Attribut Name - feature"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Attribute Name - role"
+    }
+   ]
+  },
+  {
+   "id": "get_features",
+   "method": "GET",
+   "path": "/features",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Feature Access API'S",
+   "summary": "1. The API is used to fetch all records from the M_FEATURE table in case-insensitive ascending order by \"featureName\". 2. Search by Feature Name - http://localhost:8080/event/api/features?q=Add+Meeting. 3. Filter by Rol\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Feature Name"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Filter by Role"
+    }
+   ]
+  },
+  {
+   "id": "get_featuretemplates",
+   "method": "GET",
+   "path": "/featuretemplates",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Feature Template API'S",
+   "summary": "1. The API is used to fetch all active and inactive records from M_CATEGORY_FEATURE_TEMPLATE based on headers and sorted in id asc order. 2. For InActive records - http://localhost:8080/event/api/featuretemplates?isActi\u2026",
+   "params": []
+  },
+  {
+   "id": "get_featuretemplates_featuretemplateid",
+   "method": "GET",
+   "path": "/featuretemplates/{featuretemplateid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Feature Template API'S",
+   "summary": "API is Used to fetch a specific Feature Template based on given featuretemplateid in the url.",
+   "params": [
+    {
+     "name": "featuretemplateid",
+     "in": "path",
+     "required": true,
+     "description": "Feature Template UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_fieldmappings",
+   "method": "GET",
+   "path": "/fieldmappings",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Field Mapping API's",
+   "summary": "This API is used to fetch all event field mappings based on x-cloud-eventid and x-cloud-customerid from the request headers, with the default sorting applied in ascending order of displayText.",
+   "params": []
+  },
+  {
+   "id": "get_fieldmappings_fieldmappingid",
+   "method": "GET",
+   "path": "/fieldmappings/{fieldmappingid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Field Mapping API's",
+   "summary": "API is Used to fetch a specific Event field mapping based on fieldmappingid in the url.",
+   "params": [
+    {
+     "name": "fieldmappingid",
+     "in": "path",
+     "required": true,
+     "description": "form UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_fileformats",
+   "method": "GET",
+   "path": "/fileformats",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Document API'S",
+   "summary": "API to fetch supported file formates.",
+   "params": []
+  },
+  {
+   "id": "get_formfields",
+   "method": "GET",
+   "path": "/formfields",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Field Mapping API's",
+   "summary": "1. This API is used in two ways: to fetch form fields based on the \"Type\" column, either as 'Event' or 'Resource' or \"Form\". 2. The API is used to fetch all records from the M_COLUMN_ATTRIBUTE table that are not present\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by dataType column"
+    }
+   ]
+  },
+  {
+   "id": "get_forms",
+   "method": "GET",
+   "path": "/forms",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form API'S",
+   "summary": "1. The API fetches all active and inActive forms from the M_FORM table based on categoryType from header and sorts them by case-insensitive sortOrder and formName ASC order. Filter by Active form: http://localhost:8080/\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "parent",
+     "in": "query",
+     "required": false,
+     "description": "UniqueId of Parent"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Form Name"
+    }
+   ]
+  },
+  {
+   "id": "get_forms_formId_data_formDataId",
+   "method": "GET",
+   "path": "/forms/{formId}/data/{formDataId}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "FormData",
+   "summary": "Get form data by ID",
+   "params": [
+    {
+     "name": "formDataId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    },
+    {
+     "name": "formId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_forms_formid",
+   "method": "GET",
+   "path": "/forms/{formid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form API'S",
+   "summary": "API is Used to fetch a specific Form based on given formid in the url.",
+   "params": [
+    {
+     "name": "formid",
+     "in": "path",
+     "required": true,
+     "description": "Form UiqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_forms_formid_data_export",
+   "method": "GET",
+   "path": "/forms/{formid}/data/export",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form Data API",
+   "summary": "Export form data to CSV",
+   "params": [
+    {
+     "name": "formid",
+     "in": "path",
+     "required": true,
+     "description": "Form UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_forms_formid_data_template",
+   "method": "GET",
+   "path": "/forms/{formid}/data/template",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form Data API",
+   "summary": "Download CSV template for form",
+   "params": [
+    {
+     "name": "formid",
+     "in": "path",
+     "required": true,
+     "description": "Form UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_forms_formid_documents",
+   "method": "GET",
+   "path": "/forms/{formid}/documents",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form Documents",
+   "summary": "Get all form data documents",
+   "params": [
+    {
+     "name": "formid",
+     "in": "path",
+     "required": true,
+     "description": "Unique identifier of the form"
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Number of items per page"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (e.g., \"id,desc\")"
+    }
+   ]
+  },
+  {
+   "id": "get_formtypes",
+   "method": "GET",
+   "path": "/formtypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form Type API'S",
+   "summary": "1. The API fetches all form types from the M_FORM_TYPE table based on categoryType from Header and sorts them by formTypeName ASC order. Search by Form Type Name: http://localhost:8080/event/api/formtypes?q=Visit",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Form Type Name"
+    }
+   ]
+  },
+  {
+   "id": "get_formtypes_formtypeid",
+   "method": "GET",
+   "path": "/formtypes/{formtypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Form Type API'S",
+   "summary": "API is Used to fetch a specific Form Type based on given formtypeid in the url.",
+   "params": [
+    {
+     "name": "formtypeid",
+     "in": "path",
+     "required": true,
+     "description": "Form Type UiqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_journeys",
+   "method": "GET",
+   "path": "/journeys",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Journey API'S",
+   "summary": "1. The API fetches all active and inactive records from the M_JOURNEY table based on categorytype from header and then sorted by journeyName in case-insensitive ascending order. Filter by Active journey: http://localhos\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter By isActive"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Journey Name"
+    }
+   ]
+  },
+  {
+   "id": "get_journeys_journeyid",
+   "method": "GET",
+   "path": "/journeys/{journeyid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Journey API'S",
+   "summary": "API is Used to fetch a specific journey based on given journeyid in the url.",
+   "params": [
+    {
+     "name": "journeyid",
+     "in": "path",
+     "required": true,
+     "description": "Journey UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_journeys_journeyid_pages",
+   "method": "GET",
+   "path": "/journeys/{journeyid}/pages",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Journey Page API'S",
+   "summary": "1. The API fetches all Journey Page records from the M_JOURNEY_PAGE table based on journey from url and categoryType from header and sorted in Journey Page Name Asc order. 2. Search by Journey Page Name - /journeys/306F\u2026",
+   "params": [
+    {
+     "name": "journeyid",
+     "in": "path",
+     "required": true,
+     "description": "Journey UniqueId"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Joureny Page Name"
+    }
+   ]
+  },
+  {
+   "id": "get_journeys_journeyid_pages_pageid",
+   "method": "GET",
+   "path": "/journeys/{journeyid}/pages/{pageid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Journey Page API'S",
+   "summary": "API is Used to fetch a specific Journey Page based on given pageid in the url.",
+   "params": [
+    {
+     "name": "journeyid",
+     "in": "path",
+     "required": true,
+     "description": "Journey UniqueId"
+    },
+    {
+     "name": "pageid",
+     "in": "path",
+     "required": true,
+     "description": "Journey Page UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_languages",
+   "method": "GET",
+   "path": "/languages",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Manage Presenter Module - Languages API",
+   "summary": "API to fetch all IsActive - true Languages from M_LANGUAGE Table.",
+   "params": []
+  },
+  {
+   "id": "get_locations",
+   "method": "GET",
+   "path": "/locations",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Global & Category Location API'S",
+   "summary": "1. By Default this API is used to fetch all active/inactive Main locations and rooms based on x-cloud-customerid from header. 2. If parent and isActive is present in request as RequestParam then it returns all active ro\u2026",
+   "params": [
+    {
+     "name": "name",
+     "in": "query",
+     "required": false,
+     "description": "Location / Room Name"
+    },
+    {
+     "name": "parent",
+     "in": "query",
+     "required": false,
+     "description": "Parent UniqueId"
+    },
+    {
+     "name": "type",
+     "in": "query",
+     "required": false,
+     "description": "LocationType UniqueId - EVENT_LOCATION / ROOM"
+    }
+   ]
+  },
+  {
+   "id": "get_locations_locationid",
+   "method": "GET",
+   "path": "/locations/{locationid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Global & Category Location API'S",
+   "summary": "This API is used to fetch a specific location or room based on given locationid from the url.",
+   "params": [
+    {
+     "name": "locationid",
+     "in": "path",
+     "required": true,
+     "description": "location UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_locations_locationid_locationhours",
+   "method": "GET",
+   "path": "/locations/{locationid}/locationhours",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Location Hour API'S",
+   "summary": "1. The API fetches all event location hour records from the T_EVENT_LOCATION_HOURS table based on the locationid, event and tenant from Headers and sorts them by eventDate in ascending order.",
+   "params": [
+    {
+     "name": "locationid",
+     "in": "path",
+     "required": true,
+     "description": "Location UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_locations_locationid_locationhours_locationhourid",
+   "method": "GET",
+   "path": "/locations/{locationid}/locationhours/{locationhourid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Location Hour API'S",
+   "summary": "API is Used to fetch a specific location hour based on given locationhourid in the url.",
+   "params": [
+    {
+     "name": "locationhourid",
+     "in": "path",
+     "required": true,
+     "description": "LocationHour UniqueId"
+    },
+    {
+     "name": "locationid",
+     "in": "path",
+     "required": true,
+     "description": "Location UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_locationtypes",
+   "method": "GET",
+   "path": "/locationtypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "LocationType API",
+   "summary": "1. If there is Request Param value as EVENT, then api returns all Event related Location Types. url - http://localhost:8080/event/api/locationtypes?group=EVENT 2. If there is no Request Param in Url then Api returns all\u2026",
+   "params": [
+    {
+     "name": "group",
+     "in": "query",
+     "required": false,
+     "description": "EVENT"
+    }
+   ]
+  },
+  {
+   "id": "get_lookuptypes",
+   "method": "GET",
+   "path": "/lookuptypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Lookup Type API'S",
+   "summary": "1. The API fetches all active and inactive lookuptypes from the M_LOOKUP_TYPE table sorted by code ascending order. Search by Name: http://localhost:8080/event/api/lookuptypes?q=COMPANY",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by isActive"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Name"
+    }
+   ]
+  },
+  {
+   "id": "get_lookuptypes_lookuptypeid",
+   "method": "GET",
+   "path": "/lookuptypes/{lookuptypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Lookup Type API'S",
+   "summary": "API is Used to fetch a specific lookuptype based on given lookuptypeid in the url.",
+   "params": [
+    {
+     "name": "lookuptypeid",
+     "in": "path",
+     "required": true,
+     "description": "Lookup Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_lookupvalues",
+   "method": "GET",
+   "path": "/lookupvalues",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Global & Category LookupValue API'S",
+   "summary": "1. By default, this API fetches all category-specific and global-specific lookup values based on the provided headers, including parent and its child records as well as both active and inactive records and sorted in asc\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "filter by isActive"
+    },
+    {
+     "name": "search",
+     "in": "query",
+     "required": false,
+     "description": "Search by Value"
+    }
+   ]
+  },
+  {
+   "id": "get_lookupvalues_lookupvalueid",
+   "method": "GET",
+   "path": "/lookupvalues/{lookupvalueid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Global & Category LookupValue API'S",
+   "summary": "API is used to fetch a global or category specific lookupvalue based on given lookupvalueid.",
+   "params": [
+    {
+     "name": "lookupvalueid",
+     "in": "path",
+     "required": true,
+     "description": "Lookup Value UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_masters_parameters",
+   "method": "GET",
+   "path": "/masters/parameters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Parameter API'S",
+   "summary": "This API fetches all master parameters sorted in case-insensitive ascending order by the description attribute.",
+   "params": []
+  },
+  {
+   "id": "get_mastertypes",
+   "method": "GET",
+   "path": "/mastertypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Master Type API'S",
+   "summary": "1. The API fetches all active and inactive records from the M_MASTER_TYPE table based on the customer/tenant from header and then sorted by name in case-insensitive ascending order. 2. If the UI passes the query paramet\u2026",
+   "params": []
+  },
+  {
+   "id": "get_mastertypes_mastertypeid",
+   "method": "GET",
+   "path": "/mastertypes/{mastertypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Master Type API'S",
+   "summary": "API is Used to fetch a specific mastertype based on given mastertypeid in the url.",
+   "params": [
+    {
+     "name": "mastertypeid",
+     "in": "path",
+     "required": true,
+     "description": "Master Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_mastertypes_mastertypeid_fieldmappings",
+   "method": "GET",
+   "path": "/mastertypes/{mastertypeid}/fieldmappings",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Master Type Field Mapping API'S",
+   "summary": "1. By default, the API fetches all records based on entityKey and tenant, from M_FORM_FIELDS, ordered by displayText in ascending, case-insensitive order.",
+   "params": [
+    {
+     "name": "mastertypeid",
+     "in": "path",
+     "required": true,
+     "description": "Master Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_mastertypes_mastertypeid_fieldmappings_fieldmappingid",
+   "method": "GET",
+   "path": "/mastertypes/{mastertypeid}/fieldmappings/{fieldmappingid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Master Type Field Mapping API'S",
+   "summary": "This API is used to fetch a specific MasterTypeField Mapping based on the masterTypeId and fieldMappingId provided in the URL.",
+   "params": [
+    {
+     "name": "fieldmappingid",
+     "in": "path",
+     "required": true,
+     "description": "Field Mapping UniqueId"
+    },
+    {
+     "name": "mastertypeid",
+     "in": "path",
+     "required": true,
+     "description": "Master Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_mastertypes_mastertypeid_masters",
+   "method": "GET",
+   "path": "/mastertypes/{mastertypeid}/masters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Master API'S",
+   "summary": "1. API is used to fetch all active and inactive tenant masters, sorted by createdTs Desc.",
+   "params": [
+    {
+     "name": "mastertypeid",
+     "in": "path",
+     "required": true,
+     "description": "Master Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_mastertypes_mastertypeid_masters_masterid",
+   "method": "GET",
+   "path": "/mastertypes/{mastertypeid}/masters/{masterid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Master API'S",
+   "summary": "This API is used to fetch a specific tenant master based on given mastertypeid and masterid provided in the URL.",
+   "params": [
+    {
+     "name": "masterid",
+     "in": "path",
+     "required": true,
+     "description": "Master UniqueId"
+    },
+    {
+     "name": "mastertypeid",
+     "in": "path",
+     "required": true,
+     "description": "Master Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_meetings_meetingid_actions_actionid_notifications",
+   "method": "GET",
+   "path": "/meetings/{meetingid}/actions/{actionid}/notifications",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get State action notification details",
+   "summary": "To retrive state action notification",
+   "params": [
+    {
+     "name": "actionid",
+     "in": "path",
+     "required": true,
+     "description": "Action Id"
+    },
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting ID"
+    }
+   ]
+  },
+  {
+   "id": "get_meetings_meetingid_history",
+   "method": "GET",
+   "path": "/meetings/{meetingid}/history",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "History API",
+   "summary": "By default, the API is used to fetch all records of a meeting's history based on the meeting ID, sorted by createdTs in descending order. When ever an AOP Called, if it is State Action Api then Action Type is saved as s\u2026",
+   "params": [
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Meeting UniqueId"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Action Type"
+    }
+   ]
+  },
+  {
+   "id": "get_meetings_meetingid_notes",
+   "method": "GET",
+   "path": "/meetings/{meetingid}/notes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Meeting Note API'S",
+   "summary": "API is used to fetch all notes of a meeting in createdTs Asc order.",
+   "params": [
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Agenda Master UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_meetings_meetingid_notes_noteid",
+   "method": "GET",
+   "path": "/meetings/{meetingid}/notes/{noteid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Meeting Note API'S",
+   "summary": "API is Used to fetch a specific Meeting Note based on meetingId and noteId.",
+   "params": [
+    {
+     "name": "meetingid",
+     "in": "path",
+     "required": true,
+     "description": "Agenda Master UniqueId"
+    },
+    {
+     "name": "noteid",
+     "in": "path",
+     "required": true,
+     "description": "Note UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_moduleaccess",
+   "method": "GET",
+   "path": "/moduleaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Module Access API'S",
+   "summary": "1. By default API is used to fetch all active and inactive records from M_ROLE_FEATURE_ACCESS Table along with based on headers. 2. Filter by Role - http://localhost:8080/event/api/moduleaccess?role=Event Manager 3. Fil\u2026",
+   "params": [
+    {
+     "name": "module",
+     "in": "query",
+     "required": false,
+     "description": "Attribut Name - module"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Attribute Name - role"
+    }
+   ]
+  },
+  {
+   "id": "get_moduleaccess_moduleaccessid",
+   "method": "GET",
+   "path": "/moduleaccess/{moduleaccessid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Module Access API'S",
+   "summary": "API is Used to fetch a specific role module access based on given moduleaccessid in the url.",
+   "params": [
+    {
+     "name": "moduleaccessid",
+     "in": "path",
+     "required": true,
+     "description": "Role Module Access UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules",
+   "method": "GET",
+   "path": "/modules",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Module API'S",
+   "summary": "1. The API fetches all active and inactive modules from the M_MODULE table based on given categoryType and category from header and then sorted by sortOrder and then moduleName ascending order. Filter by Active module:\u2026",
+   "params": [
+    {
+     "name": "filter",
+     "in": "query",
+     "required": false,
+     "description": "UniqueId of Module Type"
+    },
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by isActive"
+    },
+    {
+     "name": "isNavigation",
+     "in": "query",
+     "required": false,
+     "description": "Filter by isNavigation"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Module Name"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_uploadtypes",
+   "method": "GET",
+   "path": "/modules/moduleid/uploadtypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "ModuleUploadTypes",
+   "summary": "Get upload types by module",
+   "params": []
+  },
+  {
+   "id": "get_modules_moduleid",
+   "method": "GET",
+   "path": "/modules/{moduleid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Module API'S",
+   "summary": "API is Used to fetch a specific module based on given moduleid in the url.",
+   "params": [
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Module UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_configs",
+   "method": "GET",
+   "path": "/modules/{moduleid}/configs",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Module Journey Page Config API'S",
+   "summary": "1. The API fetches all Module Journey Page Config records from the M_MODULE_JOURNEY_PAGE_CONFIG table based on given moduleid in the url and categoryType, category, requestType and event from header.",
+   "params": [
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Moudle UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_configs_details",
+   "method": "GET",
+   "path": "/modules/{moduleid}/configs/details",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Module Journey Page Config API'S",
+   "summary": "API is Used to fetch isActive true records from M_MODULE_JOURNEY_PAGE_CONFIG table based on given moduleid in the url.",
+   "params": [
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Module UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_configs_configid",
+   "method": "GET",
+   "path": "/modules/{moduleid}/configs/{configid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Module Journey Page Config API'S",
+   "summary": "API is Used to fetch a specific Module Journey Page Config based on given configid in the url.",
+   "params": [
+    {
+     "name": "configid",
+     "in": "path",
+     "required": true,
+     "description": "Config UniqueId"
+    },
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Config UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_journeys",
+   "method": "GET",
+   "path": "/modules/{moduleid}/journeys",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Type Module Journey API'S",
+   "summary": "1. The API fetches all Module Journey records from the M_MODULE_JOURNEY table based on given moduleid in the url and categoryType from header and sorted in activeFrom ASC order. 2. Filter by Journey - /modules/7f4ae75e-\u2026",
+   "params": [
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Moudle UniqueId"
+    },
+    {
+     "name": "filter",
+     "in": "query",
+     "required": false,
+     "description": "UniqueId of Journey"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_journeys_journeyid",
+   "method": "GET",
+   "path": "/modules/{moduleid}/journeys/{journeyid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Type Module Journey API'S",
+   "summary": "API is Used to fetch a specific Module Journey based on given journeyid in the url.",
+   "params": [
+    {
+     "name": "journeyid",
+     "in": "path",
+     "required": true,
+     "description": "Module Journey UniqueId"
+    },
+    {
+     "name": "moduleid",
+     "in": "path",
+     "required": true,
+     "description": "Moudle UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_modules_moduleid_uploadtypes_uploadtypeId",
+   "method": "GET",
+   "path": "/modules/{moduleid}/uploadtypes/{uploadtypeId}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "ModuleUploadTypes",
+   "summary": "Get module upload type mapping by uniqueId",
+   "params": [
+    {
+     "name": "uploadtypeId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_moduletypes",
+   "method": "GET",
+   "path": "/moduletypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "ModuleType API'S",
+   "summary": "1. The API is used to fetch all active and inactive module types from the M_MODULE_TYPE table, sorted by moduleTypeName case-insensitive asc order. Filter by Active moduletype: http://localhost:8080/event/api/moduletype\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Module Type Name"
+    }
+   ]
+  },
+  {
+   "id": "get_notes",
+   "method": "GET",
+   "path": "/notes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Note API",
+   "summary": "Get all notes with optional date filtering",
+   "params": [
+    {
+     "name": "fromDate",
+     "in": "query",
+     "required": false,
+     "description": "Start date filter (inclusive). Can be ISO date string or milliseconds."
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (default: createdTs,desc)"
+    },
+    {
+     "name": "toDate",
+     "in": "query",
+     "required": false,
+     "description": "End date filter (inclusive). Can be ISO date string or milliseconds."
+    }
+   ]
+  },
+  {
+   "id": "get_notes_noteid",
+   "method": "GET",
+   "path": "/notes/{noteid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Note API",
+   "summary": "Get note by ID",
+   "params": [
+    {
+     "name": "noteid",
+     "in": "path",
+     "required": true,
+     "description": "Note UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_notificationparams",
+   "method": "GET",
+   "path": "/notificationparams",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Notification Parameters",
+   "summary": "Get all notification parameters",
+   "params": []
+  },
+  {
+   "id": "get_opportunities",
+   "method": "GET",
+   "path": "/opportunities",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Meeting Opportunity API'S",
+   "summary": "1. API to retrieve records from the BI_REQUEST_OPPORTUNITY table, ordered by Opportunity_ID in ascending order, with the maximum Timestamp in the updated_ts column for each Opportunity_ID. 2. Filter by opportunityId - /\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Filter by opportunityId"
+    }
+   ]
+  },
+  {
+   "id": "get_pages",
+   "method": "GET",
+   "path": "/pages",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Page API'S",
+   "summary": "1. The API fetches all active and inactive pages from the M_PAGE table based on categoryType from header and sorts them by sortOrder and pageName. Filter by Active page: http://localhost:8080/event/api/pages?isActive=tr\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by PageName"
+    }
+   ]
+  },
+  {
+   "id": "get_pages_pageid",
+   "method": "GET",
+   "path": "/pages/{pageid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Page API'S",
+   "summary": "API is Used to fetch a specific Page based on given pageid in the url.",
+   "params": [
+    {
+     "name": "pageid",
+     "in": "path",
+     "required": true,
+     "description": "Page UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_pages_pageid_forms",
+   "method": "GET",
+   "path": "/pages/{pageid}/forms",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Type Page Form API'S",
+   "summary": "1. The API fetches all Page Form records from the M_PAGE_FORM table based on given pageid in the url and categoryTypeid from header and sorted in sortOrder and formName ASC order. 2. Filter by form - /pages/7f4ae75e-5e3\u2026",
+   "params": [
+    {
+     "name": "pageid",
+     "in": "path",
+     "required": true,
+     "description": "Page UniqueId"
+    },
+    {
+     "name": "filter",
+     "in": "query",
+     "required": false,
+     "description": "UniqueId of Form"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Form Name"
+    }
+   ]
+  },
+  {
+   "id": "get_pages_pageid_forms_formid",
+   "method": "GET",
+   "path": "/pages/{pageid}/forms/{formid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Type Page Form API'S",
+   "summary": "API is used to fetch a specific form a given page based on given pageid and formid in the url.",
+   "params": [
+    {
+     "name": "formid",
+     "in": "path",
+     "required": true,
+     "description": "Page Form UniqueId"
+    },
+    {
+     "name": "pageid",
+     "in": "path",
+     "required": true,
+     "description": "Page UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_parameters",
+   "method": "GET",
+   "path": "/parameters",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Parameter API'S",
+   "summary": "1. By default, this API retrieves all records sorted in ascending order by the description and value attributes. 2. Search by Description Event Parameters - http://localhost:8080/event/api/parameters?q=Muted+Email",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Description"
+    }
+   ]
+  },
+  {
+   "id": "get_parameters_parameterid",
+   "method": "GET",
+   "path": "/parameters/{parameterid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Parameter API'S",
+   "summary": "This API is used to fetch a specific parameter based on the parameterid",
+   "params": [
+    {
+     "name": "parameterid",
+     "in": "path",
+     "required": true,
+     "description": "Parameter UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_presenters_presenterid_calendars",
+   "method": "GET",
+   "path": "/presenters/{presenterid}/calendars",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Presenter Calendar APIS",
+   "summary": "To get presenter details for a show",
+   "params": [
+    {
+     "name": "presenterid",
+     "in": "path",
+     "required": true,
+     "description": "Presenter Unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_presenters_presenterid_calendars_calendarid",
+   "method": "GET",
+   "path": "/presenters/{presenterid}/calendars/{calendarid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Presenter APIS",
+   "summary": "To get presenter details for a show",
+   "params": [
+    {
+     "name": "calendarid",
+     "in": "path",
+     "required": true,
+     "description": "calendar Unique ID"
+    },
+    {
+     "name": "presenterid",
+     "in": "path",
+     "required": true,
+     "description": "Presenter Unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_programcodes",
+   "method": "GET",
+   "path": "/programcodes",
+   "spec": "biq-admin.yaml",
+   "tag": "Program Code API'S",
+   "summary": "By default API will retrieve all the loggedIn location available program codes. url- http://localhost:8080/admin/api/programcodes If Query Param (isUsed=true)is in url means all used program code of that loggedIn locati\u2026",
+   "params": [
+    {
+     "name": "uploadType",
+     "in": "query",
+     "required": true,
+     "description": "Upload Type Unique Id"
+    }
+   ]
+  },
+  {
+   "id": "get_properties",
+   "method": "GET",
+   "path": "/properties",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Properties",
+   "summary": "Get all properties",
+   "params": []
+  },
+  {
+   "id": "get_reportaccess",
+   "method": "GET",
+   "path": "/reportaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Report Role Access API'S",
+   "summary": "1. The API is used to fetch all records from M_CATEGORY_REPORT_ROLE_ACCESS table.",
+   "params": []
+  },
+  {
+   "id": "get_reportgroups_reportgroupid",
+   "method": "GET",
+   "path": "/reportgroups/{reportgroupid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get List of Reports by Report Group API",
+   "summary": "This API returns the list of reports for a report group id. If the report group id has any child report groups , the list of reports for each report group for a given parent reportgroupid is returned. If the reportgroup\u2026",
+   "params": [
+    {
+     "name": "reportgroupid",
+     "in": "path",
+     "required": true,
+     "description": "Parent Report group Uniqueid"
+    }
+   ]
+  },
+  {
+   "id": "get_reports",
+   "method": "GET",
+   "path": "/reports",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Report API'S",
+   "summary": "1. The API is used to fetch all records from M_CATEGORY_REPORT based on headers and sorted in id asc order.",
+   "params": []
+  },
+  {
+   "id": "get_reports_reportId_eventrevenuemetrics",
+   "method": "GET",
+   "path": "/reports/{reportId}/eventrevenuemetrics",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get Event Revenue Metrics API",
+   "summary": "This API is used to get the event revenue metrics for the given report unique id. The same api call can be used to get metrics of Account Type, Sales Division, Industry. fromDate and toDate query parameters are used to\u2026",
+   "params": [
+    {
+     "name": "reportId",
+     "in": "path",
+     "required": true,
+     "description": "Report Uniqueid"
+    },
+    {
+     "name": "fromDate",
+     "in": "query",
+     "required": false,
+     "description": "From Date"
+    },
+    {
+     "name": "toDate",
+     "in": "query",
+     "required": false,
+     "description": "To Date"
+    }
+   ]
+  },
+  {
+   "id": "get_reports_reportId_eventtiles",
+   "method": "GET",
+   "path": "/reports/{reportId}/eventtiles",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Get Event Tiles API",
+   "summary": "This API is used to get the event tiles for the given report unique id. fromDate and toDate query parameters are used to get if the report data is required for the particular period. If fromDate and toDate query params\u2026",
+   "params": [
+    {
+     "name": "reportId",
+     "in": "path",
+     "required": true,
+     "description": "Report Uniqueid"
+    },
+    {
+     "name": "fromDate",
+     "in": "query",
+     "required": false,
+     "description": "From Date"
+    },
+    {
+     "name": "toDate",
+     "in": "query",
+     "required": false,
+     "description": "To Date"
+    }
+   ]
+  },
+  {
+   "id": "get_reports_reportId_preferences",
+   "method": "GET",
+   "path": "/reports/{reportId}/preferences",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Report Preferences",
+   "summary": "Get all report preferances",
+   "params": [
+    {
+     "name": "reportId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_reports_reportid",
+   "method": "GET",
+   "path": "/reports/{reportid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Report API'S",
+   "summary": "API is Used to fetch a specific Category Report based on given reportid in the url.",
+   "params": [
+    {
+     "name": "reportid",
+     "in": "path",
+     "required": true,
+     "description": "CategoryReport UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resources_resourceid_calendars",
+   "method": "GET",
+   "path": "/resources/{resourceid}/calendars",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource Calendar API'S",
+   "summary": "1. API is used to fetch all active and inactive tenant resource calendars, sorted by calendarDate ASC order. 2. If the UI passes the query parameter isActive=true, then all active tenant resoure calendars should be fetc\u2026",
+   "params": [
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resources_resourceid_calendars_calendarid",
+   "method": "GET",
+   "path": "/resources/{resourceid}/calendars/{calendarid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource Calendar API'S",
+   "summary": "This API is used to fetch a specific tenant resource calendar based on given resourceid and calendarid provided in the URL.",
+   "params": [
+    {
+     "name": "calendarid",
+     "in": "path",
+     "required": true,
+     "description": "Calendar UniqueId"
+    },
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resources_resourceid_hours",
+   "method": "GET",
+   "path": "/resources/{resourceid}/hours",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource Hour API'S",
+   "summary": "1. The API fetches all records from the M_RESOURCE_HOURS table and sorts them by day and startTime in ascending order. 2. Filter by specific day - http://localhost:8080/event/api/resources/66673BD6-8057-412D-91ED-A5B4FE\u2026",
+   "params": [
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    },
+    {
+     "name": "day",
+     "in": "query",
+     "required": false,
+     "description": "Filter by Day"
+    }
+   ]
+  },
+  {
+   "id": "get_resources_resourceid_hours_hourid",
+   "method": "GET",
+   "path": "/resources/{resourceid}/hours/{hourid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource Hour API'S",
+   "summary": "API is Used to fetch a specific Resource hour based on given hourid in the url.",
+   "params": [
+    {
+     "name": "hourid",
+     "in": "path",
+     "required": true,
+     "description": "Tenant Resource Hour UniqueId"
+    },
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes",
+   "method": "GET",
+   "path": "/resourcetypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Resource Type API'S",
+   "summary": "1. The API fetches all active and inactive records from the M_RESOURCE_TYPE table based on the customer/tenant from header and then sorted by name in case-insensitive ascending order. 2. If the UI passes the query param\u2026",
+   "params": []
+  },
+  {
+   "id": "get_resourcetypes_resourceTypeId_resources_calendar",
+   "method": "GET",
+   "path": "/resourcetypes/{resourceTypeId}/resources/calendar",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Resource Calendar",
+   "summary": "Get resource calendar time slots",
+   "params": [
+    {
+     "name": "resourceTypeId",
+     "in": "path",
+     "required": true,
+     "description": "UUID of the Resource Type."
+    },
+    {
+     "name": "endTime",
+     "in": "query",
+     "required": false,
+     "description": "End time (epoch millis)."
+    },
+    {
+     "name": "eventDate",
+     "in": "query",
+     "required": true,
+     "description": "Event date (epoch millis)."
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Zero-based page index."
+    },
+    {
+     "name": "resource",
+     "in": "query",
+     "required": false,
+     "description": "Filter by resource UUID."
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size."
+    },
+    {
+     "name": "startTime",
+     "in": "query",
+     "required": false,
+     "description": "Start time (epoch millis)."
+    },
+    {
+     "name": "type",
+     "in": "query",
+     "required": false,
+     "description": "Slot filter type (e.g., `vacant`, RESCHEDULE)."
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes_resourcetypeid",
+   "method": "GET",
+   "path": "/resourcetypes/{resourcetypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Resource Type API'S",
+   "summary": "API is Used to fetch a specific resourcetype based on given resourcetypeid in the url.",
+   "params": [
+    {
+     "name": "resourcetypeid",
+     "in": "path",
+     "required": true,
+     "description": "Resource Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes_resourcetypeid_fieldmappings",
+   "method": "GET",
+   "path": "/resourcetypes/{resourcetypeid}/fieldmappings",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Resource Type Field Mapping API'S",
+   "summary": "1. By default, the API fetches all records based on entityKey and tenant, from M_FORM_FIELDS, ordered by displayText in ascending, case-insensitive order.",
+   "params": [
+    {
+     "name": "resourcetypeid",
+     "in": "path",
+     "required": true,
+     "description": "Resource Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes_resourcetypeid_fieldmappings_fieldmappingid",
+   "method": "GET",
+   "path": "/resourcetypes/{resourcetypeid}/fieldmappings/{fieldmappingid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Resource Type Field Mapping API'S",
+   "summary": "This API is used to fetch a specific ResourceType Field Mapping based on the resourceTypeId and fieldMappingId provided in the URL.",
+   "params": [
+    {
+     "name": "fieldmappingid",
+     "in": "path",
+     "required": true,
+     "description": "Field Mapping UniqueId"
+    },
+    {
+     "name": "resourcetypeid",
+     "in": "path",
+     "required": true,
+     "description": "Resource Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes_resourcetypeid_resources",
+   "method": "GET",
+   "path": "/resourcetypes/{resourcetypeid}/resources",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource API'S",
+   "summary": "1. API is used to fetch all active and inactive tenant resources, sorted by createdTs Desc and sortOrder.",
+   "params": [
+    {
+     "name": "resourcetypeid",
+     "in": "path",
+     "required": true,
+     "description": "Resource Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_resourcetypes_resourcetypeid_resources_resourceid",
+   "method": "GET",
+   "path": "/resourcetypes/{resourcetypeid}/resources/{resourceid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant Resource API'S",
+   "summary": "This API is used to fetch a specific tenant resource based on given resourcetypeid and resourceid provided in the URL.",
+   "params": [
+    {
+     "name": "resourceid",
+     "in": "path",
+     "required": true,
+     "description": "Resource UniqueId"
+    },
+    {
+     "name": "resourcetypeid",
+     "in": "path",
+     "required": true,
+     "description": "Resource Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_roledataaccess",
+   "method": "GET",
+   "path": "/roledataaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Data Access Map API'S",
+   "summary": "1. The API is used to fetch all records from the M_CATEGORY_ROLE_DATA_ACCESS_MAP table in a case-insensitive ascending order by \"description\". 2. Search by Description: http://localhost:8080/event/api/roledataaccess?q=I\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Description"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": true,
+     "description": "role of the user"
+    }
+   ]
+  },
+  {
+   "id": "get_roledataaccess_roledataaccessid",
+   "method": "GET",
+   "path": "/roledataaccess/{roledataaccessid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Data Access Map API'S",
+   "summary": "API is Used to fetch a specific Role Data Access based on roledataAccessid.",
+   "params": [
+    {
+     "name": "roledataaccessid",
+     "in": "path",
+     "required": true,
+     "description": "Role Data Access UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_rolemodulefeatureaccess",
+   "method": "GET",
+   "path": "/rolemodulefeatureaccess",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Module Feature Access API'S",
+   "summary": "1. By default, the API fetches both active and inactive records from the M_ROLE_MODULE_FEATURE_ACCESS table based on the provided headers. If the UI sends isActive=true as a query parameter, only active records will be\u2026",
+   "params": [
+    {
+     "name": "module",
+     "in": "query",
+     "required": false,
+     "description": "Attribut Name - module"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Attribute Name - role"
+    }
+   ]
+  },
+  {
+   "id": "get_rolemodulefeatureaccess_rolemodulefeatureaccessid",
+   "method": "GET",
+   "path": "/rolemodulefeatureaccess/{rolemodulefeatureaccessid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role Module Feature Access API'S",
+   "summary": "API is Used to fetch a specific role module feature access based on given rolemodulefeatureaccessid in the url.",
+   "params": [
+    {
+     "name": "rolemodulefeatureaccessid",
+     "in": "path",
+     "required": true,
+     "description": "Role Module Feature Access UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_roles",
+   "method": "GET",
+   "path": "/roles",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role API'S",
+   "summary": "1. API is used to fetch all records from the M_ROLE table and check whether each record is present in the M_EVENT_ROLE table. If a record is associated with a category or event, the isEnabled flag is returned as true. I\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Name"
+    }
+   ]
+  },
+  {
+   "id": "get_rolestateactions",
+   "method": "GET",
+   "path": "/rolestateactions",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Role State Action API'S",
+   "summary": "1 . The API is used to fetch all records from the BI_ROLE_STATE_ACTION table based on the given headers and sorted in createdTs desc order . 2. Filter by Role The API is used to fetch \"Role\" specific Role State Action R\u2026",
+   "params": [
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Filter By Role"
+    }
+   ]
+  },
+  {
+   "id": "get_rolestateactions_rolestateactionid_notifications_notificationid",
+   "method": "GET",
+   "path": "/rolestateactions/{rolestateactionid}/notifications/{notificationid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Notification API'S",
+   "summary": "API is Used to fetch a specific Notification based on given rolestateactionid and notificationid in the url.",
+   "params": [
+    {
+     "name": "notificationid",
+     "in": "path",
+     "required": true,
+     "description": "Notification UniqueId"
+    },
+    {
+     "name": "rolestateactionid",
+     "in": "path",
+     "required": true,
+     "description": "Role State Action UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_rolestateactions_rolestationactionid_notifications",
+   "method": "GET",
+   "path": "/rolestateactions/{rolestationactionid}/notifications",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Notification API'S",
+   "summary": "API is used to fetch all notifications based on given rolestateactionid.",
+   "params": [
+    {
+     "name": "rolestationactionid",
+     "in": "path",
+     "required": true,
+     "description": "Role State Action UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_schedules_scheduleType",
+   "method": "GET",
+   "path": "/schedules/{scheduleType}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "schedule API'S",
+   "summary": "API is used for Getting All Schedules",
+   "params": [
+    {
+     "name": "fetchType",
+     "in": "query",
+     "required": true,
+     "description": "search by user name/mail id"
+    },
+    {
+     "name": "filter",
+     "in": "query",
+     "required": true,
+     "description": "Filter"
+    },
+    {
+     "name": "q",
+     "in": "query",
+     "required": true,
+     "description": "search by user name/mail id"
+    },
+    {
+     "name": "scheduleType",
+     "in": "query",
+     "required": true,
+     "description": "scheduleType unique Id"
+    }
+   ]
+  },
+  {
+   "id": "get_schedules_scheduleType_scheduleId",
+   "method": "GET",
+   "path": "/schedules/{scheduleType}/{scheduleId}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "schedule API'S",
+   "summary": "This API is used to fetch a specific schedule based on the given scheduleId",
+   "params": [
+    {
+     "name": "scheduleType",
+     "in": "query",
+     "required": true,
+     "description": "scheduleType unique Id"
+    }
+   ]
+  },
+  {
+   "id": "get_states",
+   "method": "GET",
+   "path": "/states",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "State API'S",
+   "summary": "1. API is used to fetch all records from the M_STATE table and check whether each record is present in the M_EVENT_STATE table. If a record is associated with a category or event, the isEnabled flag is returned as true.\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by State Name"
+    }
+   ]
+  },
+  {
+   "id": "get_templates",
+   "method": "GET",
+   "path": "/templates",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Template API'S",
+   "summary": "1. The API is used to fetch all Template Master records from the BI_TEMPLATE_MASTER table. It also checks if the same record is present in the BI_TEMPLATE_DETAIL table. If it is present, isEnabled is returned as true; i\u2026",
+   "params": [
+    {
+     "name": "q",
+     "in": "query",
+     "required": false,
+     "description": "Search by Name"
+    }
+   ]
+  },
+  {
+   "id": "get_templates_templateid_details",
+   "method": "GET",
+   "path": "/templates/{templateid}/details",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Template API'S",
+   "summary": "The API is used to fetch a specific template detail based on given templateid in path from the BI_TEMPLATE_DETAIL table.",
+   "params": [
+    {
+     "name": "templateid",
+     "in": "path",
+     "required": true,
+     "description": "Template UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_tenants",
+   "method": "GET",
+   "path": "/tenants",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Tenant API'S",
+   "summary": "1. If the UI does not send any query parameters, such as active=true or false and verbose=false or true, the API will fetch both active and inactive records from the BI_TENANT table. URL: http://localhost:8080/event/api\u2026",
+   "params": [
+    {
+     "name": "active",
+     "in": "query",
+     "required": false,
+     "description": "Filter by IsActive"
+    },
+    {
+     "name": "verbose",
+     "in": "query",
+     "required": false,
+     "description": "Filter by EIQ / BIQ Tenants"
+    }
+   ]
+  },
+  {
+   "id": "get_themes",
+   "method": "GET",
+   "path": "/themes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Theme API'S",
+   "summary": "1. The API is used to fetch all active and active records from the M_THEME table, sorted by createdTs in descending order. 2. To filter by type, use the URL: http://localhost:8080/event/api/themes?type=Dashboard",
+   "params": [
+    {
+     "name": "type",
+     "in": "query",
+     "required": false,
+     "description": "Search by Type"
+    }
+   ]
+  },
+  {
+   "id": "get_themes_themeid",
+   "method": "GET",
+   "path": "/themes/{themeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Theme API'S",
+   "summary": "API is Used to fetch a specific theme based on given themeid in the url.",
+   "params": [
+    {
+     "name": "themeid",
+     "in": "path",
+     "required": true,
+     "description": "Theme UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_tickets",
+   "method": "GET",
+   "path": "/tickets",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Ticket API'S",
+   "summary": "1. The API is used to fetch all records from the BI_TICKET table in descending order by createdTs. 2. If X-Cloud-Eventid is present in the header, only show-specific records will be fetched. If X-Cloud-Eventid is not pr\u2026",
+   "params": []
+  },
+  {
+   "id": "get_tickets_ticketid",
+   "method": "GET",
+   "path": "/tickets/{ticketid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Ticket API'S",
+   "summary": "API is Used to fetch a specific ticket based on given ticket UniqueId and ticket Number in url.",
+   "params": [
+    {
+     "name": "ticketid",
+     "in": "path",
+     "required": true,
+     "description": "Ticket UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_timerestrictions",
+   "method": "GET",
+   "path": "/timerestrictions",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Time Restriction API'S",
+   "summary": "API is used to fetch all records based on X-Cloud-Eventid from header.",
+   "params": []
+  },
+  {
+   "id": "get_timerestrictions_timerestrictionid",
+   "method": "GET",
+   "path": "/timerestrictions/{timerestrictionid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Event Time Restriction API'S",
+   "summary": "API is Used to fetch a specific Event Time Restriction record based on timerestrictionid.",
+   "params": [
+    {
+     "name": "timerestrictionid",
+     "in": "path",
+     "required": true,
+     "description": "Event Time Restriction UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_topictypes",
+   "method": "GET",
+   "path": "/topictypes",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Topic Type API'S",
+   "summary": "1. The API will fetch all Topic Types based on the categorytype, category, and the Tenant from the request header, sorted in case-sensitive ascending order by Type.",
+   "params": []
+  },
+  {
+   "id": "get_topictypes_topictypeid",
+   "method": "GET",
+   "path": "/topictypes/{topictypeid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "Category Topic Type API'S",
+   "summary": "API is Used to fetch a specific Topic Type Based on topicTypeId.",
+   "params": [
+    {
+     "name": "topictypeid",
+     "in": "path",
+     "required": true,
+     "description": "Topic Type UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_users",
+   "method": "GET",
+   "path": "/users",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "User API'S",
+   "summary": "1. By Default API is Used to fetch all isActive=true Users in firstName and lastName Asc order. 2. If filter by isActive=true is present in request as RequestParam then it returns all active users. url - http://localhos\u2026",
+   "params": [
+    {
+     "name": "isActive",
+     "in": "query",
+     "required": false,
+     "description": "true/false"
+    },
+    {
+     "name": "name",
+     "in": "query",
+     "required": false,
+     "description": "first Name / last Name / UserName"
+    },
+    {
+     "name": "role",
+     "in": "query",
+     "required": false,
+     "description": "Role UniqueId - Admin"
+    }
+   ]
+  },
+  {
+   "id": "get_users_userid",
+   "method": "GET",
+   "path": "/users/{userid}",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "User API'S",
+   "summary": "API is Used to fetch a particular user based on eventid and userid.",
+   "params": [
+    {
+     "name": "userid",
+     "in": "path",
+     "required": true,
+     "description": "user UniqueId"
+    }
+   ]
+  },
+  {
+   "id": "get_virtualcvc_eventrequest_requestId_attendeeType",
+   "method": "GET",
+   "path": "/virtualcvc/eventrequest/{requestId}/{attendeeType}",
+   "spec": "biq-event.yaml",
+   "tag": "Virtual CVC Attendee Controller",
+   "summary": "API is used to fetch all internal/external attendees based on attendeeType for a given Request. For internal attendee attndeeType = internalattende and for external attendee attendeeType = externalattendees.",
+   "params": [
+    {
+     "name": "attendeeType",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee"
+    },
+    {
+     "name": "requestId",
+     "in": "path",
+     "required": true,
+     "description": "requestId"
+    }
+   ]
+  },
+  {
+   "id": "get_virtualcvc_eventrequest_requestId_attendeeType_attendeeId_portlalinvite",
+   "method": "GET",
+   "path": "/virtualcvc/eventrequest/{requestId}/{attendeeType}/{attendeeId}/portlalinvite",
+   "spec": "biq-event.yaml",
+   "tag": "Virtual CVC Attendee Controller",
+   "summary": "API is used to send Customer Portal Invitation link to a specific external attendee through Email based on attendeeId in path variable. In path varibale attendeeType = externalattendees.",
+   "params": [
+    {
+     "name": "attendeeId",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee ID"
+    },
+    {
+     "name": "attendeeType",
+     "in": "path",
+     "required": true,
+     "description": "External Attendee"
+    },
+    {
+     "name": "requestId",
+     "in": "path",
+     "required": true,
+     "description": "requestId"
+    }
+   ]
+  },
+  {
+   "id": "get_virtualcvc_timezones",
+   "method": "GET",
+   "path": "/virtualcvc/timezones",
+   "spec": "biq-eiq-new-features.yaml",
+   "tag": "TimeZone API",
+   "summary": "Api is used to fetch all timezones.",
+   "params": []
+  },
+  {
+   "id": "get_zoom_digital-signage_content",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Content",
+   "summary": "Get all active digital signage content (paginated)",
+   "params": [
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (e.g., \"contentName,asc\")"
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content-groups",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content-groups",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Content Groups",
+   "summary": "List all content groups (paginated)",
+   "params": [
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": ""
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content-groups_schedule",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content-groups/schedule",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Content Groups",
+   "summary": "List all content groups with schedules (paginated)",
+   "params": [
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": ""
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content-groups_groupId",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content-groups/{groupId}",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Content Groups",
+   "summary": "Get a content group by ID (includes content items)",
+   "params": [
+    {
+     "name": "groupId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content-groups_groupId_content",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content-groups/{groupId}/content",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Content Groups",
+   "summary": "List content in a group (paginated, ordered by orderIndex)",
+   "params": [
+    {
+     "name": "groupId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": ""
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content-groups_groupId_content_contentId",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content-groups/{groupId}/content/{contentId}",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Content Groups",
+   "summary": "Get a specific content item in a group",
+   "params": [
+    {
+     "name": "contentId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    },
+    {
+     "name": "groupId",
+     "in": "path",
+     "required": true,
+     "description": ""
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content_schedules",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content/schedules",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Content",
+   "summary": "Get all content items with their associated schedules (paginated)",
+   "params": [
+    {
+     "name": "endTime",
+     "in": "query",
+     "required": false,
+     "description": "Optional end time (UTC epoch ms) \u2014 informational only, not applied as a filter."
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (e.g. \"contentName,asc\")"
+    },
+    {
+     "name": "startTime",
+     "in": "query",
+     "required": false,
+     "description": "Optional start time (UTC epoch ms) \u2014 informational only, not applied as a filter."
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_content_contentId",
+   "method": "GET",
+   "path": "/zoom/digital-signage/content/{contentId}",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Content",
+   "summary": "Get digital signage content by ID",
+   "params": [
+    {
+     "name": "contentId",
+     "in": "path",
+     "required": true,
+     "description": "Content unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_schedule",
+   "method": "GET",
+   "path": "/zoom/digital-signage/schedule",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Schedule",
+   "summary": "Get all active digital signage schedules (paginated)",
+   "params": [
+    {
+     "name": "endTime",
+     "in": "query",
+     "required": false,
+     "description": "Optional date filter (UTC epoch ms). Only schedules active on this date are returned."
+    },
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (e.g. \"scheduleName,asc\")"
+    },
+    {
+     "name": "startTime",
+     "in": "query",
+     "required": false,
+     "description": "Optional date filter (UTC epoch ms). Only schedules active on this date are returned."
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_digital-signage_schedule_upcoming",
+   "method": "GET",
+   "path": "/zoom/digital-signage/schedule/upcoming",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Schedule",
+   "summary": "Get upcoming event digital signage schedules",
+   "params": []
+  },
+  {
+   "id": "get_zoom_digital-signage_schedule_scheduleId",
+   "method": "GET",
+   "path": "/zoom/digital-signage/schedule/{scheduleId}",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Digital Signage Schedule",
+   "summary": "Get digital signage schedule by ID",
+   "params": [
+    {
+     "name": "scheduleId",
+     "in": "path",
+     "required": true,
+     "description": "Schedule unique ID"
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_rooms",
+   "method": "GET",
+   "path": "/zoom/rooms",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Zoom Rooms",
+   "summary": "Get all rooms from T_ZOOM_ROOM_STRUCTURE table",
+   "params": [
+    {
+     "name": "parentId",
+     "in": "query",
+     "required": false,
+     "description": "Optional parent ID. If not provided, returns only rooms where parentId is null"
+    }
+   ]
+  },
+  {
+   "id": "get_zoom_rooms_schedules",
+   "method": "GET",
+   "path": "/zoom/rooms/schedules",
+   "spec": "digital-signage-api.yaml",
+   "tag": "Zoom Rooms",
+   "summary": "Get all Zoom rooms with their schedules (paginated)",
+   "params": [
+    {
+     "name": "page",
+     "in": "query",
+     "required": false,
+     "description": "Page number (0-indexed)"
+    },
+    {
+     "name": "size",
+     "in": "query",
+     "required": false,
+     "description": "Page size"
+    },
+    {
+     "name": "sort",
+     "in": "query",
+     "required": false,
+     "description": "Sort criteria (e.g. \"name,asc\")"
+    }
+   ]
+  }
+ ]
+}
