@@ -588,4 +588,53 @@ tools = [
             "required": ["event_id", "event_date", "sessions"],
         },
     },
+    {
+        "type": "function",
+        "name": "search_briefingiq_endpoints",
+        "description": (
+            "Search the catalog of 200+ read-only BriefingIQ API endpoints (locations, location hours, "
+            "presenters, presenter calendars, meetings, meeting history, attendees, topics, resources, "
+            "vacant time slots, roles, reports, forms, notes, ...). Use this when no dedicated tool covers "
+            "the user's question but live BriefingIQ data might — then pass the chosen endpoint id to "
+            "call_briefingiq_endpoint. Returns: [{id, path, tag, summary, params}]."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords describing the data needed, e.g. 'presenter calendar' or 'location hours'.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "call_briefingiq_endpoint",
+        "description": (
+            "Execute a read-only (GET) BriefingIQ API endpoint found via search_briefingiq_endpoints. "
+            "Fill every {placeholder} in the endpoint path via path_params (event ids default to the "
+            "current event from context). Auth is forwarded from the user's session, so results respect "
+            "their permissions. Returns the endpoint's JSON response (large lists are truncated)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "endpoint_id": {
+                    "type": "string",
+                    "description": "Endpoint id from search_briefingiq_endpoints, e.g. 'get_roledataaccess'.",
+                },
+                "path_params": {
+                    "type": "object",
+                    "description": "Values for {placeholders} in the path, e.g. {\"eventid\": \"<uuid>\"}.",
+                },
+                "query_params": {
+                    "type": "object",
+                    "description": "Query-string parameters listed in the endpoint's params.",
+                },
+            },
+            "required": ["endpoint_id"],
+        },
+    },
 ]
