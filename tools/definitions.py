@@ -637,4 +637,54 @@ tools = [
             "required": ["endpoint_id"],
         },
     },
+    {
+        "type": "function",
+        "name": "draft_briefing",
+        "description": (
+            "Assemble a complete briefing draft for user review — NO writes happen. "
+            "Use after interviewing the user (customer, objective, date/time, room, presenters, attendees) "
+            "and gathering supporting data via other tools. Resolves the room name against the event's rooms. "
+            "Returns a draft_id + a markdown summary. ALWAYS show the summary (and any assumptions) to the "
+            "user and wait for their explicit confirmation before calling push_briefing. "
+            "Attendee objects: {firstName, lastName, email, designation?, company? (external only)}."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "BriefingIQ event UUID (defaults to header context)."},
+                "customer_name": {"type": "string", "description": "Customer/account the briefing is for."},
+                "objective": {"type": "string", "description": "Briefing objective / purpose."},
+                "briefing_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "start_time": {"type": "string", "description": "HH:MM 24-hour, in the request timezone."},
+                "end_time": {"type": "string", "description": "HH:MM 24-hour."},
+                "room_name": {"type": "string", "description": "Optional room name — fuzzy-matched against the event's rooms."},
+                "presenter_emails": {"type": "array", "items": {"type": "string"}},
+                "internal_attendees": {"type": "array", "items": {"type": "object"}},
+                "external_attendees": {"type": "array", "items": {"type": "object"}},
+                "agenda_sessions": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Optional [{title, time_slot}] sessions from generate_agenda to push as agenda.",
+                },
+            },
+            "required": ["customer_name", "briefing_date", "start_time", "end_time"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "push_briefing",
+        "description": (
+            "Execute the writes for a confirmed briefing draft: creates the briefing request (meeting), "
+            "adds attendees, and optionally pushes agenda sessions. Call ONLY after the user explicitly "
+            "confirmed the draft summary shown from draft_briefing — never on your own initiative. "
+            "A draft can be pushed at most once. Reports per-step success/failure."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string", "description": "draft_id returned by draft_briefing."},
+            },
+            "required": ["draft_id"],
+        },
+    },
 ]
