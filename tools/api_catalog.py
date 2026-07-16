@@ -101,17 +101,28 @@ def _build_headers(schedule_headers):
     def h(name, default=""):
         return headers.get(name.lower(), headers.get(name, default))
 
+    # Dev-only fallback so the local UI can test without a real session:
+    # set BRIEFINGIQ_DEV_BEARER (and optionally the BRIEFINGIQ_DEV_* tenant
+    # vars) in .env — never commit a token. Real requests always win.
+    authorization = h("Authorization") or os.environ.get("BRIEFINGIQ_DEV_BEARER", "")
+    if authorization and not authorization.startswith("Bearer "):
+        authorization = f"Bearer {authorization}"
+
     return {
         "Accept": "application/json, text/plain, */*",
-        "Authorization": h("Authorization"),
-        "X-Cloud-Categoryid": h("x-cloud-categoryid"),
+        "Authorization": authorization,
+        "X-Cloud-Categoryid": h(
+            "x-cloud-categoryid", os.environ.get("BRIEFINGIQ_DEV_CATEGORYID", "")
+        ),
         "X-Cloud-Categorytypeid": h("x-cloud-categorytypeid", "CATEGORY_TYPE_BRIEFINGS"),
         "X-Cloud-Eventid": h("x-cloud-eventid"),
         "X-Cloud-Client-Timezone": h("x-cloud-client-timezone", "America/Los_Angeles"),
         "X-Cloud-Context-Timezone": h("x-cloud-context-timezone", "America/Los_Angeles"),
         "X-Cloud-Requested-Timezone": h("x-cloud-requested-timezone", "America/Los_Angeles"),
-        "X-Cloud-Customerid": h("x-cloud-customerid"),
-        "X_cloud_user": h("x_cloud_user"),
+        "X-Cloud-Customerid": h(
+            "x-cloud-customerid", os.environ.get("BRIEFINGIQ_DEV_CUSTOMERID", "")
+        ),
+        "X_cloud_user": h("x_cloud_user", os.environ.get("BRIEFINGIQ_DEV_USER", "")),
     }
 
 
