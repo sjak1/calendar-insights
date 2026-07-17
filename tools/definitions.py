@@ -673,6 +673,91 @@ tools = [
     },
     {
         "type": "function",
+        "name": "reschedule_briefing",
+        "description": (
+            "Move an EXISTING briefing (meeting) to a new date/time and optionally a new room. "
+            "Works on any briefing — AI-created or manually created in the app. First find the meeting "
+            "(e.g. via call_briefingiq_endpoint get_events_eventid_meetings), show the user the current "
+            "vs proposed schedule, and call this ONLY after they explicitly confirm."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
+                "meeting_id": {"type": "string", "description": "Meeting/briefing UUID."},
+                "new_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "start_time": {"type": "string", "description": "HH:MM 24-hour."},
+                "end_time": {"type": "string", "description": "HH:MM 24-hour."},
+                "room_name": {"type": "string", "description": "Optional new room name (fuzzy-matched)."},
+            },
+            "required": ["meeting_id", "new_date", "start_time", "end_time"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "manage_briefing_attendees",
+        "description": (
+            "Add, update, or remove a single attendee on an EXISTING briefing (meeting). "
+            "Show the user the exact change and get explicit confirmation before calling. "
+            "For remove/update, get the attendee_id from the meeting's attendee list first "
+            "(call_briefingiq_endpoint). Attendee body: {firstName, lastName, email, designation?, "
+            "isRemote?, company?/corporateTitle?/isDecisionMaker? (external only)}."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
+                "meeting_id": {"type": "string"},
+                "action": {"type": "string", "enum": ["add", "update", "remove"]},
+                "attendee_type": {"type": "string", "enum": ["internalattendees", "externalattendees"]},
+                "attendee": {"type": "object", "description": "Attendee body (add/update)."},
+                "attendee_id": {"type": "string", "description": "Existing attendee UUID (update/remove)."},
+            },
+            "required": ["meeting_id", "action", "attendee_type"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "manage_briefing_presenters",
+        "description": (
+            "Add a presenter (by email), remove one, or set a presenter's status on an EXISTING briefing. "
+            "Show the user the exact change and get explicit confirmation before calling. For remove/"
+            "set_status, get the presenter_id from the meeting's presenter list first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
+                "meeting_id": {"type": "string"},
+                "action": {"type": "string", "enum": ["add", "remove", "set_status"]},
+                "email": {"type": "string", "description": "Presenter primary email (add)."},
+                "presenter_id": {"type": "string", "description": "Request-presenter UUID (remove/set_status)."},
+                "status": {"type": "string", "description": "New status, e.g. CONFIRMED / DECLINED (set_status)."},
+            },
+            "required": ["meeting_id", "action"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "update_briefing_details",
+        "description": (
+            "Update fields on an EXISTING briefing's detail form (accountName, meetingDetails, meetingFocus, "
+            "industry, numberOfAttendees, opportunity, host fields, ...). Read-modify-write: only the keys "
+            "you pass change, the rest is preserved. Show the user current → proposed values and get "
+            "explicit confirmation before calling."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
+                "meeting_id": {"type": "string"},
+                "changes": {"type": "object", "description": "Map of data fields to new values."},
+            },
+            "required": ["meeting_id", "changes"],
+        },
+    },
+    {
+        "type": "function",
         "name": "push_briefing",
         "description": (
             "Execute the writes for a confirmed briefing draft: creates the briefing request via the "

@@ -755,6 +755,53 @@ def execute_tool(
             )
             return output
 
+        elif tool_name in (
+            "reschedule_briefing",
+            "manage_briefing_attendees",
+            "manage_briefing_presenters",
+            "update_briefing_details",
+        ):
+            from tools import briefing_editor
+            token = (schedule_headers or {}).get("Authorization", "")
+            event_id = args.get("event_id") or context_event_id or ""
+            common = {"event_id": event_id, "token": token, "schedule_headers": schedule_headers}
+            if tool_name == "reschedule_briefing":
+                result = briefing_editor.reschedule_briefing(
+                    meeting_id=args["meeting_id"],
+                    new_date=args["new_date"],
+                    start_time=args["start_time"],
+                    end_time=args["end_time"],
+                    room_name=args.get("room_name"),
+                    **common,
+                )
+            elif tool_name == "manage_briefing_attendees":
+                result = briefing_editor.manage_briefing_attendees(
+                    meeting_id=args["meeting_id"],
+                    action=args["action"],
+                    attendee_type=args["attendee_type"],
+                    attendee=args.get("attendee"),
+                    attendee_id=args.get("attendee_id"),
+                    **common,
+                )
+            elif tool_name == "manage_briefing_presenters":
+                result = briefing_editor.manage_briefing_presenters(
+                    meeting_id=args["meeting_id"],
+                    action=args["action"],
+                    email=args.get("email"),
+                    presenter_id=args.get("presenter_id"),
+                    status=args.get("status"),
+                    **common,
+                )
+            else:
+                result = briefing_editor.update_briefing_details(
+                    meeting_id=args["meeting_id"],
+                    changes=args.get("changes") or {},
+                    **common,
+                )
+            output = {tool_name: result}
+            logger.info(f"✓ {tool_name} meeting={args.get('meeting_id')} success={result.get('success')}")
+            return output
+
         else:
             logger.warning(f"Unknown tool: {tool_name}")
             return {"error": f"Unknown tool: {tool_name}"}
