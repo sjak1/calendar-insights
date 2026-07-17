@@ -719,13 +719,14 @@ def execute_tool(
             from tools.briefing_builder import draft_briefing
             token = (schedule_headers or {}).get("Authorization", "")
             result = draft_briefing(
-                event_id=args.get("event_id") or context_event_id or "",
                 token=token,
                 customer_name=args.get("customer_name", ""),
+                opportunity_id=args.get("opportunity_id", ""),
                 briefing_date=args.get("briefing_date", ""),
                 start_time=args.get("start_time", ""),
                 end_time=args.get("end_time", ""),
                 objective=args.get("objective"),
+                duration_days=int(args.get("duration_days") or 1),
                 room_name=args.get("room_name"),
                 presenter_emails=args.get("presenter_emails"),
                 internal_attendees=args.get("internal_attendees"),
@@ -750,7 +751,7 @@ def execute_tool(
             output = {"push_briefing": result}
             logger.info(
                 f"✓ push_briefing draft={args.get('draft_id')} success={result.get('success')} "
-                f"meeting_id={result.get('meeting_id')} failed={result.get('failed_steps')}"
+                f"request_id={result.get('request_id')} ({result.get('event_number')}) failed={result.get('failed_steps')}"
             )
             return output
 

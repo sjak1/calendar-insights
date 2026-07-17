@@ -1,16 +1,25 @@
 """
 Briefing builder — the write half of the agentic briefing flow.
 
+In this tenant a briefing IS an event (category "Customer Briefing Request",
+CBR-* numbers) created through the forms engine — not a "meeting" (that
+subsystem belongs to the tradeshow module). See docs/BRIEFINGIQ_API_GUIDE.md.
+
 Flow (strictly ordered):
   1. The agent interviews the user and gathers data (catalog / OpenSearch tools).
   2. draft_briefing(...)  → validates + assembles a complete draft, returns a
      draft_id and a human-readable summary. NO writes happen here.
   3. The agent shows the summary; the user must explicitly confirm.
-  4. push_briefing(draft_id, ...) → executes the writes in order:
-        a. POST /events/{eventid}/meetings                      → the briefing request
-        b. POST /events/{eventid}/meetings/{mid}/{attendeetype} → attendees
-        c. push_agenda_to_app(...)                              → agenda sessions (optional)
+  4. push_briefing(draft_id, ...) → executes the verified write chain:
+        a. POST /forms/{requestFormId}/data       → creates the CBR event (requestId)
+        b. PUT  .../data/{requestId}/actions/SUBMIT?sendNotification=false
+        c. push_agenda_to_app(...)                → agenda sessions (optional)
      Partial failures are reported per step; completed steps are never rolled back.
+
+The moduleId/journeyId/pageId/formId are discovered at runtime (they differ per
+tenant): category with identifier REQUEST_TYPE → module with moduleType
+REQUEST_CREATION → its journey/page/form config. Verified live 2026-07-17
+(create → CBR-20260724-108 → SUBMIT → CANCEL, all 200).
 
 Drafts live in process memory with a TTL — a draft_id from an old session
 cannot be replayed after expiry.
@@ -30,9 +39,8 @@ logger = get_logger(__name__)
 _DRAFTS: Dict[str, Dict[str, Any]] = {}
 _DRAFT_TTL = 3600  # 1 hour — long enough for a review conversation
 
-# Meeting-level attendee collections (path segment for {attendeetype}).
-INTERNAL_ATTENDEE_TYPE = "internalattendees"
-EXTERNAL_ATTENDEE_TYPE = "externalattendees"
+_REQUEST_CTX_CACHE: Dict[str, Dict[str, Any]] = {}
+_REQUEST_CTX_TTL = 3600
 
 
 def _now() -> float:
@@ -64,8 +72,15 @@ def _to_ms(date_str: str, time_str: str, tz_name: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def _embedded_items(payload: Dict) -> List[Dict]:
+    for value in (payload.get("_embedded") or {}).values():
+        if isinstance(value, list):
+            return value
+    return []
+
+
 def _fetch_event_locations(headers: Dict[str, str], event_id: str) -> List[Dict]:
-    """Rooms attached to the event — used to resolve a room name to a uniqueId."""
+    """Rooms attached to an event — used by briefing_editor to resolve room names."""
     url = f"{BASE_URL}/events/{event_id}/locations"
     try:
         resp = requests.get(url, headers=headers, timeout=30)
@@ -73,11 +88,7 @@ def _fetch_event_locations(headers: Dict[str, str], event_id: str) -> List[Dict]
             logger.warning(f"event locations fetch failed: HTTP {resp.status_code}")
             return []
         data = resp.json()
-        embedded = data.get("_embedded", {})
-        for value in embedded.values():
-            if isinstance(value, list):
-                return value
-        return data if isinstance(data, list) else []
+        return _embedded_items(data) or (data if isinstance(data, list) else [])
     except requests.RequestException as exc:
         logger.warning(f"event locations fetch failed: {exc}")
         return []
@@ -96,7 +107,7 @@ def _resolve_room(headers: Dict, event_id: str, room_name: Optional[str]):
     locations = _fetch_event_locations(headers, event_id)
     names = [_location_name(l) for l in locations]
     if not room_name:
-        return None, names, "No room requested — briefing will be created without one."
+        return None, names, "No room requested."
     want = room_name.lower().strip()
     for loc in locations:
         name = _location_name(loc).lower()
@@ -105,41 +116,104 @@ def _resolve_room(headers: Dict, event_id: str, room_name: Optional[str]):
     return None, names, f"Room '{room_name}' not found on this event."
 
 
+def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Resolve the tenant's request-creation wiring at runtime:
+      category (identifier REQUEST_TYPE) → module (moduleType REQUEST_CREATION)
+      → module config (journey/page/form). Cached per tenant for an hour.
+    """
+    cache_key = headers.get("x-cloud-customerid", "")
+    cached = _REQUEST_CTX_CACHE.get(cache_key)
+    if cached and _now() - cached["ts"] < _REQUEST_CTX_TTL:
+        return cached["ctx"]
+
+    category_type = headers.get("x-cloud-categorytypeid", "CATEGORY_TYPE_BRIEFINGS")
+    resp = requests.get(
+        f"{BASE_URL}/categorytypes/{category_type}/categories", headers=headers, timeout=30
+    )
+    resp.raise_for_status()
+    request_category = next(
+        (c for c in _embedded_items(resp.json()) if c.get("identifier") == "REQUEST_TYPE"),
+        None,
+    )
+    if not request_category:
+        raise RuntimeError("No REQUEST_TYPE category found for this tenant.")
+
+    req_headers = {**headers, "x-cloud-categoryid": request_category["uniqueId"]}
+
+    resp = requests.get(f"{BASE_URL}/admin/moduleaccess", headers=req_headers, timeout=30)
+    resp.raise_for_status()
+    module_id = None
+    for item in _embedded_items(resp.json()):
+        module = item.get("module") or {}
+        module_type = module.get("moduleType")
+        type_id = module_type.get("uniqueId") if isinstance(module_type, dict) else module_type
+        if type_id == "REQUEST_CREATION":
+            module_id = module.get("uniqueId")
+            break
+    if not module_id:
+        raise RuntimeError("No REQUEST_CREATION module accessible for this user.")
+
+    resp = requests.get(f"{BASE_URL}/modules/{module_id}/configs", headers=req_headers, timeout=30)
+    resp.raise_for_status()
+    configs = _embedded_items(resp.json())
+    if not configs:
+        raise RuntimeError("Request-creation module has no journey/page/form config.")
+    config = configs[0]
+
+    ctx = {
+        "category_id": request_category["uniqueId"],
+        "module_id": module_id,
+        "journey_id": (config.get("journey") or {}).get("uniqueId"),
+        "page_id": (config.get("page") or {}).get("uniqueId"),
+        "form_id": (config.get("form") or {}).get("uniqueId"),
+    }
+    if not ctx["form_id"]:
+        raise RuntimeError("Module config is missing the create-request form id.")
+    _REQUEST_CTX_CACHE[cache_key] = {"ts": _now(), "ctx": ctx}
+    logger.info(f"discovered request context: {ctx}")
+    return ctx
+
+
 def draft_briefing(
-    event_id: str,
     token: str,
     customer_name: str,
     briefing_date: str,
     start_time: str,
     end_time: str,
+    opportunity_id: str = "",
     objective: Optional[str] = None,
+    duration_days: int = 1,
     room_name: Optional[str] = None,
     presenter_emails: Optional[List[str]] = None,
     internal_attendees: Optional[List[Dict]] = None,
     external_attendees: Optional[List[Dict]] = None,
     agenda_sessions: Optional[List[Dict]] = None,
     schedule_headers: Optional[Dict] = None,
+    event_id: str = "",  # unused in create flow; kept for call compatibility
 ) -> Dict[str, Any]:
     """
-    Validate and assemble a briefing draft. Performs read-only lookups
-    (room resolution) but never writes. Returns draft_id + summary for user review.
+    Validate and assemble a briefing draft. NO writes. Returns draft_id + summary
+    for user review. The create-request form requires customer name, opportunity
+    id, date, start/end time, and duration (1-5 days).
     """
     _prune_drafts()
 
     missing = []
-    if not event_id:
-        missing.append("event_id")
     if not customer_name:
         missing.append("customer_name")
+    if not opportunity_id:
+        missing.append("opportunity_id")
     for field, value in (("briefing_date", briefing_date), ("start_time", start_time), ("end_time", end_time)):
         if not value:
             missing.append(field)
     if missing:
         return {"success": False, "error": f"Missing required fields: {missing}"}
+    if not 1 <= int(duration_days) <= 5:
+        return {"success": False, "error": "duration_days must be between 1 and 5."}
 
     tz = _tz_name(schedule_headers)
     try:
-        day_ms = _to_ms(briefing_date, "00:00", tz)
         start_ms = _to_ms(briefing_date, start_time, tz)
         end_ms = _to_ms(briefing_date, end_time, tz)
     except ValueError as exc:
@@ -147,30 +221,28 @@ def draft_briefing(
     if end_ms <= start_ms:
         return {"success": False, "error": "end_time must be after start_time."}
 
-    headers = _make_headers(token, event_id, schedule_headers)
-    location, room_options, room_note = _resolve_room(headers, event_id, room_name)
-
     assumptions = []
-    if room_note:
-        assumptions.append(room_note)
     if not objective:
         assumptions.append("No objective provided.")
-    if not (internal_attendees or external_attendees):
-        assumptions.append("No attendees listed yet.")
+    if room_name:
+        assumptions.append(
+            f"Room preference '{room_name}' noted — room booking is a separate step after creation."
+        )
+    if internal_attendees or external_attendees:
+        assumptions.append(
+            "Attendees recorded on the draft; automated attendee push is not yet enabled."
+        )
 
     briefing = {
-        "event_id": event_id,
         "customer_name": customer_name,
+        "opportunity_id": opportunity_id,
         "objective": objective or "",
         "briefing_date": briefing_date,
         "start_time": start_time,
         "end_time": end_time,
+        "duration_days": int(duration_days),
         "timezone": tz,
-        "epoch": {"day_ms": day_ms, "start_ms": start_ms, "end_ms": end_ms},
-        "room": {
-            "name": _location_name(location) if location else None,
-            "uniqueId": (location or {}).get("uniqueId"),
-        },
+        "room_name": room_name,
         "presenter_emails": presenter_emails or [],
         "internal_attendees": internal_attendees or [],
         "external_attendees": external_attendees or [],
@@ -180,18 +252,13 @@ def draft_briefing(
     draft_id = uuid.uuid4().hex[:12]
     _DRAFTS[draft_id] = {"created": _now(), "briefing": briefing, "pushed": False}
 
-    def _fmt_attendee(a: Dict) -> str:
-        name = f"{a.get('firstName', '')} {a.get('lastName', '')}".strip() or a.get("email", "?")
-        return f"{name} ({a.get('email', 'no email')})"
-
     lines = [
         f"**Customer:** {customer_name}",
+        f"**Opportunity:** {opportunity_id}",
         f"**Objective:** {objective or '—'}",
-        f"**Date:** {briefing_date}  {start_time}–{end_time} ({tz})",
-        f"**Room:** {briefing['room']['name'] or '— none —'}",
+        f"**Date:** {briefing_date}  {start_time}–{end_time} ({tz}), {duration_days} day(s)",
+        f"**Room preference:** {room_name or '—'}",
         f"**Presenters:** {', '.join(presenter_emails) if presenter_emails else '—'}",
-        f"**Internal attendees:** {', '.join(_fmt_attendee(a) for a in internal_attendees or []) or '—'}",
-        f"**External attendees:** {', '.join(_fmt_attendee(a) for a in external_attendees or []) or '—'}",
         f"**Agenda sessions:** {len(agenda_sessions or [])}",
     ]
 
@@ -201,7 +268,6 @@ def draft_briefing(
         "summary_markdown": "\n".join(lines),
         "briefing": briefing,
         "assumptions": assumptions,
-        "room_options": room_options if (room_name and not location) else None,
         "next_step": (
             "Show this summary to the user. Only call push_briefing after they explicitly confirm."
         ),
@@ -212,9 +278,11 @@ def push_briefing(
     draft_id: str,
     token: str,
     schedule_headers: Optional[Dict] = None,
+    submit: bool = True,
 ) -> Dict[str, Any]:
     """
-    Execute the writes for a confirmed draft. Ordered, partial-failure tolerant.
+    Execute the writes for a confirmed draft. Ordered, partial-failure tolerant:
+    create request (forms engine) → SUBMIT state action → agenda sessions.
     """
     _prune_drafts()
     entry = _DRAFTS.get(draft_id)
@@ -224,90 +292,92 @@ def push_briefing(
         return {"success": False, "error": f"Draft '{draft_id}' was already pushed — refusing to push twice."}
 
     b = entry["briefing"]
-    event_id = b["event_id"]
-    headers = _make_headers(token, event_id, schedule_headers)
+    headers = _make_headers(token, None, schedule_headers)
     steps: List[Dict[str, Any]] = []
 
-    # ── Step 1: create the briefing request (meeting) ─────────────────────
-    request_date: Dict[str, Any] = {
-        "requestDate": b["epoch"]["day_ms"],
-        "requestedStartTime": b["epoch"]["start_ms"],
-        "requestedEndTime": b["epoch"]["end_ms"],
-    }
-    if b["room"]["uniqueId"]:
-        request_date["location"] = {"uniqueId": b["room"]["uniqueId"]}
-    payload: Dict[str, Any] = {"requestDates": [request_date]}
-    if b["presenter_emails"]:
-        payload["presenters"] = [{"primaryEmail": [e]} for e in b["presenter_emails"]]
+    # ── Step 0: discover the tenant's request-creation wiring ─────────────
+    try:
+        ctx = _discover_request_context(headers)
+    except Exception as exc:
+        return {"success": False, "steps": [{"step": "discover_context", "ok": False, "error": str(exc)}]}
+    headers["x-cloud-categoryid"] = ctx["category_id"]
 
-    url = f"{BASE_URL}/events/{event_id}/meetings"
+    # ── Step 1: create the briefing request via the forms engine ──────────
+    form_id = ctx["form_id"]
+    payload = {
+        "moduleId": ctx["module_id"],
+        "formId": form_id,
+        "journeyId": ctx["journey_id"],
+        "pageId": ctx["page_id"],
+        "data": {
+            "duration": b["duration_days"],
+            "startDate": {"isoDate": b["briefing_date"]},
+            "startTime": {"isoDate": f"{b['briefing_date']}T{b['start_time']}:00"},
+            "endTime": {"isoDate": f"{b['briefing_date']}T{b['end_time']}:00"},
+            "textField1": b["customer_name"],
+            "textField2": b["opportunity_id"],
+        },
+    }
+    if b["objective"]:
+        payload["data"]["textField3"] = b["objective"]
+
+    url = f"{BASE_URL}/forms/{form_id}/data"
     logger.info(f"push_briefing {draft_id}: POST {url}")
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=30)
     except requests.RequestException as exc:
-        return {"success": False, "steps": [{"step": "create_meeting", "ok": False, "error": str(exc)}]}
+        return {"success": False, "steps": [{"step": "create_request", "ok": False, "error": str(exc)}]}
 
-    if resp.status_code != 200:
+    body = {}
+    if resp.status_code == 200 and resp.text.strip():
+        try:
+            body = resp.json()
+        except ValueError:
+            pass
+    request_id = body.get("id")
+    if not request_id:
         return {
             "success": False,
             "steps": [{
-                "step": "create_meeting", "ok": False,
-                "error": f"HTTP {resp.status_code}", "body": resp.text[:500],
+                "step": "create_request", "ok": False,
+                "error": f"HTTP {resp.status_code}, no request id returned — briefing NOT created.",
+                "body": resp.text[:500],
             }],
         }
+    steps.append({"step": "create_request", "ok": True, "request_id": request_id})
 
+    # Fetch the created event for its CBR number (nice for the user-facing summary).
+    event_number = None
     try:
-        created = resp.json() if resp.text.strip() else {}
-    except ValueError:
-        created = {}
-    meeting_id = created.get("meetingId")
-    if not meeting_id:
-        # Some tenants return 200 with an empty body and create nothing
-        # (observed live on Customer-Briefing-Request events, where briefings
-        # are events, not meetings). Surface it instead of pretending success,
-        # and leave the draft pushable so a corrected flow can retry.
-        return {
-            "success": False,
-            "steps": [{
-                "step": "create_meeting", "ok": False,
-                "error": (
-                    f"Server returned HTTP {resp.status_code} but no meetingId "
-                    "(empty response) — the briefing was NOT created. This event "
-                    "type may not support meeting creation."
-                ),
-            }],
-        }
-    steps.append({
-        "step": "create_meeting", "ok": True,
-        "meeting_id": meeting_id, "status": created.get("status"),
-    })
+        ev = requests.get(f"{BASE_URL}/events/{request_id}", headers=headers, timeout=30)
+        if ev.status_code == 200:
+            event_number = ev.json().get("eventNumber")
+    except requests.RequestException:
+        pass
 
-    # ── Step 2: attendees (meeting-level) ─────────────────────────────────
-    for attendee_type, attendees in (
-        (INTERNAL_ATTENDEE_TYPE, b["internal_attendees"]),
-        (EXTERNAL_ATTENDEE_TYPE, b["external_attendees"]),
-    ):
-        for attendee in attendees:
-            step_name = f"add_{attendee_type}:{attendee.get('email', '?')}"
-            if not meeting_id:
-                steps.append({"step": step_name, "ok": False, "error": "no meeting_id from step 1"})
-                continue
-            a_url = f"{BASE_URL}/events/{event_id}/meetings/{meeting_id}/{attendee_type}"
-            try:
-                a_resp = requests.post(a_url, headers=headers, json=attendee, timeout=30)
-                ok = a_resp.status_code in (200, 201)
-                step: Dict[str, Any] = {"step": step_name, "ok": ok}
-                if not ok:
-                    step["error"] = f"HTTP {a_resp.status_code}"
-                    step["body"] = a_resp.text[:300]
-                steps.append(step)
-            except requests.RequestException as exc:
-                steps.append({"step": step_name, "ok": False, "error": str(exc)})
+    request_headers = {**headers, "x-cloud-eventid": request_id}
+
+    # ── Step 2: SUBMIT state action (no notifications) ────────────────────
+    if submit:
+        action_url = f"{BASE_URL}/forms/{form_id}/data/{request_id}/actions/SUBMIT"
+        try:
+            a_resp = requests.put(
+                action_url, headers=request_headers,
+                params={"sendNotification": "false"}, json={}, timeout=30,
+            )
+            ok = a_resp.status_code in (200, 204)
+            step: Dict[str, Any] = {"step": "submit", "ok": ok}
+            if not ok:
+                step["error"] = f"HTTP {a_resp.status_code}"
+                step["body"] = a_resp.text[:300]
+            steps.append(step)
+        except requests.RequestException as exc:
+            steps.append({"step": "submit", "ok": False, "error": str(exc)})
 
     # ── Step 3: agenda sessions (optional, reuses the proven agenda push) ─
     if b["agenda_sessions"]:
         agenda_result = push_agenda_to_app(
-            event_id=event_id,
+            event_id=request_id,
             event_date=b["briefing_date"],
             sessions=b["agenda_sessions"],
             token=token,
@@ -317,11 +387,18 @@ def push_briefing(
         )
         steps.append({"step": "push_agenda", "ok": bool(agenda_result.get("success")), "detail": agenda_result})
 
+    if b["internal_attendees"] or b["external_attendees"]:
+        steps.append({
+            "step": "attendees", "ok": True, "skipped": True,
+            "note": "Attendee push not yet automated — add them in the app.",
+        })
+
     entry["pushed"] = True
     failed = [s["step"] for s in steps if not s["ok"]]
     return {
         "success": not failed,
-        "meeting_id": meeting_id,
+        "request_id": request_id,
+        "event_number": event_number,
         "steps": steps,
         "failed_steps": failed,
     }

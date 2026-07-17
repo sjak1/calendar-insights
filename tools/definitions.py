@@ -641,23 +641,24 @@ tools = [
         "type": "function",
         "name": "draft_briefing",
         "description": (
-            "Assemble a complete briefing draft for user review — NO writes happen. "
-            "Use after interviewing the user (customer, objective, date/time, room, presenters, attendees) "
-            "and gathering supporting data via other tools. Resolves the room name against the event's rooms. "
+            "Assemble a complete NEW briefing request draft for user review — NO writes happen. "
+            "Use after interviewing the user. Required: customer name, primary opportunity id, date, "
+            "start/end time. Optional: objective, duration in days (1-5), presenters and agenda sessions "
+            "(pushed after creation), attendees (recorded, not yet auto-pushed). "
             "Returns a draft_id + a markdown summary. ALWAYS show the summary (and any assumptions) to the "
-            "user and wait for their explicit confirmation before calling push_briefing. "
-            "Attendee objects: {firstName, lastName, email, designation?, company? (external only)}."
+            "user and wait for their explicit confirmation before calling push_briefing."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "BriefingIQ event UUID (defaults to header context)."},
                 "customer_name": {"type": "string", "description": "Customer/account the briefing is for."},
+                "opportunity_id": {"type": "string", "description": "Primary opportunity ID (required by the request form). Ask the user for it."},
                 "objective": {"type": "string", "description": "Briefing objective / purpose."},
                 "briefing_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "start_time": {"type": "string", "description": "HH:MM 24-hour, in the request timezone."},
                 "end_time": {"type": "string", "description": "HH:MM 24-hour."},
-                "room_name": {"type": "string", "description": "Optional room name — fuzzy-matched against the event's rooms."},
+                "duration_days": {"type": "integer", "description": "Briefing length in days, 1-5. Default 1."},
+                "room_name": {"type": "string", "description": "Optional room preference (noted; booked separately after creation)."},
                 "presenter_emails": {"type": "array", "items": {"type": "string"}},
                 "internal_attendees": {"type": "array", "items": {"type": "object"}},
                 "external_attendees": {"type": "array", "items": {"type": "object"}},
@@ -667,17 +668,18 @@ tools = [
                     "description": "Optional [{title, time_slot}] sessions from generate_agenda to push as agenda.",
                 },
             },
-            "required": ["customer_name", "briefing_date", "start_time", "end_time"],
+            "required": ["customer_name", "opportunity_id", "briefing_date", "start_time", "end_time"],
         },
     },
     {
         "type": "function",
         "name": "push_briefing",
         "description": (
-            "Execute the writes for a confirmed briefing draft: creates the briefing request (meeting), "
-            "adds attendees, and optionally pushes agenda sessions. Call ONLY after the user explicitly "
-            "confirmed the draft summary shown from draft_briefing — never on your own initiative. "
-            "A draft can be pushed at most once. Reports per-step success/failure."
+            "Execute the writes for a confirmed briefing draft: creates the briefing request via the "
+            "forms engine (a new CBR event), SUBMITs it (no notification emails), and optionally pushes "
+            "agenda sessions. Call ONLY after the user explicitly confirmed the draft summary from "
+            "draft_briefing — never on your own initiative. A draft can be pushed at most once. "
+            "Returns the new request_id + CBR event number and per-step success/failure."
         ),
         "parameters": {
             "type": "object",
