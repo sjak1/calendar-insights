@@ -256,8 +256,27 @@ def push_briefing(
             }],
         }
 
-    created = resp.json()
+    try:
+        created = resp.json() if resp.text.strip() else {}
+    except ValueError:
+        created = {}
     meeting_id = created.get("meetingId")
+    if not meeting_id:
+        # Some tenants return 200 with an empty body and create nothing
+        # (observed live on Customer-Briefing-Request events, where briefings
+        # are events, not meetings). Surface it instead of pretending success,
+        # and leave the draft pushable so a corrected flow can retry.
+        return {
+            "success": False,
+            "steps": [{
+                "step": "create_meeting", "ok": False,
+                "error": (
+                    f"Server returned HTTP {resp.status_code} but no meetingId "
+                    "(empty response) — the briefing was NOT created. This event "
+                    "type may not support meeting creation."
+                ),
+            }],
+        }
     steps.append({
         "step": "create_meeting", "ok": True,
         "meeting_id": meeting_id, "status": created.get("status"),
