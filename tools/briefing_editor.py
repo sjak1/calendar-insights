@@ -29,6 +29,7 @@ from logging_config import get_logger
 from tools.briefing_builder import (
     _discover_request_context,
     _embedded_items,
+    _fetch_field_aliases,
     _now,
     _to_ms,
     _tz_name,
@@ -36,9 +37,6 @@ from tools.briefing_builder import (
 from tools.briefingiq_writer import BASE_URL, _make_headers
 
 logger = get_logger(__name__)
-
-_ALIAS_CACHE: Dict[str, Dict[str, Any]] = {}
-_ALIAS_TTL = 3600
 
 # Actions that end/park a briefing — surfaced in the result so the agent can
 # warn the user before firing one.
@@ -51,39 +49,6 @@ def _err(step: str, resp: Optional[requests.Response] = None, exc: Optional[Exce
     return {"success": False, "step": step, "error": f"HTTP {resp.status_code}", "body": resp.text[:400]}
 
 
-def _fetch_field_aliases(headers: Dict[str, str], form_id: str) -> Dict[str, Any]:
-    """
-    Build the alias↔raw-attribute map for a form from its fieldmappings.
-
-    Returns {"pairs": {name: (alias, attr)}, "multi": {names...}} where every
-    alias and attribute name keys into the same (alias, attr) tuple.
-    """
-    cached = _ALIAS_CACHE.get(form_id)
-    if cached and _now() - cached["ts"] < _ALIAS_TTL:
-        return cached["map"]
-
-    # Must be fetched WITHOUT x-cloud-eventid: with it, the server scopes the
-    # lookup to the event and returns an empty page.
-    lookup_headers = {k: v for k, v in headers.items() if k.lower() != "x-cloud-eventid"}
-    resp = requests.get(f"{BASE_URL}/forms/{form_id}/fieldmappings", headers=lookup_headers, timeout=30)
-    resp.raise_for_status()
-
-    pairs: Dict[str, Tuple[str, str]] = {}
-    multi: set = set()
-    for mapping in _embedded_items(resp.json()):
-        column = mapping.get("columnAttribute") or {}
-        attr = column.get("attributeName")
-        alias = mapping.get("aliasName") or attr
-        if not attr:
-            continue
-        pairs[alias] = (alias, attr)
-        pairs[attr] = (alias, attr)
-        if mapping.get("multivalueField"):
-            multi.update({alias, attr})
-
-    alias_map = {"pairs": pairs, "multi": multi}
-    _ALIAS_CACHE[form_id] = {"ts": _now(), "map": alias_map}
-    return alias_map
 
 
 def _apply_updates(data: Dict[str, Any], changes: Dict[str, Any], alias_map: Dict[str, Any]) -> Tuple[Dict, List[str]]:
