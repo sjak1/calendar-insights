@@ -261,33 +261,120 @@ def _select_request_config(configs: List[Dict]) -> Dict:
     return configs[0]
 
 
+def _category_name(category: Dict) -> str:
+    return (category.get("categoryName") or category.get("name") or "").strip()
+
+
+def _select_parent_category(headers: Dict[str, str], category_type: str) -> Dict:
+    """
+    Pick the parent REQUEST_TYPE category — these are the tenant's LOCATIONS
+    (each carries resource + baseTimezone), not request types.
+
+    The caller's own x-cloud-categoryid is the location they are working in, so
+    honour it. Taking the first parent instead posts the briefing against a
+    different site: that produced CRT-20260720-012 under Austin for a user in
+    Redwood Shores, visible on the calendar but not openable.
+    """
+    resp = requests.get(
+        f"{BASE_URL}/categorytypes/{category_type}/categories",
+        headers=headers,
+        params={"identifier": "REQUEST_TYPE"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    parents = [c for c in _embedded_items(resp.json()) if c.get("identifier") == "REQUEST_TYPE"]
+    if not parents:
+        raise RuntimeError("No REQUEST_TYPE category found for this tenant.")
+
+    logger.info(
+        "parent (location) categories: %s",
+        [{"id": c.get("uniqueId"), "name": _category_name(c)} for c in parents],
+    )
+
+    caller_category = (headers.get("x-cloud-categoryid") or "").strip()
+    if caller_category:
+        match = next(
+            (c for c in parents if (c.get("uniqueId") or "").lower() == caller_category.lower()),
+            None,
+        )
+        if match:
+            logger.info(f"parent category from caller context: {_category_name(match)!r}")
+            return match
+        logger.warning(
+            "Caller category %s is not a REQUEST_TYPE parent; falling back to %r. The briefing "
+            "may be created at the wrong location.",
+            caller_category,
+            _category_name(parents[0]),
+        )
+    else:
+        logger.warning(
+            "No x-cloud-categoryid on the request; defaulting to parent %r.",
+            _category_name(parents[0]),
+        )
+    return parents[0]
+
+
+def _select_event_category(headers: Dict[str, str], category_type: str, parent: Dict) -> Dict:
+    """
+    Resolve the child category that actually supports event creation.
+
+    Mirrors the UI (BIQ_fixed_cleaned.jmx): after choosing the parent location
+    it re-queries with parent + features=CREATE_EVENT. A parent is a location
+    container — creating against it yields an orphaned record.
+    """
+    parent_id = parent.get("uniqueId")
+    resp = requests.get(
+        f"{BASE_URL}/categorytypes/{category_type}/categories",
+        headers=headers,
+        params={"identifier": "REQUEST_TYPE", "parent": parent_id, "features": "CREATE_EVENT"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    children = _embedded_items(resp.json())
+    logger.info(
+        "CREATE_EVENT categories under %r: %s",
+        _category_name(parent),
+        [{"id": c.get("uniqueId"), "name": _category_name(c)} for c in children],
+    )
+    if children:
+        chosen = children[0]
+        if len(children) > 1:
+            briefing = next((c for c in children if re.search(r"brief", _category_name(c), re.I)), None)
+            chosen = briefing or chosen
+        logger.info(f"event category selected: {_category_name(chosen)!r} ({chosen.get('uniqueId')})")
+        return chosen
+
+    logger.warning(
+        "No CREATE_EVENT child category under %r; falling back to the parent itself. The created "
+        "record may not be openable in the UI.",
+        _category_name(parent),
+    )
+    return parent
+
+
 def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
     """
     Resolve the tenant's request-creation wiring at runtime:
-      category (identifier REQUEST_TYPE) → module (moduleType REQUEST_CREATION)
-      → module config (journey/page/form). Cached per tenant for an hour.
+      parent category (location, identifier REQUEST_TYPE)
+      → child category with features=CREATE_EVENT
+      → module (moduleType REQUEST_CREATION) → module config (journey/page/form).
+    Cached per (tenant, category type, caller category) for an hour.
     """
-    # Key on tenant *and* category type — the same tenant resolves a different
-    # request form per category type, so a tenant-only key leaks the wrong form.
+    # Key on tenant, category type *and* the caller's category — the resolved
+    # context is location-specific, so a coarser key would serve one user's
+    # location to another for up to an hour.
     cache_key = (
         headers.get("x-cloud-customerid", ""),
         headers.get("x-cloud-categorytypeid", ""),
+        headers.get("x-cloud-categoryid", ""),
     )
     cached = _REQUEST_CTX_CACHE.get(cache_key)
     if cached and _now() - cached["ts"] < _REQUEST_CTX_TTL:
         return cached["ctx"]
 
     category_type = headers.get("x-cloud-categorytypeid", "CATEGORY_TYPE_BRIEFINGS")
-    resp = requests.get(
-        f"{BASE_URL}/categorytypes/{category_type}/categories", headers=headers, timeout=30
-    )
-    resp.raise_for_status()
-    request_category = next(
-        (c for c in _embedded_items(resp.json()) if c.get("identifier") == "REQUEST_TYPE"),
-        None,
-    )
-    if not request_category:
-        raise RuntimeError("No REQUEST_TYPE category found for this tenant.")
+    parent_category = _select_parent_category(headers, category_type)
+    request_category = _select_event_category(headers, category_type, parent_category)
 
     req_headers = {**headers, "x-cloud-categoryid": request_category["uniqueId"]}
 
@@ -313,6 +400,9 @@ def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
 
     ctx = {
         "category_id": request_category["uniqueId"],
+        "category_name": _category_name(request_category),
+        "parent_category_id": parent_category.get("uniqueId"),
+        "location_name": _category_name(parent_category),
         "module_id": module_id,
         "journey_id": (config.get("journey") or {}).get("uniqueId"),
         "page_id": (config.get("page") or {}).get("uniqueId"),
