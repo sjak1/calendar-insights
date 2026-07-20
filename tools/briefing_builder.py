@@ -24,6 +24,8 @@ REQUEST_CREATION → its journey/page/form config. Verified live 2026-07-17
 Drafts live in process memory with a TTL — a draft_id from an old session
 cannot be replayed after expiry.
 """
+import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -39,7 +41,7 @@ logger = get_logger(__name__)
 _DRAFTS: Dict[str, Dict[str, Any]] = {}
 _DRAFT_TTL = 3600  # 1 hour — long enough for a review conversation
 
-_REQUEST_CTX_CACHE: Dict[str, Dict[str, Any]] = {}
+_REQUEST_CTX_CACHE: Dict[Any, Dict[str, Any]] = {}
 _REQUEST_CTX_TTL = 3600
 
 
@@ -116,13 +118,75 @@ def _resolve_room(headers: Dict, event_id: str, room_name: Optional[str]):
     return None, names, f"Room '{room_name}' not found on this event."
 
 
+def _config_form_name(config: Dict) -> str:
+    """Best-effort human name for a module config's form (shape varies by tenant)."""
+    form = config.get("form") or {}
+    for key in ("name", "formName", "displayName", "title", "identifier"):
+        value = form.get(key) or config.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _select_request_config(configs: List[Dict]) -> Dict:
+    """
+    Pick the customer-briefing create form out of the module's configs.
+
+    A REQUEST_CREATION module can expose several forms (Customer Briefing
+    Request → CBR-*, Executive Dining → EDR-*, a generic request → CRT-*).
+    The API does not guarantee an order, so indexing [0] silently creates the
+    wrong record type — observed live: CBR-20260724-108 on 2026-07-17 vs
+    CRT-20260720-012 on 2026-07-20 from identical code.
+
+    Selection order:
+      1. BRIEFINGIQ_REQUEST_FORM_ID env var (explicit per-tenant override)
+      2. form name matching "customer briefing" / "briefing request"
+      3. form name containing "briefing"
+      4. configs[0], with a warning — preserves the previous behaviour
+    """
+    named = [(c, _config_form_name(c)) for c in configs]
+    logger.info(
+        "request-creation configs available: %s",
+        [{"form_id": (c.get("form") or {}).get("uniqueId"), "name": n} for c, n in named],
+    )
+
+    override = os.environ.get("BRIEFINGIQ_REQUEST_FORM_ID", "").strip()
+    if override:
+        for config, name in named:
+            if (config.get("form") or {}).get("uniqueId") == override:
+                logger.info(f"request form selected by env override: {override} ({name})")
+                return config
+        logger.warning(f"BRIEFINGIQ_REQUEST_FORM_ID={override} not found in configs; ignoring.")
+
+    for pattern in (r"customer\s*brief|brief\w*\s*request", r"brief"):
+        for config, name in named:
+            if name and re.search(pattern, name, re.I):
+                logger.info(f"request form selected by name match: {name!r} (/{pattern}/)")
+                return config
+
+    fallback_name = named[0][1] or "<unnamed>"
+    logger.warning(
+        "No briefing-like request form found among %d config(s); falling back to the first "
+        "(%r). The created record may be the wrong request type — set "
+        "BRIEFINGIQ_REQUEST_FORM_ID to pin the correct form.",
+        len(named),
+        fallback_name,
+    )
+    return configs[0]
+
+
 def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
     """
     Resolve the tenant's request-creation wiring at runtime:
       category (identifier REQUEST_TYPE) → module (moduleType REQUEST_CREATION)
       → module config (journey/page/form). Cached per tenant for an hour.
     """
-    cache_key = headers.get("x-cloud-customerid", "")
+    # Key on tenant *and* category type — the same tenant resolves a different
+    # request form per category type, so a tenant-only key leaks the wrong form.
+    cache_key = (
+        headers.get("x-cloud-customerid", ""),
+        headers.get("x-cloud-categorytypeid", ""),
+    )
     cached = _REQUEST_CTX_CACHE.get(cache_key)
     if cached and _now() - cached["ts"] < _REQUEST_CTX_TTL:
         return cached["ctx"]
@@ -159,7 +223,7 @@ def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
     configs = _embedded_items(resp.json())
     if not configs:
         raise RuntimeError("Request-creation module has no journey/page/form config.")
-    config = configs[0]
+    config = _select_request_config(configs)
 
     ctx = {
         "category_id": request_category["uniqueId"],
@@ -167,6 +231,7 @@ def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
         "journey_id": (config.get("journey") or {}).get("uniqueId"),
         "page_id": (config.get("page") or {}).get("uniqueId"),
         "form_id": (config.get("form") or {}).get("uniqueId"),
+        "form_name": _config_form_name(config),
     }
     if not ctx["form_id"]:
         raise RuntimeError("Module config is missing the create-request form id.")
