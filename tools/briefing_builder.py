@@ -565,8 +565,15 @@ def push_briefing(
             "literals": {
                 "duration": b["duration_days"],
                 "startDate": {"isoDate": b["briefing_date"]},
+                # The UI posts T00:00:00 for both times — its create form asks
+                # only for a date and a duration in days. We keep the user's
+                # real times: the API accepts them, and dropping them would
+                # silently discard what the user asked for.
                 "startTime": {"isoDate": f"{b['briefing_date']}T{b['start_time']}:00"},
                 "endTime": {"isoDate": f"{b['briefing_date']}T{b['end_time']}:00"},
+                # Secondary Opportunity ID — multivalue; the UI always sends it,
+                # empty when unused.
+                "textField3": [],
             },
         },
     )
