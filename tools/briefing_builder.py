@@ -265,91 +265,89 @@ def _category_name(category: Dict) -> str:
     return (category.get("categoryName") or category.get("name") or "").strip()
 
 
-def _select_parent_category(headers: Dict[str, str], category_type: str) -> Dict:
+def _location_category_id(headers: Dict[str, str], category_type: str) -> str:
     """
-    Pick the parent REQUEST_TYPE category — these are the tenant's LOCATIONS
-    (each carries resource + baseTimezone), not request types.
+    The location (identifier LOCATION) the caller is working in.
 
-    The caller's own x-cloud-categoryid is the location they are working in, so
-    honour it. Taking the first parent instead posts the briefing against a
-    different site: that produced CRT-20260720-012 under Austin for a user in
-    Redwood Shores, visible on the calendar but not openable.
+    The UI passes its own x-cloud-categoryid straight through as the `parent`
+    of the create-request category lookup, so honour the caller's context
+    first. Only when the request carries no category do we fall back to the
+    tenant's first LOCATION.
     """
-    resp = requests.get(
-        f"{BASE_URL}/categorytypes/{category_type}/categories",
-        headers=headers,
-        params={"identifier": "REQUEST_TYPE"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    parents = [c for c in _embedded_items(resp.json()) if c.get("identifier") == "REQUEST_TYPE"]
-    if not parents:
-        raise RuntimeError("No REQUEST_TYPE category found for this tenant.")
-
-    logger.info(
-        "parent (location) categories: %s",
-        [{"id": c.get("uniqueId"), "name": _category_name(c)} for c in parents],
-    )
-
     caller_category = (headers.get("x-cloud-categoryid") or "").strip()
     if caller_category:
-        match = next(
-            (c for c in parents if (c.get("uniqueId") or "").lower() == caller_category.lower()),
-            None,
-        )
-        if match:
-            logger.info(f"parent category from caller context: {_category_name(match)!r}")
-            return match
-        logger.warning(
-            "Caller category %s is not a REQUEST_TYPE parent; falling back to %r. The briefing "
-            "may be created at the wrong location.",
-            caller_category,
-            _category_name(parents[0]),
-        )
-    else:
-        logger.warning(
-            "No x-cloud-categoryid on the request; defaulting to parent %r.",
-            _category_name(parents[0]),
-        )
-    return parents[0]
+        return caller_category
+
+    resp = requests.get(
+        f"{BASE_URL}/categorytypes/{category_type}/categories", headers=headers, timeout=30
+    )
+    resp.raise_for_status()
+    locations = [c for c in _embedded_items(resp.json()) if c.get("identifier") == "LOCATION"]
+    if not locations:
+        raise RuntimeError("Request carried no x-cloud-categoryid and the tenant has no LOCATION.")
+    logger.warning(
+        "No x-cloud-categoryid on the request; defaulting to location %r.",
+        _category_name(locations[0]),
+    )
+    return locations[0]["uniqueId"]
 
 
-def _select_event_category(headers: Dict[str, str], category_type: str, parent: Dict) -> Dict:
+def _select_event_category(headers: Dict[str, str], category_type: str, location_id: str) -> Dict:
     """
-    Resolve the child category that actually supports event creation.
+    Resolve the create-request category for a location.
 
-    Mirrors the UI (BIQ_fixed_cleaned.jmx): after choosing the parent location
-    it re-queries with parent + features=CREATE_EVENT. A parent is a location
-    container — creating against it yields an orphaned record.
+    Mirrors the UI: ?identifier=REQUEST_TYPE&parent=<location>&features=CREATE_EVENT.
+    Every location has its own set of request types, and each is a distinct
+    category with its own event-number series — Redwood Shores' customer
+    briefing category yields CBR-*, Austin's yields CRT-*. Creating against
+    another location's category (or against the location itself) produces a
+    record the UI cannot open.
+
+    "Non Customer Briefing Request" and "Virtual Customer Briefing Request" are
+    siblings that both contain the target name, so the match is exact first.
     """
-    parent_id = parent.get("uniqueId")
     resp = requests.get(
         f"{BASE_URL}/categorytypes/{category_type}/categories",
         headers=headers,
-        params={"identifier": "REQUEST_TYPE", "parent": parent_id, "features": "CREATE_EVENT"},
+        params={"identifier": "REQUEST_TYPE", "parent": location_id, "features": "CREATE_EVENT"},
         timeout=30,
     )
     resp.raise_for_status()
     children = _embedded_items(resp.json())
     logger.info(
-        "CREATE_EVENT categories under %r: %s",
-        _category_name(parent),
+        "CREATE_EVENT categories under location %s: %s",
+        location_id,
         [{"id": c.get("uniqueId"), "name": _category_name(c)} for c in children],
     )
-    if children:
-        chosen = children[0]
-        if len(children) > 1:
-            briefing = next((c for c in children if re.search(r"brief", _category_name(c), re.I)), None)
-            chosen = briefing or chosen
-        logger.info(f"event category selected: {_category_name(chosen)!r} ({chosen.get('uniqueId')})")
-        return chosen
+    if not children:
+        raise RuntimeError(
+            f"No CREATE_EVENT request category under location {location_id}. The briefing would "
+            "be created against a container category and be unopenable in the UI."
+        )
 
-    logger.warning(
-        "No CREATE_EVENT child category under %r; falling back to the parent itself. The created "
-        "record may not be openable in the UI.",
-        _category_name(parent),
-    )
-    return parent
+    target = os.environ.get("BRIEFINGIQ_REQUEST_CATEGORY", "Customer Briefing Request").strip()
+    chosen = next((c for c in children if _category_name(c).lower() == target.lower()), None)
+    if chosen is None:
+        # Exclude the Non-/Virtual- variants before falling back to a loose match.
+        chosen = next(
+            (
+                c
+                for c in children
+                if re.search(r"customer\s+briefing", _category_name(c), re.I)
+                and not re.match(r"non|virtual", _category_name(c), re.I)
+            ),
+            None,
+        )
+    if chosen is None:
+        chosen = children[0]
+        logger.warning(
+            "No %r category under location %s; falling back to %r.",
+            target,
+            location_id,
+            _category_name(chosen),
+        )
+    logger.info(f"event category selected: {_category_name(chosen)!r} ({chosen.get('uniqueId')})")
+    return chosen
 
 
 def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
@@ -373,8 +371,8 @@ def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
         return cached["ctx"]
 
     category_type = headers.get("x-cloud-categorytypeid", "CATEGORY_TYPE_BRIEFINGS")
-    parent_category = _select_parent_category(headers, category_type)
-    request_category = _select_event_category(headers, category_type, parent_category)
+    location_id = _location_category_id(headers, category_type)
+    request_category = _select_event_category(headers, category_type, location_id)
 
     req_headers = {**headers, "x-cloud-categoryid": request_category["uniqueId"]}
 
@@ -401,8 +399,7 @@ def _discover_request_context(headers: Dict[str, str]) -> Dict[str, Any]:
     ctx = {
         "category_id": request_category["uniqueId"],
         "category_name": _category_name(request_category),
-        "parent_category_id": parent_category.get("uniqueId"),
-        "location_name": _category_name(parent_category),
+        "location_category_id": location_id,
         "module_id": module_id,
         "journey_id": (config.get("journey") or {}).get("uniqueId"),
         "page_id": (config.get("page") or {}).get("uniqueId"),
@@ -568,8 +565,15 @@ def push_briefing(
             "literals": {
                 "duration": b["duration_days"],
                 "startDate": {"isoDate": b["briefing_date"]},
+                # The UI posts T00:00:00 for both times — its create form asks
+                # only for a date and a duration in days. We keep the user's
+                # real times: the API accepts them, and dropping them would
+                # silently discard what the user asked for.
                 "startTime": {"isoDate": f"{b['briefing_date']}T{b['start_time']}:00"},
                 "endTime": {"isoDate": f"{b['briefing_date']}T{b['end_time']}:00"},
+                # Secondary Opportunity ID — multivalue; the UI always sends it,
+                # empty when unused.
+                "textField3": [],
             },
         },
     )
