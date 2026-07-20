@@ -756,50 +756,39 @@ def execute_tool(
             return output
 
         elif tool_name in (
+            "get_briefing",
             "reschedule_briefing",
-            "manage_briefing_attendees",
-            "manage_briefing_presenters",
             "update_briefing_details",
+            "change_briefing_state",
         ):
             from tools import briefing_editor
             token = (schedule_headers or {}).get("Authorization", "")
-            event_id = args.get("event_id") or context_event_id or ""
-            common = {"event_id": event_id, "token": token, "schedule_headers": schedule_headers}
-            if tool_name == "reschedule_briefing":
+            request_id = args.get("request_id") or context_event_id or ""
+            common = {"request_id": request_id, "token": token, "schedule_headers": schedule_headers}
+            if tool_name == "get_briefing":
+                result = briefing_editor.get_briefing(**common)
+            elif tool_name == "reschedule_briefing":
+                duration = args.get("duration_days")
                 result = briefing_editor.reschedule_briefing(
-                    meeting_id=args["meeting_id"],
                     new_date=args["new_date"],
                     start_time=args["start_time"],
                     end_time=args["end_time"],
-                    room_name=args.get("room_name"),
+                    duration_days=int(duration) if duration is not None else None,
                     **common,
                 )
-            elif tool_name == "manage_briefing_attendees":
-                result = briefing_editor.manage_briefing_attendees(
-                    meeting_id=args["meeting_id"],
-                    action=args["action"],
-                    attendee_type=args["attendee_type"],
-                    attendee=args.get("attendee"),
-                    attendee_id=args.get("attendee_id"),
-                    **common,
-                )
-            elif tool_name == "manage_briefing_presenters":
-                result = briefing_editor.manage_briefing_presenters(
-                    meeting_id=args["meeting_id"],
-                    action=args["action"],
-                    email=args.get("email"),
-                    presenter_id=args.get("presenter_id"),
-                    status=args.get("status"),
-                    **common,
-                )
-            else:
+            elif tool_name == "update_briefing_details":
                 result = briefing_editor.update_briefing_details(
-                    meeting_id=args["meeting_id"],
                     changes=args.get("changes") or {},
                     **common,
                 )
+            else:
+                result = briefing_editor.change_briefing_state(
+                    action=args["action"],
+                    send_notification=bool(args.get("send_notification", False)),
+                    **common,
+                )
             output = {tool_name: result}
-            logger.info(f"✓ {tool_name} meeting={args.get('meeting_id')} success={result.get('success')}")
+            logger.info(f"✓ {tool_name} request={request_id} success={result.get('success')}")
             return output
 
         else:

@@ -673,87 +673,79 @@ tools = [
     },
     {
         "type": "function",
-        "name": "reschedule_briefing",
+        "name": "get_briefing",
         "description": (
-            "Move an EXISTING briefing (meeting) to a new date/time and optionally a new room. "
-            "Works on any briefing — AI-created or manually created in the app. First find the meeting "
-            "(e.g. via call_briefingiq_endpoint get_events_eventid_meetings), show the user the current "
-            "vs proposed schedule, and call this ONLY after they explicitly confirm."
+            "Read an EXISTING briefing's current field values, status, and the state actions available "
+            "from that status. Call this BEFORE any edit so you can show the user current vs proposed "
+            "values, and to discover valid actions for change_briefing_state. "
+            "Find the request_id first (e.g. call_briefingiq_endpoint get_events, or the id returned by "
+            "push_briefing). Returns: {event_number, status, fields, available_actions, editable_fields}."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
-                "meeting_id": {"type": "string", "description": "Meeting/briefing UUID."},
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+            },
+            "required": ["request_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "reschedule_briefing",
+        "description": (
+            "Move an EXISTING briefing to a new date/time. Works on any briefing — AI-created or made "
+            "by hand in the app. Call get_briefing first, show the user current vs proposed schedule, "
+            "and call this ONLY after they explicitly confirm. Room changes are NOT applied here."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
                 "new_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "start_time": {"type": "string", "description": "HH:MM 24-hour."},
                 "end_time": {"type": "string", "description": "HH:MM 24-hour."},
-                "room_name": {"type": "string", "description": "Optional new room name (fuzzy-matched)."},
+                "duration_days": {"type": "integer", "description": "Optional new length in days, 1-5."},
             },
-            "required": ["meeting_id", "new_date", "start_time", "end_time"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "manage_briefing_attendees",
-        "description": (
-            "Add, update, or remove a single attendee on an EXISTING briefing (meeting). "
-            "Show the user the exact change and get explicit confirmation before calling. "
-            "For remove/update, get the attendee_id from the meeting's attendee list first "
-            "(call_briefingiq_endpoint). Attendee body: {firstName, lastName, email, designation?, "
-            "isRemote?, company?/corporateTitle?/isDecisionMaker? (external only)}."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
-                "meeting_id": {"type": "string"},
-                "action": {"type": "string", "enum": ["add", "update", "remove"]},
-                "attendee_type": {"type": "string", "enum": ["internalattendees", "externalattendees"]},
-                "attendee": {"type": "object", "description": "Attendee body (add/update)."},
-                "attendee_id": {"type": "string", "description": "Existing attendee UUID (update/remove)."},
-            },
-            "required": ["meeting_id", "action", "attendee_type"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "manage_briefing_presenters",
-        "description": (
-            "Add a presenter (by email), remove one, or set a presenter's status on an EXISTING briefing. "
-            "Show the user the exact change and get explicit confirmation before calling. For remove/"
-            "set_status, get the presenter_id from the meeting's presenter list first."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
-                "meeting_id": {"type": "string"},
-                "action": {"type": "string", "enum": ["add", "remove", "set_status"]},
-                "email": {"type": "string", "description": "Presenter primary email (add)."},
-                "presenter_id": {"type": "string", "description": "Request-presenter UUID (remove/set_status)."},
-                "status": {"type": "string", "description": "New status, e.g. CONFIRMED / DECLINED (set_status)."},
-            },
-            "required": ["meeting_id", "action"],
+            "required": ["request_id", "new_date", "start_time", "end_time"],
         },
     },
     {
         "type": "function",
         "name": "update_briefing_details",
         "description": (
-            "Update fields on an EXISTING briefing's detail form (accountName, meetingDetails, meetingFocus, "
-            "industry, numberOfAttendees, opportunity, host fields, ...). Read-modify-write: only the keys "
-            "you pass change, the rest is preserved. Show the user current → proposed values and get "
+            "Update fields on an EXISTING briefing. Read-modify-write: only the keys you pass change, "
+            "everything else is preserved. Field names come from get_briefing's editable_fields — "
+            "typically customerName, primaryOpportunity, secondaryOpportunity, region, tier, "
+            "briefingManager, accountId, duration. Show the user current -> proposed values and get "
             "explicit confirmation before calling."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_id": {"type": "string", "description": "Event UUID (defaults to header context)."},
-                "meeting_id": {"type": "string"},
-                "changes": {"type": "object", "description": "Map of data fields to new values."},
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+                "changes": {"type": "object", "description": "Map of field name to new value."},
             },
-            "required": ["meeting_id", "changes"],
+            "required": ["request_id", "changes"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "change_briefing_state",
+        "description": (
+            "Move an EXISTING briefing through its workflow: SUBMIT, CONFIRM, HOLD, WAITLIST, CANCEL, "
+            "DECLINE, etc. Valid actions depend on current status — call get_briefing first and use its "
+            "available_actions. Get explicit user confirmation before calling, and warn them when the "
+            "action is terminal (CANCEL/DECLINE). Notification emails are OFF unless send_notification "
+            "is true — only set it if the user explicitly asks to notify people, since it emails real customers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+                "action": {"type": "string", "description": "Action name from get_briefing's available_actions."},
+                "send_notification": {"type": "boolean", "description": "Email participants. Default false."},
+            },
+            "required": ["request_id", "action"],
         },
     },
     {
