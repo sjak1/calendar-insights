@@ -222,8 +222,11 @@ def draft_briefing(
         return {"success": False, "error": "end_time must be after start_time."}
 
     assumptions = []
-    if not objective:
-        assumptions.append("No objective provided.")
+    if objective:
+        assumptions.append(
+            "Objective is recorded on this draft for your review only — the request "
+            "form has no objective field, so it is not stored in BriefingIQ."
+        )
     if room_name:
         assumptions.append(
             f"Room preference '{room_name}' noted — room booking is a separate step after creation."
@@ -318,8 +321,9 @@ def push_briefing(
             "textField2": b["opportunity_id"],
         },
     }
-    if b["objective"]:
-        payload["data"]["textField3"] = b["objective"]
+    # NB: textField3 is "Secondary Opportunity ID" (multi-value) per the form's
+    # fieldmappings — NOT a free-text field. The create form has no objective
+    # field, so the objective stays on the draft for the user-facing summary.
 
     url = f"{BASE_URL}/forms/{form_id}/data"
     logger.info(f"push_briefing {draft_id}: POST {url}")

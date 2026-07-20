@@ -755,6 +755,42 @@ def execute_tool(
             )
             return output
 
+        elif tool_name in (
+            "get_briefing",
+            "reschedule_briefing",
+            "update_briefing_details",
+            "change_briefing_state",
+        ):
+            from tools import briefing_editor
+            token = (schedule_headers or {}).get("Authorization", "")
+            request_id = args.get("request_id") or context_event_id or ""
+            common = {"request_id": request_id, "token": token, "schedule_headers": schedule_headers}
+            if tool_name == "get_briefing":
+                result = briefing_editor.get_briefing(**common)
+            elif tool_name == "reschedule_briefing":
+                duration = args.get("duration_days")
+                result = briefing_editor.reschedule_briefing(
+                    new_date=args["new_date"],
+                    start_time=args["start_time"],
+                    end_time=args["end_time"],
+                    duration_days=int(duration) if duration is not None else None,
+                    **common,
+                )
+            elif tool_name == "update_briefing_details":
+                result = briefing_editor.update_briefing_details(
+                    changes=args.get("changes") or {},
+                    **common,
+                )
+            else:
+                result = briefing_editor.change_briefing_state(
+                    action=args["action"],
+                    send_notification=bool(args.get("send_notification", False)),
+                    **common,
+                )
+            output = {tool_name: result}
+            logger.info(f"✓ {tool_name} request={request_id} success={result.get('success')}")
+            return output
+
         else:
             logger.warning(f"Unknown tool: {tool_name}")
             return {"error": f"Unknown tool: {tool_name}"}

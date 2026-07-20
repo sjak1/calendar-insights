@@ -673,6 +673,83 @@ tools = [
     },
     {
         "type": "function",
+        "name": "get_briefing",
+        "description": (
+            "Read an EXISTING briefing's current field values, status, and the state actions available "
+            "from that status. Call this BEFORE any edit so you can show the user current vs proposed "
+            "values, and to discover valid actions for change_briefing_state. "
+            "Find the request_id first (e.g. call_briefingiq_endpoint get_events, or the id returned by "
+            "push_briefing). Returns: {event_number, status, fields, available_actions, editable_fields}."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+            },
+            "required": ["request_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "reschedule_briefing",
+        "description": (
+            "Move an EXISTING briefing to a new date/time. Works on any briefing — AI-created or made "
+            "by hand in the app. Call get_briefing first, show the user current vs proposed schedule, "
+            "and call this ONLY after they explicitly confirm. Room changes are NOT applied here."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+                "new_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "start_time": {"type": "string", "description": "HH:MM 24-hour."},
+                "end_time": {"type": "string", "description": "HH:MM 24-hour."},
+                "duration_days": {"type": "integer", "description": "Optional new length in days, 1-5."},
+            },
+            "required": ["request_id", "new_date", "start_time", "end_time"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "update_briefing_details",
+        "description": (
+            "Update fields on an EXISTING briefing. Read-modify-write: only the keys you pass change, "
+            "everything else is preserved. Field names come from get_briefing's editable_fields — "
+            "typically customerName, primaryOpportunity, secondaryOpportunity, region, tier, "
+            "briefingManager, accountId, duration. Show the user current -> proposed values and get "
+            "explicit confirmation before calling."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+                "changes": {"type": "object", "description": "Map of field name to new value."},
+            },
+            "required": ["request_id", "changes"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "change_briefing_state",
+        "description": (
+            "Move an EXISTING briefing through its workflow: SUBMIT, CONFIRM, HOLD, WAITLIST, CANCEL, "
+            "DECLINE, etc. Valid actions depend on current status — call get_briefing first and use its "
+            "available_actions. Get explicit user confirmation before calling, and warn them when the "
+            "action is terminal (CANCEL/DECLINE). Notification emails are OFF unless send_notification "
+            "is true — only set it if the user explicitly asks to notify people, since it emails real customers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Briefing (CBR event / request) UUID."},
+                "action": {"type": "string", "description": "Action name from get_briefing's available_actions."},
+                "send_notification": {"type": "boolean", "description": "Email participants. Default false."},
+            },
+            "required": ["request_id", "action"],
+        },
+    },
+    {
+        "type": "function",
         "name": "push_briefing",
         "description": (
             "Execute the writes for a confirmed briefing draft: creates the briefing request via the "
