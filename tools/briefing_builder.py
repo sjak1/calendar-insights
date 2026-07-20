@@ -29,7 +29,7 @@ import re
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -43,6 +43,9 @@ _DRAFT_TTL = 3600  # 1 hour — long enough for a review conversation
 
 _REQUEST_CTX_CACHE: Dict[Any, Dict[str, Any]] = {}
 _REQUEST_CTX_TTL = 3600
+
+_ALIAS_CACHE: Dict[str, Dict[str, Any]] = {}
+_ALIAS_TTL = 3600
 
 
 def _now() -> float:
@@ -116,6 +119,89 @@ def _resolve_room(headers: Dict, event_id: str, room_name: Optional[str]):
         if want == name or want in name or name in want:
             return loc, names, None
     return None, names, f"Room '{room_name}' not found on this event."
+
+
+def _fetch_field_aliases(headers: Dict[str, str], form_id: str) -> Dict[str, Any]:
+    """
+    Build the alias↔raw-attribute map for a form from its fieldmappings.
+
+    Returns {"pairs": {name: (alias, attr)}, "multi": {names...}} where every
+    alias and attribute name keys into the same (alias, attr) tuple.
+    """
+    cached = _ALIAS_CACHE.get(form_id)
+    if cached and _now() - cached["ts"] < _ALIAS_TTL:
+        return cached["map"]
+
+    # Must be fetched WITHOUT x-cloud-eventid: with it, the server scopes the
+    # lookup to the event and returns an empty page.
+    lookup_headers = {k: v for k, v in headers.items() if k.lower() != "x-cloud-eventid"}
+    resp = requests.get(f"{BASE_URL}/forms/{form_id}/fieldmappings", headers=lookup_headers, timeout=30)
+    resp.raise_for_status()
+
+    pairs: Dict[str, Tuple[str, str]] = {}
+    multi: set = set()
+    for mapping in _embedded_items(resp.json()):
+        column = mapping.get("columnAttribute") or {}
+        attr = column.get("attributeName")
+        alias = mapping.get("aliasName") or attr
+        if not attr:
+            continue
+        pairs[alias] = (alias, attr)
+        pairs[attr] = (alias, attr)
+        if mapping.get("multivalueField"):
+            multi.update({alias, attr})
+
+    alias_map = {"pairs": pairs, "multi": multi}
+    _ALIAS_CACHE[form_id] = {"ts": _now(), "map": alias_map}
+    return alias_map
+
+
+def _resolve_create_fields(
+    headers: Dict[str, str], form_id: str, values: Dict[str, Any]
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Map logical create-request values onto the form's real attribute names.
+
+    The UI reads /forms/{id}/fieldmappings before every write; we previously
+    hardcoded textField1/textField2, which only holds if the tenant's mapping
+    happens to match. Each logical field is tried against the form's aliases
+    and attribute names (its alias label first, then the legacy raw column).
+
+    Returns (data, unresolved_labels). Unresolved fields are reported to the
+    caller rather than silently dropped.
+    """
+    try:
+        alias_map = _fetch_field_aliases(headers, form_id)
+        pairs, multi = alias_map["pairs"], alias_map["multi"]
+    except Exception as exc:
+        logger.warning(
+            f"fieldmappings lookup failed for form {form_id} ({exc}); "
+            "falling back to the hardcoded textField names."
+        )
+        pairs, multi = {}, set()
+
+    data: Dict[str, Any] = {}
+    unresolved: List[str] = []
+    for label, candidates, value in values["fields"]:
+        target = next((c for c in candidates if c in pairs), None)
+        if target is None:
+            # No mapping available (or lookup failed) — fall back to the raw
+            # column name, which is what shipped before this resolution existed.
+            fallback = candidates[-1]
+            data[fallback] = value
+            unresolved.append(label)
+            continue
+        alias, attr = pairs[target]
+        for name in (alias, attr):
+            data[name] = [value] if name in multi and not isinstance(value, list) else value
+
+    data.update(values["literals"])
+    if unresolved:
+        logger.warning(
+            "create-request fields not found in fieldmappings, wrote raw column names: %s",
+            unresolved,
+        )
+    return data, unresolved
 
 
 def _config_form_name(config: Dict) -> str:
@@ -372,23 +458,38 @@ def push_briefing(
 
     # ── Step 1: create the briefing request via the forms engine ──────────
     form_id = ctx["form_id"]
+    # Resolve field names from the form's own fieldmappings — the tenant's
+    # customer/opportunity columns are not guaranteed to be textField1/2.
+    # NB: textField3 is "Secondary Opportunity ID" (multi-value) per the form's
+    # fieldmappings — NOT a free-text field. The create form has no objective
+    # field, so the objective stays on the draft for the user-facing summary.
+    data, unresolved = _resolve_create_fields(
+        headers,
+        form_id,
+        {
+            "fields": [
+                ("customer_name", ("Customer Name", "customerName", "textField1"), b["customer_name"]),
+                (
+                    "opportunity_id",
+                    ("Primary Opportunity ID", "opportunityId", "textField2"),
+                    b["opportunity_id"],
+                ),
+            ],
+            "literals": {
+                "duration": b["duration_days"],
+                "startDate": {"isoDate": b["briefing_date"]},
+                "startTime": {"isoDate": f"{b['briefing_date']}T{b['start_time']}:00"},
+                "endTime": {"isoDate": f"{b['briefing_date']}T{b['end_time']}:00"},
+            },
+        },
+    )
     payload = {
         "moduleId": ctx["module_id"],
         "formId": form_id,
         "journeyId": ctx["journey_id"],
         "pageId": ctx["page_id"],
-        "data": {
-            "duration": b["duration_days"],
-            "startDate": {"isoDate": b["briefing_date"]},
-            "startTime": {"isoDate": f"{b['briefing_date']}T{b['start_time']}:00"},
-            "endTime": {"isoDate": f"{b['briefing_date']}T{b['end_time']}:00"},
-            "textField1": b["customer_name"],
-            "textField2": b["opportunity_id"],
-        },
+        "data": data,
     }
-    # NB: textField3 is "Secondary Opportunity ID" (multi-value) per the form's
-    # fieldmappings — NOT a free-text field. The create form has no objective
-    # field, so the objective stays on the draft for the user-facing summary.
 
     url = f"{BASE_URL}/forms/{form_id}/data"
     logger.info(f"push_briefing {draft_id}: POST {url}")
@@ -413,7 +514,12 @@ def push_briefing(
                 "body": resp.text[:500],
             }],
         }
-    steps.append({"step": "create_request", "ok": True, "request_id": request_id})
+    create_step = {"step": "create_request", "ok": True, "request_id": request_id}
+    if unresolved:
+        # Written under raw column names — surfaced so the agent can tell the
+        # user these may not have landed on the form.
+        create_step["unmapped_fields"] = unresolved
+    steps.append(create_step)
 
     # Fetch the created event for its CBR number (nice for the user-facing summary).
     event_number = None
