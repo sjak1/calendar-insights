@@ -715,31 +715,43 @@ def execute_tool(
             )
             return output
 
-        elif tool_name == "search_briefingiq_endpoints":
-            from tools.api_catalog import search_endpoints
-            result = search_endpoints(args["query"])
-            output = {"search_briefingiq_endpoints": result}
+        elif tool_name == "draft_briefing":
+            from tools.briefing_builder import draft_briefing
+            token = (schedule_headers or {}).get("Authorization", "")
+            result = draft_briefing(
+                token=token,
+                customer_name=args.get("customer_name", ""),
+                opportunity_id=args.get("opportunity_id", ""),
+                briefing_date=args.get("briefing_date", ""),
+                start_time=args.get("start_time", ""),
+                end_time=args.get("end_time", ""),
+                objective=args.get("objective"),
+                duration_days=int(args.get("duration_days") or 1),
+                room_name=args.get("room_name"),
+                presenter_emails=args.get("presenter_emails"),
+                internal_attendees=args.get("internal_attendees"),
+                external_attendees=args.get("external_attendees"),
+                agenda_sessions=args.get("agenda_sessions"),
+                schedule_headers=schedule_headers,
+            )
+            output = {"draft_briefing": result}
             logger.info(
-                f"✓ {tool_name} returned {len(result)} endpoints for query={args.get('query')!r}"
+                f"✓ draft_briefing → draft_id={result.get('draft_id')} success={result.get('success')}"
             )
             return output
 
-        elif tool_name == "call_briefingiq_endpoint":
-            from tools.api_catalog import call_endpoint
-            path_params = dict(args.get("path_params") or {})
-            # Default event-id placeholders to the current event from header context.
-            if context_event_id:
-                path_params.setdefault("eventid", context_event_id)
-                path_params.setdefault("eventId", context_event_id)
-            result = call_endpoint(
-                endpoint_id=args["endpoint_id"],
-                path_params=path_params,
-                query_params=args.get("query_params"),
+        elif tool_name == "push_briefing":
+            from tools.briefing_builder import push_briefing
+            token = (schedule_headers or {}).get("Authorization", "")
+            result = push_briefing(
+                draft_id=args["draft_id"],
+                token=token,
                 schedule_headers=schedule_headers,
             )
-            output = {"call_briefingiq_endpoint": result}
+            output = {"push_briefing": result}
             logger.info(
-                f"✓ {tool_name} {args.get('endpoint_id')} returned {len(json.dumps(output, default=str))} chars"
+                f"✓ push_briefing draft={args.get('draft_id')} success={result.get('success')} "
+                f"request_id={result.get('request_id')} ({result.get('event_number')}) failed={result.get('failed_steps')}"
             )
             return output
 
