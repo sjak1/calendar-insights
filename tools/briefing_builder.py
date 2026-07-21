@@ -153,6 +153,14 @@ def _fetch_field_aliases(headers: Dict[str, str], form_id: str) -> Dict[str, Any
 
     alias_map = {"pairs": pairs, "multi": multi}
     _ALIAS_CACHE[form_id] = {"ts": _now(), "map": alias_map}
+    # Log the form's real vocabulary: the create payload has been built from
+    # inferred names, and every field we don't send stays blank on the record.
+    logger.info(
+        "form %s fieldmappings — %d field(s): %s",
+        form_id,
+        len({attr for _, attr in pairs.values()}),
+        sorted({alias for alias, _ in pairs.values()}),
+    )
     return alias_map
 
 
@@ -460,10 +468,10 @@ def draft_briefing(
         return {"success": False, "error": "end_time must be after start_time."}
 
     assumptions = []
-    if objective:
+    if objective and len(objective) > 200:
         assumptions.append(
-            "Objective is recorded on this draft for your review only — the request "
-            "form has no objective field, so it is not stored in BriefingIQ."
+            f"Objective is {len(objective)} characters and the form's field caps at 200 — "
+            "it will be truncated. Shorten it if the tail matters."
         )
     if room_name:
         assumptions.append(
@@ -548,8 +556,7 @@ def push_briefing(
     # Resolve field names from the form's own fieldmappings — the tenant's
     # customer/opportunity columns are not guaranteed to be textField1/2.
     # NB: textField3 is "Secondary Opportunity ID" (multi-value) per the form's
-    # fieldmappings — NOT a free-text field. The create form has no objective
-    # field, so the objective stays on the draft for the user-facing summary.
+    # fieldmappings — NOT a free-text field.
     data, unresolved = _resolve_create_fields(
         headers,
         form_id,
@@ -561,7 +568,16 @@ def push_briefing(
                     ("Primary Opportunity ID", "opportunityId", "textField2"),
                     b["opportunity_id"],
                 ),
-            ],
+            ]
+            # Free-text only. Region/Country/Industry/Visit Type/Pillars/Sales
+            # Play/Program are lookup-backed selects — sending a raw string
+            # would store an unresolvable value, so they need their allowed
+            # values fetched first and are deliberately left out.
+            + (
+                [("objective", ("Meeting Objective", "meetingObjective"), b["objective"][:200])]
+                if b.get("objective")
+                else []
+            ),
             "literals": {
                 "duration": b["duration_days"],
                 "startDate": {"isoDate": b["briefing_date"]},
