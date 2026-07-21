@@ -212,6 +212,123 @@ def _resolve_create_fields(
     return data, unresolved
 
 
+def _visit_info_record(headers: Dict[str, str], request_id: str) -> Optional[Dict[str, str]]:
+    """
+    Locate the request's VISIT_INFO record: {form_id, record_id}.
+
+    The create form carries only 13 intake fields (customer, opportunity,
+    dates, region, tier, ...). Everything the UI shows on an open briefing --
+    objective, company profile, host details -- lives on a separate VISIT_INFO
+    form created alongside the request, which is why those fields read blank
+    when only the create form is written.
+
+    Both ids are read off the event itself rather than hardcoded, so this
+    follows whatever form the tenant has configured.
+    """
+    try:
+        resp = requests.get(f"{BASE_URL}/events/{request_id}", headers=headers, timeout=30)
+        if resp.status_code != 200:
+            logger.warning(f"visit-info lookup: GET event returned HTTP {resp.status_code}")
+            return None
+        section = ((resp.json().get("eventFormData") or {}).get("VISIT_INFO")) or None
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"visit-info lookup failed: {exc}")
+        return None
+
+    if isinstance(section, list):
+        section = section[0] if section else None
+    if not isinstance(section, dict):
+        logger.warning("visit-info lookup: no VISIT_INFO section on the event")
+        return None
+
+    form_id, record_id = section.get("formId"), section.get("id")
+    if not form_id or not record_id:
+        logger.warning("visit-info lookup: VISIT_INFO section missing formId/id")
+        return None
+    return {"form_id": form_id, "record_id": record_id}
+
+
+def _write_visit_info(
+    headers: Dict[str, str], request_id: str, values: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Read-modify-write the request's VISIT_INFO record with `values`.
+
+    Only fields the form actually maps are written; anything unmapped is
+    reported rather than dropped. Values are plain strings on this form
+    (region "JAPAC", meetingObjective "...") -- object-valued fields such as
+    briefingManager are resource references and are not set here.
+    """
+    values = {k: v for k, v in values.items() if v not in (None, "", [])}
+    if not values:
+        return {"step": "visit_info", "ok": True, "skipped": "nothing to write"}
+
+    located = _visit_info_record(headers, request_id)
+    if not located:
+        return {
+            "step": "visit_info",
+            "ok": False,
+            "error": "Could not locate the VISIT_INFO record; briefing details not stored.",
+            "fields": sorted(values),
+        }
+
+    form_id, record_id = located["form_id"], located["record_id"]
+    scoped = {**headers, "x-cloud-eventid": request_id}
+
+    try:
+        alias_map = _fetch_field_aliases(scoped, form_id)
+        pairs, multi = alias_map["pairs"], alias_map["multi"]
+    except Exception as exc:
+        return {"step": "visit_info", "ok": False, "error": f"fieldmappings lookup failed: {exc}"}
+
+    try:
+        current = requests.get(
+            f"{BASE_URL}/forms/{form_id}/data/{record_id}", headers=scoped, timeout=30
+        )
+        data = current.json() if current.status_code == 200 else {}
+    except (requests.RequestException, ValueError):
+        data = {}
+    data = data.get("data") if isinstance(data.get("data"), dict) else data
+
+    written, unmapped = [], []
+    for name, value in values.items():
+        pair = pairs.get(name)
+        if pair is None:
+            unmapped.append(name)
+            continue
+        for key in pair:
+            data[key] = [value] if key in multi and not isinstance(value, list) else value
+        written.append(name)
+
+    if not written:
+        return {
+            "step": "visit_info",
+            "ok": False,
+            "error": "None of the supplied fields exist on this tenant's VISIT_INFO form.",
+            "unmapped_fields": unmapped,
+        }
+
+    url = f"{BASE_URL}/forms/{form_id}/data/{record_id}"
+    logger.info(f"visit_info: PUT {url} fields={written} unmapped={unmapped}")
+    try:
+        resp = requests.put(url, headers=scoped, json={"data": data}, timeout=30)
+    except requests.RequestException as exc:
+        return {"step": "visit_info", "ok": False, "error": str(exc)}
+
+    if resp.status_code != 200:
+        return {
+            "step": "visit_info",
+            "ok": False,
+            "error": f"HTTP {resp.status_code}",
+            "body": resp.text[:300],
+        }
+
+    result: Dict[str, Any] = {"step": "visit_info", "ok": True, "fields_written": written}
+    if unmapped:
+        result["unmapped_fields"] = unmapped
+    return result
+
+
 def _config_form_name(config: Dict) -> str:
     """Best-effort human name for a module config's form (shape varies by tenant)."""
     form = config.get("form") or {}
@@ -429,6 +546,10 @@ def draft_briefing(
     end_time: str,
     opportunity_id: str = "",
     objective: Optional[str] = None,
+    region: Optional[str] = None,
+    company_website: Optional[str] = None,
+    company_industry: Optional[str] = None,
+    company_country: Optional[str] = None,
     duration_days: int = 1,
     room_name: Optional[str] = None,
     presenter_emails: Optional[List[str]] = None,
@@ -486,6 +607,10 @@ def draft_briefing(
         "customer_name": customer_name,
         "opportunity_id": opportunity_id,
         "objective": objective or "",
+        "region": region or "",
+        "company_website": company_website or "",
+        "company_industry": company_industry or "",
+        "company_country": company_country or "",
         "briefing_date": briefing_date,
         "start_time": start_time,
         "end_time": end_time,
@@ -505,6 +630,7 @@ def draft_briefing(
         f"**Customer:** {customer_name}",
         f"**Opportunity:** {opportunity_id}",
         f"**Objective:** {objective or '—'}",
+        f"**Region:** {region or '—'}",
         f"**Date:** {briefing_date}  {start_time}–{end_time} ({tz}), {duration_days} day(s)",
         f"**Room preference:** {room_name or '—'}",
         f"**Presenters:** {', '.join(presenter_emails) if presenter_emails else '—'}",
@@ -569,13 +695,12 @@ def push_briefing(
                     b["opportunity_id"],
                 ),
             ]
-            # Free-text only. Region/Country/Industry/Visit Type/Pillars/Sales
-            # Play/Program are lookup-backed selects — sending a raw string
-            # would store an unresolvable value, so they need their allowed
-            # values fetched first and are deliberately left out.
+            # The create form maps 13 intake fields; region is one of them and
+            # is a plain string ("JAPAC"). The objective is NOT on this form —
+            # it belongs to VISIT_INFO and is written in step 1c below.
             + (
-                [("objective", ("Meeting Objective", "meetingObjective"), b["objective"][:200])]
-                if b.get("objective")
+                [("region", ("region", "Company Region"), b["region"])]
+                if b.get("region")
                 else []
             ),
             "literals": {
@@ -641,6 +766,19 @@ def push_briefing(
         pass
 
     request_headers = {**headers, "x-cloud-eventid": request_id}
+
+    # ── Step 1c: briefing details onto VISIT_INFO ─────────────────────────
+    # Runs before SUBMIT so the record is complete when it reaches the EBC
+    # team. A failure here is reported but does not fail the push — the
+    # briefing exists and the detail can be filled in afterwards.
+    detail_values = {
+        "meetingObjective": (b.get("objective") or "")[:200],
+        "companyWebsite": b.get("company_website"),
+        "customerIndustry": b.get("company_industry"),
+        "country": b.get("company_country"),
+    }
+    if any(v for v in detail_values.values()):
+        steps.append(_write_visit_info(headers, request_id, detail_values))
 
     # ── Step 2: SUBMIT state action (no notifications) ────────────────────
     if submit:

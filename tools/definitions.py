@@ -697,7 +697,29 @@ tools = [
             "properties": {
                 "customer_name": {"type": "string", "description": "Customer/account the briefing is for."},
                 "opportunity_id": {"type": "string", "description": "Primary opportunity ID (required by the request form). Ask the user for it."},
-                "objective": {"type": "string", "description": "Briefing objective / purpose."},
+                "objective": {
+                    "type": "string",
+                    "description": (
+                        "Briefing objective / purpose. Stored on the briefing (max 200 chars, "
+                        "truncated beyond that) — write it for the customer, not the host."
+                    ),
+                },
+                "region": {
+                    "type": "string",
+                    "description": "Customer region, e.g. North America, EMEA, JAPAC.",
+                },
+                "company_website": {
+                    "type": "string",
+                    "description": "Customer website. Use research_company findings; confirm with the user first.",
+                },
+                "company_industry": {
+                    "type": "string",
+                    "description": "Customer industry. Use research_company findings; confirm with the user first.",
+                },
+                "company_country": {
+                    "type": "string",
+                    "description": "Customer country. Use research_company findings; confirm with the user first.",
+                },
                 "briefing_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "start_time": {"type": "string", "description": "HH:MM 24-hour, in the request timezone."},
                 "end_time": {"type": "string", "description": "HH:MM 24-hour."},
