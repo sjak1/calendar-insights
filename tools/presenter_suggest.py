@@ -134,6 +134,36 @@ def _fetch_event_ids_by_scope(
     return event_ids
 
 
+def _available_topics(index: str, limit: int = 40) -> List[str]:
+    """
+    The topic names that actually exist in presenter history, most-covered first.
+
+    Returned alongside an empty topic search so the caller can see the real
+    vocabulary instead of guessing. Topic matching is lexical, so a topic the
+    tenant has no wording for (e.g. "AI" against a catalogue of "Java Cloud",
+    "Exadata Cloud at Customer") matches nothing — and the agent, given only
+    "0 results", tends to retry with progressively vaguer terms and then
+    present whatever finally returns as though it matched the original ask.
+    """
+    body = {
+        "size": 0,
+        "aggs": {"topics": {"terms": {"field": f"{TOPIC_NAME}.keyword", "size": limit}}},
+    }
+    try:
+        from opensearch_client import search
+
+        result = search(index=index, body=body)
+        if not result.get("success"):
+            return []
+        buckets = (
+            (result.get("aggregations") or {}).get("topics", {}).get("buckets", [])
+        )
+        return [b["key"] for b in buckets if b.get("key")]
+    except Exception as exc:  # never let a diagnostic aggregation break the tool
+        logger.warning(f"available-topics lookup failed: {exc}")
+        return []
+
+
 def _build_activity_query(
     topic: Optional[str],
     event_ids: Optional[List[str]],
@@ -459,16 +489,28 @@ def get_suggested_presenters(
 
     # Resolve event_ids from customer/industry scope (if not already given)
     scoped_event_ids: List[str] = []
+    dropped_scope: Optional[str] = None
     if event_id:
         scoped_event_ids = [event_id]
     elif customer_name or industry:
         scoped_event_ids = _fetch_event_ids_by_scope(customer_name, industry)
         if not scoped_event_ids:
-            return {
-                "success": True,
-                "suggested_presenters": [],
-                "message": "No matching events found for customer/industry scope",
-            }
+            # A customer with no history here is the normal case for a first
+            # briefing — the very moment presenter suggestions are most useful.
+            # Returning nothing would discard a perfectly good topic, so fall
+            # through to topic-only matching and tell the caller we did.
+            if topic:
+                dropped_scope = customer_name or industry
+                logger.info(
+                    f"No events for scope {dropped_scope!r}; falling back to topic-only "
+                    f"search on {topic!r}"
+                )
+            else:
+                return {
+                    "success": True,
+                    "suggested_presenters": [],
+                    "message": "No matching events found for customer/industry scope",
+                }
 
     # Need at least one constraint on activities (event_ids OR topic)
     if not scoped_event_ids and not topic:
@@ -521,11 +563,33 @@ def get_suggested_presenters(
             logger.info(f"Fallback search returned {len(hits)} activity hits")
 
     if not hits:
-        return {
+        empty: Dict[str, Any] = {
             "success": True,
             "suggested_presenters": [],
             "message": "No matching activities with presenters found",
         }
+        if topic:
+            available = _available_topics(target_index)
+            if available:
+                empty["searched_topic"] = topic
+                empty["available_topics"] = available
+                empty["message"] = (
+                    f"No presenter has covered '{topic}'. The topics that do exist are "
+                    "listed in available_topics."
+                )
+                empty["guidance"] = (
+                    f"Do NOT retry with vaguer wording until something returns and then "
+                    f"describe the result as '{topic}' experience — that misrepresents who "
+                    "these people are. Either pick the closest genuinely related topic from "
+                    "available_topics and tell the user plainly which one you substituted and "
+                    f"why, or tell them no one has presented on '{topic}'. Saying nobody "
+                    "matches is a valid, useful answer."
+                )
+                logger.info(
+                    f"No presenters for topic={topic!r}; returned "
+                    f"{len(available)} available topics for the agent to choose from"
+                )
+        return empty
 
     presenters = _extract_presenters_from_hits(hits)
     ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
@@ -553,9 +617,17 @@ def get_suggested_presenters(
                 p["available"] = True
                 p["conflicts"] = []
 
-    return {
+    payload: Dict[str, Any] = {
         "success": True,
         "suggested_presenters": ranked,
         "total_activities_matched": result.get("total_hits", len(hits)),
         "audience_level": audience_level,
     }
+    if dropped_scope:
+        payload["scope_dropped"] = dropped_scope
+        payload["note"] = (
+            f"No past events found for '{dropped_scope}', so these are matched on topic "
+            f"'{topic}' alone, not on any history with that customer. Say so when "
+            "presenting them."
+        )
+    return payload
