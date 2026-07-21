@@ -283,6 +283,7 @@ tools = [
         "description": (
             "Suggest the best presenters for a topic, event, industry, or customer. "
             "Use when the user asks who should present, who is the best presenter for X, or to recommend presenters for an agenda/session. "
+            "Also call it PROACTIVELY when preparing a briefing — after research_company, for the topics that research surfaced — so the draft carries presenter suggestions instead of leaving them for later. "
             "Returns presenters ranked by matched activities, based on real activity-level topic/presenter matches. "
             "Provide at least one scope filter: event_id, topic, industry, or customer_name. "
             "Topic matching is lexical, so a topic the tenant has no wording for returns no one. "
@@ -679,9 +680,12 @@ tools = [
         "name": "draft_briefing",
         "description": (
             "Assemble a complete NEW briefing request draft for user review — NO writes happen. "
-            "Use after interviewing the user. Unless you have already researched this customer in "
-            "this conversation, call research_company FIRST and fold what you learn into the "
-            "objective and agenda — then show the user the research alongside the draft. "
+            "Use after interviewing the user. Unless you have already done so in this "
+            "conversation, call research_company FIRST and fold what you learn into the "
+            "objective and agenda, then call suggest_presenters for the topics that research "
+            "surfaced — research tells you which topics matter, and those topics are what "
+            "presenter matching needs. Show the user the research and the suggested presenters "
+            "alongside the draft. Do not repeat research you have already run this conversation. "
             "Required: customer name, primary opportunity id, date, "
             "start/end time. Optional: objective, duration in days (1-5), presenters and agenda sessions "
             "(pushed after creation), attendees (recorded, not yet auto-pushed). "
