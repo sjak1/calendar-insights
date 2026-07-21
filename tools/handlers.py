@@ -686,16 +686,6 @@ def execute_tool(
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")
             return output
 
-        elif tool_name == "search_web":
-            from tools.web_research import search_web
-            result = search_web(args["query"], args.get("max_results", 5))
-            output = {"search_web": result}
-            logger.info(
-                f"✓ {tool_name} query={args.get('query')!r} "
-                f"results={len(result.get('results', []))} error={result.get('error')}"
-            )
-            return output
-
         elif tool_name == "research_company":
             from tools.web_research import research_company
             result = research_company(args["company_name"], args.get("focus"))

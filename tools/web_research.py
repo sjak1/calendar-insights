@@ -1,6 +1,12 @@
 """
 Web research for briefing preparation.
 
+Only `research_company` is registered as a tool, and only for briefing prep on
+a named customer. `search_web` is its internal primitive and is deliberately
+NOT exposed to the agent: an agent that can search on any turn burns provider
+quota unpredictably. Register it in tools/definitions.py if general search is
+ever wanted.
+
 Read-only. Nothing here writes to BriefingIQ — findings come back with their
 source URLs so the agent can show them to the user, who decides what (if
 anything) goes onto the record via the confirmation-gated edit tools.

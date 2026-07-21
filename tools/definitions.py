@@ -590,35 +590,16 @@ tools = [
     },
     {
         "type": "function",
-        "name": "search_web",
-        "description": (
-            "Search the public web for information not held in BriefingIQ or OpenSearch — "
-            "company background, recent news, industry context. READ-ONLY: this never changes "
-            "a briefing. Results are unverified web snippets, so ALWAYS show the user the "
-            "source links with your answer, and get their confirmation before using anything "
-            "from here to fill in briefing fields. For customer background before a briefing, "
-            "prefer research_company — it runs the right set of queries for you."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The search query."},
-                "max_results": {
-                    "type": "integer",
-                    "description": "How many results to return (1-10, default 5).",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "type": "function",
         "name": "research_company",
         "description": (
             "Gather public background on a customer ahead of a briefing — profile, recent news, "
             "and strategic priorities — to inform the objective, agenda topics, and presenter "
-            "choices. READ-ONLY: writes nothing to BriefingIQ. Present the findings WITH their "
-            "source links and let the user confirm before any of it informs a briefing record. "
+            "choices. Use ONLY for briefing preparation on a named customer: planning or "
+            "drafting a briefing, or advising on one that already exists. This is NOT a general "
+            "web search — do not call it to answer unrelated questions, look up definitions, or "
+            "research anything that is not the customer of a briefing. "
+            "READ-ONLY: writes nothing to BriefingIQ. Present the findings WITH their source "
+            "links and let the user confirm before any of it informs a briefing record. "
             "If the company name is ambiguous (a common word, or several companies share it), "
             "ask the user which entity they mean first."
         ),
