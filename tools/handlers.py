@@ -686,6 +686,16 @@ def execute_tool(
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")
             return output
 
+        elif tool_name == "research_company":
+            from tools.web_research import research_company
+            result = research_company(args["company_name"], args.get("focus"))
+            output = {"research_company": result}
+            logger.info(
+                f"✓ {tool_name} company={args.get('company_name')!r} "
+                f"angles={list(result.get('findings', {}))} error={result.get('error')}"
+            )
+            return output
+
         elif tool_name == "search_briefingiq_endpoints":
             from tools.api_catalog import search_endpoints
             result = search_endpoints(args["query"])

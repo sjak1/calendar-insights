@@ -590,6 +590,33 @@ tools = [
     },
     {
         "type": "function",
+        "name": "research_company",
+        "description": (
+            "Gather public background on a customer ahead of a briefing — profile, recent news, "
+            "and strategic priorities — to inform the objective, agenda topics, and presenter "
+            "choices. Use ONLY for briefing preparation on a named customer: planning or "
+            "drafting a briefing, or advising on one that already exists. This is NOT a general "
+            "web search — do not call it to answer unrelated questions, look up definitions, or "
+            "research anything that is not the customer of a briefing. "
+            "READ-ONLY: writes nothing to BriefingIQ. Present the findings WITH their source "
+            "links and let the user confirm before any of it informs a briefing record. "
+            "If the company name is ambiguous (a common word, or several companies share it), "
+            "ask the user which entity they mean first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company_name": {"type": "string", "description": "Customer/company to research."},
+                "focus": {
+                    "type": "string",
+                    "description": "Optional extra angle, e.g. 'cloud migration' or 'supply chain'.",
+                },
+            },
+            "required": ["company_name"],
+        },
+    },
+    {
+        "type": "function",
         "name": "search_briefingiq_endpoints",
         "description": (
             "Search the catalog of 200+ read-only BriefingIQ API endpoints (locations, location hours, "
