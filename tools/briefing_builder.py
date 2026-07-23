@@ -550,6 +550,11 @@ def draft_briefing(
     company_website: Optional[str] = None,
     company_industry: Optional[str] = None,
     company_country: Optional[str] = None,
+    visit_type: Optional[str] = None,
+    visit_focus: Optional[str] = None,
+    program: Optional[str] = None,
+    pillars: Optional[List[str]] = None,
+    sales_play: Optional[List[str]] = None,
     duration_days: int = 1,
     room_name: Optional[str] = None,
     presenter_emails: Optional[List[str]] = None,
@@ -611,6 +616,11 @@ def draft_briefing(
         "company_website": company_website or "",
         "company_industry": company_industry or "",
         "company_country": company_country or "",
+        "visit_type": visit_type or "",
+        "visit_focus": visit_focus or "",
+        "program": program or "",
+        "pillars": pillars or [],
+        "sales_play": sales_play or [],
         "briefing_date": briefing_date,
         "start_time": start_time,
         "end_time": end_time,
@@ -631,6 +641,7 @@ def draft_briefing(
         f"**Opportunity:** {opportunity_id}",
         f"**Objective:** {objective or '—'}",
         f"**Region:** {region or '—'}",
+        f"**Visit Type:** {visit_type or '—'}",
         f"**Date:** {briefing_date}  {start_time}–{end_time} ({tz}), {duration_days} day(s)",
         f"**Room preference:** {room_name or '—'}",
         f"**Presenters:** {', '.join(presenter_emails) if presenter_emails else '—'}",
@@ -776,6 +787,14 @@ def push_briefing(
         "companyWebsite": b.get("company_website"),
         "customerIndustry": b.get("company_industry"),
         "country": b.get("company_country"),
+        # Controlled-vocabulary fields — the agent supplies values it took from
+        # list_briefing_field_values, so they resolve in the UI. Arrays pass
+        # through as-is for the multivalue fields (pillars, salesPlay).
+        "visitType": b.get("visit_type"),
+        "visitFocus": b.get("visit_focus"),
+        "program": b.get("program"),
+        "pillars": b.get("pillars"),
+        "salesPlay": b.get("sales_play"),
     }
     if any(v for v in detail_values.values()):
         steps.append(_write_visit_info(headers, request_id, detail_values))
