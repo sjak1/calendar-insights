@@ -686,6 +686,16 @@ def execute_tool(
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")
             return output
 
+        elif tool_name == "list_briefing_field_values":
+            from tools.briefing_field_options import list_field_values
+            result = list_field_values(args["field"])
+            output = {"list_briefing_field_values": result}
+            logger.info(
+                f"✓ {tool_name} field={args.get('field')!r} "
+                f"values={len(result.get('allowed_values', []))} error={result.get('error')}"
+            )
+            return output
+
         elif tool_name == "research_company":
             from tools.web_research import research_company
             result = research_company(args["company_name"], args.get("focus"))

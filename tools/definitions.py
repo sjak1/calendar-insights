@@ -597,6 +597,29 @@ tools = [
     },
     {
         "type": "function",
+        "name": "list_briefing_field_values",
+        "description": (
+            "Return the allowed values for a controlled briefing field so you can fill it "
+            "with a value the UI will resolve. Call before setting visit_type, visit_focus, "
+            "program, pillars, or sales_play on draft_briefing — passing a value not in this "
+            "list stores something the form can't resolve. Pick the best fit from the customer's "
+            "research/industry and confirm with the user. Fields: visit_type, visit_focus, "
+            "program, pillars, sales_play."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "enum": ["visit_type", "visit_focus", "program", "pillars", "sales_play"],
+                    "description": "Which field's allowed values to return.",
+                },
+            },
+            "required": ["field"],
+        },
+    },
+    {
+        "type": "function",
         "name": "research_company",
         "description": (
             "Gather public background on a customer ahead of a briefing — profile, recent news, "
@@ -719,6 +742,31 @@ tools = [
                 "company_country": {
                     "type": "string",
                     "description": "Customer country. Use research_company findings; confirm with the user first.",
+                },
+                "visit_type": {
+                    "type": "string",
+                    "description": (
+                        "Visit Type — MUST be an exact value from list_briefing_field_values('visit_type') "
+                        "(e.g. Prospect, Existing Customer, Analyst). Pick from research, confirm with the user."
+                    ),
+                },
+                "visit_focus": {
+                    "type": "string",
+                    "description": "Visit Focus — exact value from list_briefing_field_values('visit_focus').",
+                },
+                "program": {
+                    "type": "string",
+                    "description": "Program — exact value from list_briefing_field_values('program').",
+                },
+                "pillars": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Pillars — exact values from list_briefing_field_values('pillars'). Multiple allowed.",
+                },
+                "sales_play": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Sales Plays — exact values from list_briefing_field_values('sales_play'). Multiple allowed.",
                 },
                 "briefing_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "start_time": {"type": "string", "description": "HH:MM 24-hour, in the request timezone."},
