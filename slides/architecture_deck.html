@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BriefingIQ AI Assistant — Architecture &amp; Roadmap</title>
+<title>BriefingIQ AI Assistant — Architecture</title>
 <style>
   /* ============ base ============ */
   :root{
@@ -144,7 +144,7 @@
       <span class="pill"><b>~25 tools</b> · read &amp; write</span>
     </div>
   </div>
-  <div class="foot"><span>Architecture &amp; Roadmap</span><span>2026</span></div>
+  <div class="foot"><span>Architecture</span><span>2026</span></div>
 </section>
 <!-- ============================== 2 · WHAT WE BUILT ============================== -->
 <section class="slide">
@@ -299,7 +299,6 @@
         <p class="ph">Why it's fast &amp; affordable</p>
         <ul class="feat">
           <li><b>Prompt caching</b> — the ~9k-token static prefix (instructions, tool schemas, field reference) is cache-read on every round, only the delta is re-billed.</li>
-          <li><b>Server-side date resolution</b> — <code>TOMORROW_START</code>, <code>THIS_WEEK_END</code> become epoch-ms in-process, saving a whole tool round-trip.</li>
           <li><b>Cost transparency</b> — every response carries input/output token counts and an estimated cost line.</li>
           <li><b>Structured logs</b> — every round, tool call and cost is a log line; latency is measurable per stage.</li>
         </ul>
@@ -457,50 +456,17 @@ if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># ne
     </div>
   </div>
 </section>
-<!-- ============================== 15 · ROADMAP: RBAC ============================== -->
-<section class="slide">
-  <p class="k"><span class="n">15</span>Roadmap</p>
-  <h2>Roadmap — RBAC down to the field</h2>
-  <p class="sub">The row-level gate on events is live. The roadmap deepens the same architecture —
-    same resolver, same chokepoint — into finer scopes.</p>
-  <div class="cols">
-    <div class="col">
-      <div class="panel" style="height:100%">
-        <p class="ph" style="color:var(--green)">Enforced today</p>
-        <ul class="feat">
-          <li><b>Row-level scope on events</b> — role-compiled filter AND-ed into every read.</li>
-          <li><b>Activity scoping via the event join</b> — pinned-event checks, capped joins, overflow denies.</li>
-          <li><b>Fail-closed resolution</b> + index allowlist + banned-key guard.</li>
-          <li><b>Write-side</b> — platform token per user on every mutation.</li>
-        </ul>
-      </div>
-    </div>
-    <div class="col">
-      <div class="panel" style="height:100%">
-        <p class="ph" style="color:var(--red-soft)">Planned rungs</p>
-        <ul class="feat">
-          <li><b>Location &amp; entity scoping</b> — center-level and org-level visibility boundaries.</li>
-          <li><b>Private records</b> — creator-only briefings invisible to everyone else.</li>
-          <li><b>Field-level redaction</b> — sensitive values (opportunity size, exec attendees) masked by role, not just rows.</li>
-          <li><b>A write gate</b> — policy checks on push actions in the agent itself, before the platform is even called.</li>
-          <li><b>Access audit trail</b> — every scoped read logged: who asked, what filter applied, what returned.</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
 <!-- ============================== 16 · CLOSE ============================== -->
 <section class="slide">
   <div class="titlewrap">
     <div class="brandline"><span class="chip"></span>BriefingIQ · AI Assistant</div>
     <h1 style="font-size:46px">An agent that acts,<br>inside walls that hold.</h1>
     <p class="title-sub">Every read scoped by the Oracle access model. Every write on the user's own
-      credentials. Every service — app, data, search, secrets, LLM — <b>inside one VCN</b>.
-      And a roadmap that takes access control down to the field.</p>
+      credentials. Every service — app, data, search, secrets, LLM — <b>inside one VCN</b>.</p>
     <div class="pillrow">
       <span class="pill"><b>Live</b> · agent + tools + RBAC gate</span>
       <span class="pill"><b>Live</b> · session &amp; per-user memory</span>
-      <span class="pill"><b>Roadmap</b> · field-level access control</span>
+      <span class="pill"><b>Live</b> · one VCN, end to end</span>
     </div>
   </div>
   <div class="foot"><span>Thank you</span><span>2026</span></div>
@@ -510,7 +476,7 @@ if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># ne
 
 <div id="bar"></div>
 <div id="hud">
-  <span id="pos">1 / 16</span>
+  <span id="pos">1 / 15</span>
   <span>← → navigate · F fullscreen</span>
   <span class="nav"><button id="prev">‹ prev</button><button id="next">next ›</button></span>
 </div>
