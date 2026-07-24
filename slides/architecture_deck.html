@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BriefingIQ AI Assistant — Architecture &amp; Roadmap</title>
+<style>
+  /* ============ base ============ */
+  :root{
+    --bg:#0b0d11; --panel:#12151b; --panel-2:#161a22;
+    --ink:#eef1f5; --ink-2:#a7b0bc; --ink-3:#6d7683;
+    --hair:#232833; --hair-2:#2f3542;
+    --red:#e8563f;            /* oracle-leaning accent */
+    --red-soft:#ff8a73;
+    --teal:#3ec9b0; --blue:#6ea8fe; --gold:#e2a339; --violet:#a98cf5; --green:#5fd08f;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden;}
+
+  /* ============ stage: fixed 1280x720, scaled to fit ============ */
+  #stage{position:absolute;top:50%;left:50%;width:1280px;height:720px;transform-origin:center center;}
+  .slide{position:absolute;inset:0;padding:64px 84px 58px;display:none;flex-direction:column;background:var(--bg);}
+  .slide.on{display:flex;}
+
+  /* ============ chrome ============ */
+  #hud{position:fixed;left:0;right:0;bottom:0;height:36px;display:flex;align-items:center;justify-content:space-between;
+       padding:0 18px;font-family:var(--mono);font-size:11px;color:var(--ink-3);z-index:50;user-select:none;}
+  #bar{position:fixed;left:0;bottom:36px;height:2px;background:var(--red);width:0;z-index:50;transition:width .25s ease;}
+  #hud .nav{display:flex;gap:14px;}
+  #hud button{background:none;border:1px solid var(--hair-2);color:var(--ink-2);border-radius:5px;
+              font-family:var(--mono);font-size:11px;padding:3px 10px;cursor:pointer;}
+  #hud button:hover{color:var(--ink);border-color:var(--ink-3);}
+
+  /* ============ type ============ */
+  .k{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--red);margin-bottom:14px;}
+  .k .n{color:var(--ink-3);margin-right:12px;}
+  h1{font-size:58px;line-height:1.03;letter-spacing:-.025em;font-weight:700;}
+  h2{font-size:34px;line-height:1.1;letter-spacing:-.02em;font-weight:680;margin-bottom:8px;}
+  .sub{color:var(--ink-2);font-size:15.5px;line-height:1.55;max-width:900px;}
+  .sub b, .sub strong{color:var(--ink);}
+  code{font-family:var(--mono);font-size:.88em;color:var(--red-soft);}
+  .grow{flex:1;min-height:0;}
+
+  /* ============ shared blocks ============ */
+  .cols{display:flex;gap:22px;margin-top:26px;flex:1;min-height:0;}
+  .col{flex:1;min-width:0;}
+  .panel{background:var(--panel);border:1px solid var(--hair);border-radius:10px;padding:18px 20px;}
+  .panel .ph{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px;}
+  .panel h3{font-size:16.5px;font-weight:650;margin-bottom:6px;}
+  .panel p{font-size:13px;color:var(--ink-2);line-height:1.5;}
+
+  ul.feat{list-style:none;margin-top:8px;}
+  ul.feat li{position:relative;padding:7px 0 7px 22px;font-size:14px;color:var(--ink-2);line-height:1.5;border-bottom:1px solid var(--hair);}
+  ul.feat li:last-child{border-bottom:none;}
+  ul.feat li::before{content:"";position:absolute;left:2px;top:14px;width:8px;height:8px;border-radius:2px;background:var(--red);}
+  ul.feat li b{color:var(--ink);font-weight:600;}
+
+  .stat{display:flex;gap:14px;margin-top:auto;}
+  .stat .s{flex:1;background:var(--panel);border:1px solid var(--hair);border-radius:10px;padding:14px 16px;}
+  .stat .v{font-size:30px;font-weight:700;letter-spacing:-.02em;color:var(--ink);}
+  .stat .v em{font-style:normal;color:var(--red);}
+  .stat .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-top:4px;line-height:1.45;}
+
+  /* tool cards */
+  .tools{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px;flex:1;align-content:start;}
+  .tool{background:var(--panel);border:1px solid var(--hair);border-left:3px solid var(--red);border-radius:8px;padding:13px 16px;}
+  .tool .tn{font-family:var(--mono);font-size:13px;color:var(--ink);font-weight:600;}
+  .tool .td{font-size:12.5px;color:var(--ink-2);line-height:1.5;margin-top:4px;}
+  .tool .td b{color:var(--ink);}
+  .tool.teal{border-left-color:var(--teal);} .tool.blue{border-left-color:var(--blue);}
+  .tool.gold{border-left-color:var(--gold);} .tool.violet{border-left-color:var(--violet);}
+  .tool.green{border-left-color:var(--green);}
+
+  /* diagram primitives */
+  .dg{display:flex;align-items:stretch;gap:0;margin-top:26px;flex:1;min-height:0;}
+  .dcol{display:flex;flex-direction:column;gap:12px;justify-content:center;min-width:0;}
+  .dbox{background:var(--panel);border:1px solid var(--hair-2);border-radius:9px;padding:12px 14px;text-align:center;}
+  .dbox .bt{font-size:13.5px;font-weight:650;color:var(--ink);line-height:1.3;}
+  .dbox .bs{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-top:4px;line-height:1.5;}
+  .dbox.red{border-color:var(--red);box-shadow:0 0 0 1px rgba(232,86,63,.25);}
+  .dbox.red .bt{color:var(--red-soft);}
+  .dbox.teal{border-color:var(--teal);} .dbox.teal .bt{color:var(--teal);}
+  .dbox.blue{border-color:var(--blue);} .dbox.blue .bt{color:var(--blue);}
+  .dbox.gold{border-color:var(--gold);} .dbox.gold .bt{color:var(--gold);}
+  .dbox.violet{border-color:var(--violet);} .dbox.violet .bt{color:var(--violet);}
+  .dbox.green{border-color:var(--green);} .dbox.green .bt{color:var(--green);}
+  .dbox.dim{border-style:dashed;opacity:.75;}
+  .darr{display:flex;align-items:center;padding:0 10px;color:var(--ink-3);font-size:20px;flex-shrink:0;}
+  .darr .lbl{font-family:var(--mono);font-size:10px;color:var(--ink-3);writing-mode:vertical-rl;text-orientation:mixed;margin-right:2px;}
+  .dgroup{border:1px dashed var(--hair-2);border-radius:12px;padding:26px 14px 14px;position:relative;}
+  .dgroup > .gt{position:absolute;top:8px;left:14px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);}
+
+  /* numbered steps */
+  .steps{display:flex;flex-direction:column;gap:0;margin-top:24px;flex:1;justify-content:center;}
+  .step{display:flex;align-items:baseline;gap:18px;padding:11px 4px;border-bottom:1px solid var(--hair);}
+  .step:last-child{border-bottom:none;}
+  .step .num{font-family:var(--mono);font-size:15px;color:var(--red);font-weight:700;min-width:30px;}
+  .step .st{font-size:15px;font-weight:640;color:var(--ink);min-width:270px;}
+  .step .sd{font-size:13.5px;color:var(--ink-2);line-height:1.5;}
+  .step .sd code{color:var(--red-soft);}
+
+  /* code / filter blocks */
+  pre.blk{background:#0e1116;border:1px solid var(--hair);border-radius:9px;padding:16px 18px;font-family:var(--mono);
+          font-size:12px;line-height:1.7;color:var(--ink-2);overflow:hidden;}
+  pre.blk .hl{color:var(--red-soft);} pre.blk .g{color:var(--green);} pre.blk .c{color:var(--ink-3);}
+
+  .foot{margin-top:auto;padding-top:18px;font-family:var(--mono);font-size:11px;color:var(--ink-3);display:flex;justify-content:space-between;}
+
+  .titlewrap{margin:auto 0;}
+  .brandline{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:12.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);margin-bottom:26px;}
+  .brandline .chip{width:12px;height:12px;border-radius:3px;background:var(--red);}
+  .title-sub{margin-top:26px;font-size:17px;color:var(--ink-2);max-width:820px;line-height:1.6;}
+  .title-sub b{color:var(--ink);}
+  .pillrow{display:flex;gap:10px;margin-top:34px;flex-wrap:wrap;}
+  .pill{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);border:1px solid var(--hair-2);border-radius:999px;padding:6px 14px;}
+  .pill b{color:var(--red-soft);font-weight:600;}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:24px;flex:1;align-content:start;}
+  .roadgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:22px;}
+  .now-next{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:var(--ink-3);margin:18px 0 8px;}
+  .now-next .tag{border:1px solid var(--hair-2);border-radius:5px;padding:2px 8px;}
+  .now-next .tag.hot{border-color:var(--red);color:var(--red-soft);}
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+<!-- ============================== 1 · TITLE ============================== -->
+<section class="slide on">
+  <div class="titlewrap">
+    <div class="brandline"><span class="chip"></span>BriefingIQ · Oracle Cloud Infrastructure</div>
+    <h1>BriefingIQ<br>AI&nbsp;Assistant</h1>
+    <p class="title-sub">A natural-language, <b>tool-calling AI agent</b> embedded in the BriefingIQ
+      platform — it plans, queries, books, drafts and writes back, with <b>server-side role-based
+      access control</b> on every byte it reads. Built <b>Oracle-scoped, end to end</b>: the entire
+      stack lives inside an OCI Virtual Cloud Network.</p>
+    <div class="pillrow">
+      <span class="pill"><b>OCI</b> · VCN-contained</span>
+      <span class="pill"><b>Oracle GenAI</b> · reasoning</span>
+      <span class="pill"><b>RBAC</b> · enforced server-side</span>
+      <span class="pill"><b>~26 tools</b> · read &amp; write</span>
+    </div>
+  </div>
+  <div class="foot"><span>Architecture &amp; Roadmap</span><span>2026</span></div>
+</section>
+
+<!-- ============================== 2 · WHAT WE BUILT ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">02</span>Executive summary</p>
+  <h2>What we've built</h2>
+  <p class="sub">Users talk to BriefingIQ in plain English. The agent doesn't just answer —
+    it <b>acts</b>: it searches history, checks rooms, drafts agendas and emails, and writes
+    complete briefings back into the platform.</p>
+  <div class="cols">
+    <div class="col">
+      <ul class="feat">
+        <li><b>A real agent loop, not a chatbot</b> — the model plans, calls tools, reads results, and keeps going (up to 15 rounds) until the task is done.</li>
+        <li><b>Full read path</b> — event &amp; activity history, counts, reports, charts, PDFs, live web research on the customer.</li>
+        <li><b>Full write path</b> — creates complete briefings, edits briefing fields, pushes agendas, books rooms — always through the caller's own credentials.</li>
+        <li><b>Streaming UX</b> — the UI shows every LLM and tool step live over SSE, with per-query token and cost accounting.</li>
+      </ul>
+    </div>
+    <div class="col">
+      <ul class="feat">
+        <li><b>RBAC by construction</b> — the caller's role is resolved from the Oracle access model and enforced at a single server-side gate the model cannot bypass.</li>
+        <li><b>Oracle-scoped</b> — app, database, search, secrets and the LLM are all Oracle Cloud services inside one VCN. No data leaves Oracle.</li>
+        <li><b>Engineered for latency &amp; cost</b> — prompt caching, parallel tool fan-out, server-side date resolution.</li>
+        <li><b>Provider-agnostic core</b> — the reasoning layer is an adapter; the agent loop, tools and RBAC don't change if the model does.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="stat">
+    <div class="s"><div class="v">~26</div><div class="l">tools — create &amp; act · insight · research · output</div></div>
+    <div class="s"><div class="v">&le;15</div><div class="l">reasoning rounds per query · parallel tool dispatch</div></div>
+    <div class="s"><div class="v">100<em>%</em></div><div class="l">of reads pass the server-side RBAC gate</div></div>
+    <div class="s"><div class="v">1</div><div class="l">VCN — the whole stack, Oracle-scoped</div></div>
+  </div>
+</section>
+
+<!-- ============================== 3 · ARCHITECTURE ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">03</span>Architecture</p>
+  <h2>The system at a glance</h2>
+  <p class="sub">Identity and row-level scope are resolved <b>before the agent runs</b> and enforced at the
+    gate in front of the data. The model reasons and requests tools — it never controls what it may see.</p>
+  <div class="dg">
+    <div class="dcol" style="flex:.9">
+      <div class="dbox violet"><div class="bt">Briefing Frontend</div><div class="bs">chat · charts · reports<br>live SSE timing view</div></div>
+    </div>
+    <div class="darr">⟶</div>
+    <div class="dcol" style="flex:1.05">
+      <div class="dbox teal"><div class="bt">FastAPI service</div><div class="bs">OCI container · api.py<br>x-cloud-* identity headers</div></div>
+      <div class="dbox red"><div class="bt">RBAC resolver</div><div class="bs">(user, category) → role<br>role → row-scope filter</div></div>
+      <div class="dbox blue"><div class="bt">Oracle Autonomous DB</div><div class="bs">roles · access rules · reference</div></div>
+    </div>
+    <div class="darr">⟶</div>
+    <div class="dcol" style="flex:1.15">
+      <div class="dbox gold"><div class="bt">Agent core</div><div class="bs">query_processor · ≤15 rounds<br>plan → act → synthesize</div></div>
+      <div class="dbox gold"><div class="bt">Prompt assembly</div><div class="bs">cached ~9k prefix<br>page + time context</div></div>
+      <div class="dbox violet"><div class="bt">Oracle Generative AI</div><div class="bs">managed LLM · in-region<br>tool-use reasoning</div></div>
+    </div>
+    <div class="darr">⟶</div>
+    <div class="dcol" style="flex:1.2">
+      <div class="dbox green"><div class="bt">Toolset — ~26 tools</div><div class="bs">parallel dispatch · handlers.py<br>create &amp; act · insight · output</div></div>
+      <div class="dbox red"><div class="bt">RBAC gate</div><div class="bs">row scope AND-ed into<br>every search() / count()</div></div>
+    </div>
+    <div class="darr">⟶</div>
+    <div class="dcol" style="flex:1.05">
+      <div class="dbox blue"><div class="bt">OpenSearch — OCI</div><div class="bs">events · activities</div></div>
+      <div class="dbox teal"><div class="bt">BriefingIQ REST</div><div class="bs">writes · caller's own token</div></div>
+      <div class="dbox dim"><div class="bt" style="color:var(--ink-2)">Web sources</div><div class="bs">read-only research</div></div>
+    </div>
+  </div>
+  <div class="foot"><span>reads → RBAC gate · writes → user's own token · reasoning → Oracle GenAI</span><span>logical view</span></div>
+</section>
+
+<!-- ============================== 4 · LIFE OF A REQUEST ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">04</span>Request trace</p>
+  <h2>Life of a request — end to end</h2>
+  <p class="sub">Example: <i>“How many confirmed briefings does Ford have this month? Show it as a chart.”</i></p>
+  <div class="steps">
+    <div class="step"><span class="num">①</span><span class="st">Query arrives with identity</span><span class="sd">Frontend POSTs the prompt + <code>x-cloud-*</code> headers — user, tenant, category, page context, Bearer token.</span></div>
+    <div class="step"><span class="num">②</span><span class="st">Role &amp; scope resolved from Oracle</span><span class="sd">The service looks up the caller's roles and row-access rules in the Oracle access model — before any reasoning happens.</span></div>
+    <div class="step"><span class="num">③</span><span class="st">Prompt assembled</span><span class="sd">Cached ~9k-token system prefix + page and time context. Pasted query syntax is rejected before the model sees it.</span></div>
+    <div class="step"><span class="num">④</span><span class="st">Round 1 · plan → fetch</span><span class="sd">Model requests <code>search_opensearch</code>; server resolves <code>THIS_MONTH_START</code> to epoch-ms and <b>ANDs the RBAC filter in at the gate</b>. 7 hits return.</span></div>
+    <div class="step"><span class="num">⑤</span><span class="st">Round 2 · shape</span><span class="sd">Model calls <code>format_chart</code> — the chart config is captured for the UI, not re-fed to the model.</span></div>
+    <div class="step"><span class="num">⑥</span><span class="st">Round 3 · synthesize</span><span class="sd">Model writes the answer, no further tool call — the loop exits.</span></div>
+    <div class="step"><span class="num">⑦</span><span class="st">Answer + chart + cost</span><span class="sd">Markdown, chart config, token counts and estimated cost return; the SSE stream showed every step live throughout.</span></div>
+  </div>
+</section>
+
+<!-- ============================== 5 · AGENT LOOP ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">05</span>Reasoning engine</p>
+  <h2>The agent loop</h2>
+  <p class="sub">One loop, provider-agnostic: the model reasons through <b>Oracle Generative AI</b>,
+    requests tools, the server executes them and feeds results back — until the answer is ready.</p>
+  <div class="cols">
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">How it thinks</p>
+        <ul class="feat">
+          <li><b>Plan → act → synthesize</b> — up to 15 rounds; the model decides which tools it needs and in what order.</li>
+          <li><b>Parallel fan-out</b> — concurrent tool calls run on a thread pool; total latency is the <i>max</i>, not the sum.</li>
+          <li><b>Session context</b> — the last turns of the conversation are replayed, so follow-ups (“now only Q3”) just work.</li>
+          <li><b>Guardrails in the loop</b> — index allowlist, banned query keys, output trimming, step budget.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Why it's fast &amp; affordable</p>
+        <ul class="feat">
+          <li><b>Prompt caching</b> — the ~9k-token static prefix (instructions, tool schemas, field reference) is cache-read on every round, only the delta is re-billed.</li>
+          <li><b>Server-side date resolution</b> — <code>TOMORROW_START</code>, <code>THIS_WEEK_END</code> become epoch-ms in-process, saving a whole tool round-trip.</li>
+          <li><b>Cost transparency</b> — every response carries input/output token counts and an estimated cost line.</li>
+          <li><b>Structured logs</b> — every round, tool call and cost is a log line; latency is measurable per stage.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 6 · TOOLSET OVERVIEW ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">06</span>Toolset</p>
+  <h2>~26 tools, six families</h2>
+  <p class="sub">Every capability is a typed, server-executed tool. The model can only do what a tool
+    allows — and every tool inherits identity, tenant and RBAC context from the request.</p>
+  <div class="tools" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="tool"><div class="tn">Briefing — create &amp; edit</div><div class="td">Draft a <b>complete briefing</b> from chat and push it; edit any field of an existing one through the platform API.</div></div>
+    <div class="tool teal"><div class="tn">Agenda &amp; presenters</div><div class="td">Generate EBC-style agendas from past briefings; rank presenters by topic fit and track record; push the agenda in.</div></div>
+    <div class="tool blue"><div class="tn">Scheduling</div><div class="td">Rooms, existing bookings, free-slot computation, conflict-checked calendar blocking.</div></div>
+    <div class="tool gold"><div class="tn">Insight &amp; search</div><div class="td">Scoped OpenSearch queries and counts over events &amp; activities — history, status, attendees, topics.</div></div>
+    <div class="tool violet"><div class="tn">Research &amp; drafts</div><div class="td">Live web research on the customer; ready-to-send email and catering-sheet drafts.</div></div>
+    <div class="tool green"><div class="tn">Output</div><div class="td">Charts (9 types), report tables with typed columns, downloadable PDFs.</div></div>
+  </div>
+  <div class="foot"><span>tools/handlers.py — parallel dispatch · token substitution · output trim</span><span>full catalog: docs/tools.md</span></div>
+</section>
+
+<!-- ============================== 7 · TOOLS: CREATE & ACT ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">07</span>Toolset · create &amp; act</p>
+  <h2>The agent writes, safely</h2>
+  <p class="sub">Every mutation goes through the BriefingIQ REST API with the <b>caller's own Bearer token</b>
+    forwarded — so the platform's own permissions govern every write, and every change is attributable to the user.</p>
+  <div class="tools">
+    <div class="tool"><div class="tn">briefing_builder — draft → push briefing</div><div class="td">Builds a <b>complete briefing from a chat conversation</b>: creates the event, then creates and fills the VISIT_INFO record — objective, company detail, host, and the controlled-vocabulary lookup fields — exactly as the platform's forms engine expects.</div></div>
+    <div class="tool"><div class="tn">briefing_editor — edit any field</div><div class="td">Updates fields on an existing briefing through the caller's API session, so <b>server-side platform RBAC applies to the edit itself</b>. Field options come from the platform's own controlled vocabularies.</div></div>
+    <div class="tool teal"><div class="tn">generate_agenda</div><div class="td">Drafts the day's agenda from similar past briefings + the presenter engine, then an LLM writes the sessions.</div></div>
+    <div class="tool teal"><div class="tn">push_agenda_to_briefingiq</div><div class="td">Turns approved sessions into real calendar activities — rooms first (<code style="color:inherit">get_event_rooms</code>), then <b>only after the user confirms</b>.</div></div>
+    <div class="tool blue"><div class="tn">block_calendar</div><div class="td">Reserves a room window with a <b>pre-flight conflict check</b> — overlapping bookings return a conflict instead of a double-book.</div></div>
+    <div class="tool blue"><div class="tn">find_vacant_slots · get_resource_schedule · list_rooms</div><div class="td">Free-window computation respecting working hours; live schedules per room; bookable-room discovery per tenant.</div></div>
+  </div>
+</section>
+
+<!-- ============================== 8 · TOOLS: INSIGHT ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">08</span>Toolset · insight, research &amp; output</p>
+  <h2>From question to chart in one prompt</h2>
+  <div class="tools">
+    <div class="tool gold"><div class="tn">search_opensearch · count_opensearch</div><div class="td">Model-authored DSL over <b>events</b> (attendees, status, location, opportunity) and <b>activities</b> (topics, presenters, rooms, catering) — every query intersected with the caller's RBAC filter at the gate.</div></div>
+    <div class="tool gold"><div class="tn">suggest_presenters</div><div class="td">Who has presented this topic, to this industry, and been accepted? Ranked by accepted sessions and recency, with graceful fallbacks.</div></div>
+    <div class="tool violet"><div class="tn">research_company</div><div class="td">Live, read-only web research on the visiting customer — talking points and context for the briefing team.</div></div>
+    <div class="tool violet"><div class="tn">drafts — email &amp; catering</div><div class="td">Ready-to-send confirmation emails and catering sheets, grounded in the actual event data.</div></div>
+    <div class="tool green"><div class="tn">format_chart</div><div class="td">Nine chart types (column, line, pie, heatmap, xrange…) rendered natively by the frontend — the config goes to the UI, not back through the model.</div></div>
+    <div class="tool green"><div class="tn">generate_report · generate_pdf</div><div class="td">Typed report tables (event, customer, status, presenter, topic columns…) and downloadable PDF exports.</div></div>
+  </div>
+</section>
+
+<!-- ============================== 9 · DATA LAYER ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">09</span>Data layer</p>
+  <h2>Three systems of record, one gate</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">OpenSearch · OCI</p>
+        <h3>Events &amp; activities</h3>
+        <p>The searchable history of every briefing: event-level data (customer, status, attendees, location, opportunity) and per-session activities (topics, presenters, rooms, catering). Powers search, counts, reports, presenter ranking and agenda generation.</p>
+        <ul class="feat" style="margin-top:10px">
+          <li><b>Index allowlist</b> — the agent can touch <code style="color:inherit">events</code> and <code style="color:inherit">activities</code>, nothing else in the cluster.</li>
+          <li><b>Every read scoped</b> — the RBAC filter is AND-ed in at the client chokepoint.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Oracle Autonomous DB · OCI</p>
+        <h3>The access model</h3>
+        <p>Roles, categories and the row-access rule tables that drive RBAC — connected over an mTLS wallet. The same database the BriefingIQ platform trusts is the source of truth for what the agent may show.</p>
+        <ul class="feat" style="margin-top:10px">
+          <li><b>Role resolution</b> — (user, category) → active roles.</li>
+          <li><b>Rule tables</b> — per-role row rules, cached with a short TTL.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">BriefingIQ REST</p>
+        <h3>The write path</h3>
+        <p>All mutations — briefings, agenda activities, calendar blocks — go through the platform's own forms-engine API with the caller's forwarded token.</p>
+        <ul class="feat" style="margin-top:10px">
+          <li><b>No service account</b> — the agent holds no standing write credential.</li>
+          <li><b>Platform RBAC governs writes</b> — 401/403 semantics apply per request, per user.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 10 · RBAC MODEL ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">10</span>Access control · 1 of 2</p>
+  <h2>RBAC — the access model</h2>
+  <p class="sub">The agent reuses the <b>platform's own Oracle access model</b> — no parallel permission
+    system to drift out of sync. Identity comes from the request; rules come from the database.</p>
+  <div class="cols">
+    <div class="col" style="flex:1.15">
+      <div class="steps" style="margin-top:6px">
+        <div class="step"><span class="num">1</span><span class="st" style="min-width:210px">Identity from the request</span><span class="sd"><code>x-cloud-*</code> headers carry the signed-in user and category — set by the platform, not the model.</span></div>
+        <div class="step"><span class="num">2</span><span class="st" style="min-width:210px">Roles from Oracle</span><span class="sd">The user's active roles are resolved from the event-role tables (12 roles — requester, host, admin, coordinator…).</span></div>
+        <div class="step"><span class="num">3</span><span class="st" style="min-width:210px">Rules per role</span><span class="sd">Each role maps to row rules — <code>(property, operation, value)</code> — from <code>M_EVENT_ROLE_DATA_ACCESS_MAP</code>, cached 5&nbsp;min.</span></div>
+        <div class="step"><span class="num">4</span><span class="st" style="min-width:210px">Compiled to a filter</span><span class="sd">Rules are translated into OpenSearch <code>bool.filter</code> clauses — Oracle property names mapped to index field paths.</span></div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Combination policy</p>
+        <ul class="feat">
+          <li><b>Within a role</b> — rules combine by the rule's own condition (AND / OR), default AND.</li>
+          <li><b>Across a user's roles</b> — OR: any role that grants access wins (most-permissive union).</li>
+          <li><b>“My own” rows</b> — <code style="color:inherit">$loggedInUser</code> ownership expands to <i>host of the event OR requester of it</i>.</li>
+          <li><b>Unknown or rule-less role</b> — falls back to the <b>most-restrictive</b> shape: own/hosted requests only.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 11 · RBAC ENFORCEMENT ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">11</span>Access control · 2 of 2</p>
+  <h2>Enforcement the model can't bypass</h2>
+  <p class="sub">The filter isn't a prompt instruction — it's <b>code, at a single chokepoint</b>, applied
+    after the model's query is parsed and before it reaches the data.</p>
+  <div class="cols">
+    <div class="col" style="flex:1.1">
+      <pre class="blk">
+<span class="c"># every read funnels through one gate</span>
+def search(index, dsl_query):
+    q = normalize(dsl_query)          <span class="c"># model's query</span>
+    scope = access_context()          <span class="c"># resolved at request start</span>
+    <span class="hl">q = AND(q, scope.filter)</span>          <span class="c"># cannot be widened</span>
+    return opensearch.search(index, q)
+
+<span class="c"># resolution failed? → fail closed</span>
+if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># never run unfiltered</span></pre>
+      <div class="now-next"><span class="tag hot">events</span><span>role filter wrapped around every query</span></div>
+      <div class="now-next"><span class="tag hot">activities</span><span>scoped via the allowed-event join · pinned-event checks · overflow ⇒ deny</span></div>
+      <div class="now-next"><span class="tag hot">any other index</span><span>denied outright</span></div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Why this holds</p>
+        <ul class="feat">
+          <li><b>Single chokepoint</b> — one <code style="color:inherit">search()/count()</code> path; there is no unfiltered route to the data.</li>
+          <li><b>Server-side, post-parse</b> — the scope is AND-ed after the model's DSL is normalized; a crafted query cannot widen past it.</li>
+          <li><b>Fail closed</b> — if role resolution errors, the context is marked unresolved and reads are denied, never run open.</li>
+          <li><b>Defense in depth</b> — index allowlist + banned query keys + pasted-DSL rejection before the model, platform token on every write after it.</li>
+          <li><b>Resolved once per request</b> — scope is fixed before reasoning starts; nothing the model says changes it.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 12 · DEPLOYMENT ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">12</span>Deployment</p>
+  <h2>Oracle-scoped: one VCN holds everything</h2>
+  <p class="sub">App, data, search, secrets and the LLM are all <b>Oracle Cloud services</b>. The app sits in a
+    private subnet behind a TLS load balancer; Oracle GenAI is reached over the Oracle service network —
+    <b>traffic never crosses the public internet</b>.</p>
+  <div class="dg" style="align-items:center">
+    <div class="dcol" style="flex:.8">
+      <div class="dbox violet"><div class="bt">Users' browsers</div><div class="bs">Briefing frontend</div></div>
+    </div>
+    <div class="darr">⟶<br><span style="font-size:10px;font-family:var(--mono)">443</span></div>
+    <div class="dgroup" style="flex:3.2;display:flex;gap:14px;align-items:center">
+      <span class="gt">Oracle Cloud · VCN</span>
+      <div class="dcol" style="flex:1">
+        <div class="dbox teal"><div class="bt">Load balancer</div><div class="bs">public subnet · TLS</div></div>
+        <div class="dbox dim"><div class="bt" style="color:var(--ink-2)">OCI Vault</div><div class="bs">secrets at runtime<br>nothing baked in the image</div></div>
+      </div>
+      <div class="darr">⟶</div>
+      <div class="dcol" style="flex:1.2">
+        <div class="dbox gold"><div class="bt">App container</div><div class="bs">private subnet · stateless<br>image from OCIR</div></div>
+        <div class="dbox dim"><div class="bt" style="color:var(--ink-2)">Logging &amp; metrics</div><div class="bs">per-round timings · cost lines</div></div>
+      </div>
+      <div class="darr">⟶</div>
+      <div class="dcol" style="flex:1.2">
+        <div class="dbox blue"><div class="bt">Autonomous DB</div><div class="bs">mTLS wallet · private</div></div>
+        <div class="dbox blue"><div class="bt">OCI OpenSearch</div><div class="bs">events · activities · private</div></div>
+        <div class="dbox violet"><div class="bt">Oracle Generative AI</div><div class="bs">via service gateway<br>in-region · no internet egress</div></div>
+      </div>
+    </div>
+    <div class="darr">⟶</div>
+    <div class="dcol" style="flex:.8">
+      <div class="dbox dim"><div class="bt" style="color:var(--ink-2)">BriefingIQ REST</div><div class="bs">writes · TLS<br>caller's token</div></div>
+    </div>
+  </div>
+  <div class="foot"><span>OCIR images · Vault secrets · IAM dynamic-group policies — no credentials on disk</span><span>deployment view</span></div>
+</section>
+
+<!-- ============================== 13 · OBSERVABILITY ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">13</span>Operations</p>
+  <h2>Measured, streamed, accounted</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Live streaming waterfall</p>
+        <h3>The UI sees every step as it happens</h3>
+        <p>The SSE endpoint emits lifecycle events — <code>llm_start/llm_end</code>, <code>tool_start/tool_end</code>,
+        <code>query_end</code> — so the frontend renders, in real time, exactly where each millisecond went.
+        No spinner-and-wait: users watch the agent think and act.</p>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph">Cost &amp; latency accounting</p>
+        <h3>Every query carries its own bill</h3>
+        <p>Input/output token counts and an estimated cost accompany each response; structured logs record
+        every round, tool call and timing. Latency work is data-driven: caching the static prefix,
+        fanning tools out in parallel, and resolving dates server-side each came from measured breakdowns.</p>
+      </div>
+    </div>
+  </div>
+  <div class="stat">
+    <div class="s"><div class="v">SSE</div><div class="l">per-step lifecycle events, streamed live</div></div>
+    <div class="s"><div class="v">~9k</div><div class="l">token prefix cache-read, not re-billed, every round</div></div>
+    <div class="s"><div class="v">max()</div><div class="l">parallel tools — latency is the slowest call, not the sum</div></div>
+    <div class="s"><div class="v">$/query</div><div class="l">token + cost line on every response</div></div>
+  </div>
+</section>
+
+<!-- ============================== 14 · ROADMAP: MEMORY ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">14</span>Roadmap · 1 of 2</p>
+  <h2>Next: a real memory architecture</h2>
+  <p class="sub">Today the agent remembers the conversation. Next, it remembers <b>the user and the
+    institution</b> — preferences, patterns and past briefings, recalled semantically.</p>
+  <div class="roadgrid">
+    <div class="panel">
+      <p class="ph" style="color:var(--green)">Now</p>
+      <h3>Session memory</h3>
+      <p>Per-conversation context — the recent turns replayed each round, so follow-ups and refinements work naturally within a session.</p>
+    </div>
+    <div class="panel">
+      <p class="ph" style="color:var(--gold)">Next</p>
+      <h3>Persistent user memory</h3>
+      <p>Durable per-user memories in Oracle: preferences (“always EBC format”), defaults, corrections — carried across sessions, editable and auditable.</p>
+    </div>
+    <div class="panel" style="border-color:var(--red)">
+      <p class="ph" style="color:var(--red-soft)">Then</p>
+      <h3>Semantic memory</h3>
+      <p>Embeddings + k-NN over OpenSearch using <b>OCI GenAI embeddings</b>: the agent recalls <i>similar</i> past briefings, and topic/presenter matching becomes semantic instead of literal.</p>
+    </div>
+  </div>
+  <div class="cols" style="flex:0 0 auto;margin-top:18px">
+    <div class="col">
+      <ul class="feat">
+        <li><b>Episodic recall</b> — “what did we do for their last visit?” answered from memory, not manual digging.</li>
+        <li><b>Memory-aware ranking</b> — presenter and agenda suggestions weighted by what actually worked before.</li>
+      </ul>
+    </div>
+    <div class="col">
+      <ul class="feat">
+        <li><b>RBAC applies to memory too</b> — recalled content passes the same access gate as live data.</li>
+        <li><b>All Oracle-scoped</b> — memories in Autonomous DB, vectors in OCI OpenSearch, embeddings from OCI GenAI. Nothing leaves the VCN.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 15 · ROADMAP: RBAC ============================== -->
+<section class="slide">
+  <p class="k"><span class="n">15</span>Roadmap · 2 of 2</p>
+  <h2>Next: full-blown RBAC</h2>
+  <p class="sub">The row-level gate on events is live. The roadmap deepens the same architecture —
+    same resolver, same chokepoint — into finer scopes.</p>
+  <div class="cols">
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph" style="color:var(--green)">Enforced today</p>
+        <ul class="feat">
+          <li><b>Row-level scope on events</b> — role-compiled filter AND-ed into every read.</li>
+          <li><b>Activity scoping via the event join</b> — pinned-event checks, capped joins, overflow denies.</li>
+          <li><b>Fail-closed resolution</b> + index allowlist + banned-key guard.</li>
+          <li><b>Write-side</b> — platform token per user on every mutation.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel" style="height:100%">
+        <p class="ph" style="color:var(--red-soft)">Planned rungs</p>
+        <ul class="feat">
+          <li><b>Location &amp; entity scoping</b> — center-level and org-level visibility boundaries.</li>
+          <li><b>Private records</b> — creator-only briefings invisible to everyone else.</li>
+          <li><b>Field-level redaction</b> — sensitive values (opportunity size, exec attendees) masked by role, not just rows.</li>
+          <li><b>A write gate</b> — policy checks on push actions in the agent itself, before the platform is even called.</li>
+          <li><b>Access audit trail</b> — every scoped read logged: who asked, what filter applied, what returned.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 16 · CLOSE ============================== -->
+<section class="slide">
+  <div class="titlewrap">
+    <div class="brandline"><span class="chip"></span>BriefingIQ · AI Assistant</div>
+    <h1 style="font-size:46px">An agent that acts,<br>inside walls that hold.</h1>
+    <p class="title-sub">Every read scoped by the Oracle access model. Every write on the user's own
+      credentials. Every service — app, data, search, secrets, LLM — <b>Oracle-scoped inside one VCN</b>.
+      And a roadmap that deepens both: semantic memory, and RBAC down to the field.</p>
+    <div class="pillrow">
+      <span class="pill"><b>Live</b> · agent + tools + RBAC gate</span>
+      <span class="pill"><b>Next</b> · memory architecture</span>
+      <span class="pill"><b>Next</b> · field-level access control</span>
+    </div>
+  </div>
+  <div class="foot"><span>Thank you</span><span>2026</span></div>
+</section>
+
+</div>
+
+<div id="bar"></div>
+<div id="hud">
+  <span id="pos">1 / 16</span>
+  <span>← → navigate · F fullscreen</span>
+  <span class="nav"><button id="prev">‹ prev</button><button id="next">next ›</button></span>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var i = 0;
+  function show(n){
+    i = Math.max(0, Math.min(slides.length-1, n));
+    slides.forEach(function(s,j){ s.classList.toggle('on', j===i); });
+    document.getElementById('pos').textContent = (i+1)+' / '+slides.length;
+    document.getElementById('bar').style.width = (100*(i+1)/slides.length)+'%';
+    if (history.replaceState) history.replaceState(null,'','#'+(i+1));
+  }
+  function fit(){
+    var s = Math.min(innerWidth/1280, (innerHeight-40)/720);
+    var st = document.getElementById('stage');
+    st.style.transform = 'translate(-50%,-50%) scale('+s+')';
+  }
+  addEventListener('resize', fit);
+  addEventListener('keydown', function(e){
+    if (e.key==='ArrowRight'||e.key==='PageDown'||e.key===' ') { show(i+1); e.preventDefault(); }
+    else if (e.key==='ArrowLeft'||e.key==='PageUp') { show(i-1); e.preventDefault(); }
+    else if (e.key==='Home') show(0);
+    else if (e.key==='End') show(slides.length-1);
+    else if (e.key==='f'||e.key==='F'){ document.documentElement.requestFullscreen ? (document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()) : 0; }
+  });
+  document.getElementById('prev').addEventListener('click', function(){ show(i-1); });
+  document.getElementById('next').addEventListener('click', function(){ show(i+1); });
+  document.addEventListener('click', function(e){
+    if (e.target.closest('#hud')) return;
+    show(e.clientX > innerWidth/2 ? i+1 : i-1);
+  });
+  var h = parseInt(location.hash.slice(1),10);
+  fit(); show(isNaN(h)?0:h-1);
+})();
+</script>
+</body>
+</html>
