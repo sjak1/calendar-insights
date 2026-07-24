@@ -274,40 +274,41 @@
 <!-- ============================== DATA PROTECTION ============================== -->
 <section class="slide">
   <p class="k"><span class="n">06</span>Data protection</p>
-  <h2>Your data stays yours</h2>
-  <p class="sub">The controls that keep briefing data private — network, model and encryption — are
-    platform guarantees from Oracle Cloud, not app-level promises.</p>
+  <h2>Data protection — what the platform docs say</h2>
+  <p class="sub">Not our claims — this is what the linked provider documentation states, for
+    <b>OCI Generative AI</b> and <b>AWS Bedrock</b> alike.</p>
   <div class="cols">
     <div class="col">
       <div class="panel" style="height:100%">
         <p class="ph">Private network path</p>
-        <h3>The LLM never sees the internet</h3>
-        <p>Generative AI is reached through a <b>private endpoint inside the VCN</b> — a private IP with no
-        public exposure. Who can reach it is governed by the network itself: routing rules, security lists
-        and network security groups.</p>
+        <h3>Model traffic can stay off the public internet</h3>
+        <p>OCI Generative AI supports <b>private endpoints</b> — a private IP inside your VCN, reachable only
+        per your routing rules, security lists and NSGs. AWS Bedrock offers the equivalent via
+        <b>VPC interface endpoints (PrivateLink)</b>, with traffic monitorable through VPC flow logs.</p>
       </div>
     </div>
     <div class="col">
       <div class="panel" style="height:100%">
         <p class="ph">Model privacy</p>
-        <h3>No training on your data</h3>
-        <p>Prompts, briefing content and model outputs are <b>not used to train the underlying models</b>
-        and are not shared across tenancies. Each request is processed and answered — nothing is retained
-        for model improvement.</p>
+        <h3>Model providers can't see your content</h3>
+        <p>Bedrock runs each provider's model in <b>service-owned deployment accounts</b> the provider cannot
+        access — so providers never see prompts or completions. OCI GenAI serves models from Oracle's
+        service tenancy, reached only over the private path above.</p>
       </div>
     </div>
     <div class="col">
       <div class="panel" style="height:100%">
-        <p class="ph">Encryption &amp; isolation</p>
-        <h3>Encrypted everywhere, isolated by tenancy</h3>
-        <p>TLS on every hop; data stores encrypted at rest; secrets held in OCI Vault, injected at runtime.
-        Processing stays <b>in-region, inside the tenancy boundary</b> — nothing is baked into images or logs.</p>
+        <p class="ph">Encryption &amp; audit</p>
+        <h3>Encrypted in transit and at rest</h3>
+        <p>Both platforms require <b>TLS 1.2+</b> in transit and encrypt stored data, with managed keys
+        (OCI Vault / AWS KMS) and audit logging (OCI Audit / CloudTrail). Both follow a shared-responsibility
+        model — our side of it is the RBAC gate and per-user tokens shown earlier.</p>
       </div>
     </div>
   </div>
   <div class="foot" style="flex-direction:column;gap:5px;align-items:flex-start">
     <span>OCI · <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/private-endpoint.htm">generative-ai/private-endpoint</a> · <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/private-network-access.htm">generative-ai/private-network-access</a></span>
-    <span>AWS · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html">bedrock/data-protection</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/usingVPC.html">bedrock/usingVPC</a> — the same guarantees hold across major model platforms</span>
+    <span>AWS · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html">bedrock/data-protection</a> · <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/usingVPC.html">bedrock/usingVPC</a></span>
   </div>
 </section>
 
