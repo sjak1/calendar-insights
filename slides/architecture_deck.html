@@ -325,13 +325,14 @@
 <!-- ============================== 9 · DATA LAYER ============================== -->
 <section class="slide">
   <p class="k"><span class="n">10</span>Data layer</p>
-  <h2>Three systems of record, one gate</h2>
+  <h2>Where the data lives</h2>
+  <p class="sub">Three backends, each with one clear job.</p>
   <div class="cols">
     <div class="col">
       <div class="panel" style="height:100%">
         <p class="ph">OpenSearch · OCI</p>
-        <h3>Events &amp; activities</h3>
-        <p>The searchable history of every briefing: event-level data (customer, status, attendees, location, opportunity) and per-session activities (topics, presenters, rooms, catering). Powers search, counts, reports, presenter ranking and agenda generation.</p>
+        <h3>Briefing history — what the agent searches</h3>
+        <p>Every briefing and every session, indexed and searchable: customer, status, attendees, location, topics, presenters, rooms, catering. All questions, counts, reports and agenda suggestions come from here.</p>
         <ul class="feat" style="margin-top:10px">
           <li><b>Index allowlist</b> — the agent can touch <code style="color:inherit">events</code> and <code style="color:inherit">activities</code>, nothing else in the cluster.</li>
           <li><b>Every read scoped</b> — the RBAC filter is AND-ed in at the client chokepoint.</li>
@@ -341,8 +342,8 @@
     <div class="col">
       <div class="panel" style="height:100%">
         <p class="ph">Oracle Autonomous DB · OCI</p>
-        <h3>The access model</h3>
-        <p>Roles, categories and the row-access rule tables that drive RBAC — connected over an mTLS wallet. The same database the BriefingIQ platform trusts is the source of truth for what the agent may show.</p>
+        <h3>Access rules — who may see what</h3>
+        <p>The same Oracle database the platform itself uses stores the roles and access rules. The agent reads them to decide what each user is allowed to see — one source of truth, nothing duplicated.</p>
         <ul class="feat" style="margin-top:10px">
           <li><b>Role resolution</b> — (user, category) → active roles.</li>
           <li><b>Rule tables</b> — per-role row rules, cached with a short TTL.</li>
@@ -352,11 +353,11 @@
     <div class="col">
       <div class="panel" style="height:100%">
         <p class="ph">BriefingIQ REST</p>
-        <h3>The write path</h3>
-        <p>All mutations — briefings, agenda activities, calendar blocks — go through the platform's own forms-engine API with the caller's forwarded token.</p>
+        <h3>Where the agent writes changes</h3>
+        <p>When the agent creates a briefing, pushes an agenda or books a room, it calls BriefingIQ's own API with the signed-in user's token — the change lands exactly as if the user made it by hand.</p>
         <ul class="feat" style="margin-top:10px">
-          <li><b>No service account</b> — the agent holds no standing write credential.</li>
-          <li><b>Platform RBAC governs writes</b> — 401/403 semantics apply per request, per user.</li>
+          <li><b>No service account</b> — the agent holds no write credential of its own.</li>
+          <li><b>The platform checks every write</b> — its own permissions apply, per user, per request.</li>
         </ul>
       </div>
     </div>
@@ -467,41 +468,9 @@ if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># ne
   <div class="foot"><span>OCIR images · Vault secrets · IAM dynamic-group policies — no credentials on disk</span><span>deployment view</span></div>
 </section>
 
-<!-- ============================== 13 · OBSERVABILITY ============================== -->
-<section class="slide">
-  <p class="k"><span class="n">14</span>Operations</p>
-  <h2>Measured, streamed, accounted</h2>
-  <div class="cols">
-    <div class="col">
-      <div class="panel" style="height:100%">
-        <p class="ph">Live streaming waterfall</p>
-        <h3>The UI sees every step as it happens</h3>
-        <p>The SSE endpoint emits lifecycle events — <code>llm_start/llm_end</code>, <code>tool_start/tool_end</code>,
-        <code>query_end</code> — so the frontend renders, in real time, exactly where each millisecond went.
-        No spinner-and-wait: users watch the agent think and act.</p>
-      </div>
-    </div>
-    <div class="col">
-      <div class="panel" style="height:100%">
-        <p class="ph">Cost &amp; latency accounting</p>
-        <h3>Every query carries its own bill</h3>
-        <p>Input/output token counts and an estimated cost accompany each response; structured logs record
-        every round, tool call and timing. Latency work is data-driven: caching the static prefix,
-        fanning tools out in parallel, and resolving dates server-side each came from measured breakdowns.</p>
-      </div>
-    </div>
-  </div>
-  <div class="stat">
-    <div class="s"><div class="v">SSE</div><div class="l">per-step lifecycle events, streamed live</div></div>
-    <div class="s"><div class="v">~9k</div><div class="l">token prefix cache-read, not re-billed, every round</div></div>
-    <div class="s"><div class="v">max()</div><div class="l">parallel tools — latency is the slowest call, not the sum</div></div>
-    <div class="s"><div class="v">$/query</div><div class="l">token + cost line on every response</div></div>
-  </div>
-</section>
-
 <!-- ============================== 14 · ROADMAP: MEMORY ============================== -->
 <section class="slide">
-  <p class="k"><span class="n">15</span>Roadmap · 1 of 2</p>
+  <p class="k"><span class="n">14</span>Roadmap · 1 of 2</p>
   <h2>Next: a real memory architecture</h2>
   <p class="sub">Today the agent remembers the conversation. Next, it remembers <b>the user and the
     institution</b> — preferences, patterns and past briefings, recalled semantically.</p>
@@ -540,7 +509,7 @@ if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># ne
 
 <!-- ============================== 15 · ROADMAP: RBAC ============================== -->
 <section class="slide">
-  <p class="k"><span class="n">16</span>Roadmap · 2 of 2</p>
+  <p class="k"><span class="n">15</span>Roadmap · 2 of 2</p>
   <h2>Next: full-blown RBAC</h2>
   <p class="sub">The row-level gate on events is live. The roadmap deepens the same architecture —
     same resolver, same chokepoint — into finer scopes.</p>
@@ -592,7 +561,7 @@ if not scope.resolved: <span class="hl">deny()</span>       <span class="c"># ne
 
 <div id="bar"></div>
 <div id="hud">
-  <span id="pos">1 / 17</span>
+  <span id="pos">1 / 16</span>
   <span>← → navigate · F fullscreen</span>
   <span class="nav"><button id="prev">‹ prev</button><button id="next">next ›</button></span>
 </div>
