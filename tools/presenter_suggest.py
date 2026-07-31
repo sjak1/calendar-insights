@@ -33,6 +33,26 @@ _MAX_SCOPE_EVENTS = 50
 # Presenter statuses to exclude (don't suggest people who declined)
 _EXCLUDED_STATUSES = {"declined", "rejected", "cancelled"}
 
+# How closely a presenter's topic matched what was asked for. Retrieval runs the
+# loosest STRICT tier (all-tokens) and each hit is then classified locally —
+# exact ⊆ phrase ⊆ all-tokens, so one query returns the superset and the tier is
+# a string comparison rather than three round trips.
+#
+# Any-token matching (the old behaviour) is deliberately NOT a tier: sharing one
+# word is not evidence of having presented something. "cloud computing" matched
+# "Cloud Kitchen Operations" that way, and nothing in the payload said so.
+TIER_EXACT = 3
+TIER_PHRASE = 2
+TIER_TOKENS = 1
+TIER_SCOPE_ONLY = 0
+
+_TIER_LABELS = {
+    TIER_EXACT: "exact match",
+    TIER_PHRASE: "related topic",
+    TIER_TOKENS: "loosely related topic",
+    TIER_SCOPE_ONLY: "no topic filter",
+}
+
 # Audience-level signals
 AUDIENCE_C_LEVEL = "c_level"
 AUDIENCE_VP_PLUS = "vp_plus"
@@ -75,6 +95,53 @@ def _min_seniority_for_audience(audience_level: Optional[str]) -> int:
     if audience_level == AUDIENCE_SENIOR:
         return 1
     return 0
+
+
+def _classify_topic_match(topic_name: str, query: str) -> int:
+    """How strictly `topic_name` satisfies `query`. Higher = stricter.
+
+    Mirrors what OpenSearch would score, but locally, so retrieval stays a
+    single request. Topic names are short (median 2 words) which is why a
+    substring test stands in for match_phrase here.
+    """
+    if not topic_name or not query:
+        return TIER_SCOPE_ONLY
+    name = topic_name.strip().lower()
+    q = query.strip().lower()
+    if name == q:
+        return TIER_EXACT
+    if q in name:
+        return TIER_PHRASE
+    q_tokens = set(re.findall(r"[a-z0-9]+", q))
+    name_tokens = set(re.findall(r"[a-z0-9]+", name))
+    if q_tokens and q_tokens <= name_tokens:
+        return TIER_TOKENS
+    return TIER_SCOPE_ONLY
+
+
+def _closest_topics(index: str, topic: str, limit: int = 12) -> List[str]:
+    """Topic names sharing any word with `topic` — suggestions, not results.
+
+    This is the old any-token query, demoted to what it is actually good for:
+    telling the caller which real topics are in the neighbourhood of a miss,
+    instead of passing off their presenters as matches for what was asked.
+    """
+    body = {
+        "query": {"match": {TOPIC_NAME: topic}},
+        "size": 0,
+        "aggs": {"topics": {"terms": {"field": f"{TOPIC_NAME}.keyword", "size": limit}}},
+    }
+    try:
+        from opensearch_client import search
+
+        result = search(index=index, body=body)
+        if not result.get("success"):
+            return []
+        buckets = (result.get("aggregations") or {}).get("topics", {}).get("buckets", [])
+        return [b["key"] for b in buckets if b.get("key")]
+    except Exception as exc:
+        logger.warning(f"closest-topics lookup failed: {exc}")
+        return []
 
 
 def _deep_get(d: Any, path: str) -> Any:
@@ -184,26 +251,33 @@ def _build_activity_query(
         must.append({"terms": {f"{EVENT_ID}.keyword": event_ids}})
 
     if topic:
-        should.append({"match": {TOPIC_NAME: {"query": topic, "boost": 3}}})
+        # operator:and — every word must be present. The default (OR) is what
+        # returned "Cloud Kitchen Operations" for "cloud computing".
+        must.append({"match": {TOPIC_NAME: {"query": topic, "operator": "and"}}})
 
     if audience_level == AUDIENCE_C_LEVEL:
         should.append({"term": {ACT_IS_CLEVEL: {"value": True, "boost": 2}}})
 
     query: Dict[str, Any] = {"bool": {"must": must}}
     if should:
+        # Pure boost — never a filter, so a missing audience signal can't
+        # eliminate an otherwise good presenter.
         query["bool"]["should"] = should
-        if not event_ids:
-            query["bool"]["minimum_should_match"] = 1
 
     return query
 
 
 def _extract_presenters_from_hits(
     hits: List[Dict[str, Any]],
+    topic_query: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Aggregate presenters from activity hits. Iterates the topic_presenter array
     per activity and skips declined entries.
+
+    When topic_query is given, each activity's topic is classified into a match
+    tier and the presenter keeps the STRICTEST tier they achieved — someone with
+    one exact-topic session outranks someone with five loose ones.
     """
     presenters: Dict[str, Dict[str, Any]] = {}
 
@@ -219,7 +293,18 @@ def _extract_presenters_from_hits(
             name = _deep_get(t, "topic.textField1")
             if name and name not in topic_names:
                 topic_names.append(name)
-        primary_topic = topic_names[0] if topic_names else ""
+        # Strictest tier any of this activity's topics achieves, plus the topic
+        # name that earned it — so the reason can name what actually matched
+        # rather than whichever topic happened to sort first.
+        activity_tier = TIER_SCOPE_ONLY
+        tier_topic = ""
+        if topic_query:
+            for name in topic_names:
+                t = _classify_topic_match(name, topic_query)
+                if t > activity_tier:
+                    activity_tier, tier_topic = t, name
+
+        primary_topic = tier_topic or (topic_names[0] if topic_names else "")
 
         # Did this activity have a C-level audience? Field is on
         # activityData.EVENTS_VISIT_INFO[].isCLevelAttendee (array).
@@ -263,10 +348,19 @@ def _extract_presenters_from_hits(
                     "accepted_count": 0,
                     "c_level_session_count": 0,
                     "seniority_tier": _presenter_seniority(title),
+                    "match_tier": TIER_SCOPE_ONLY,
+                    "matched_topic": "",
+                    "tier_session_count": 0,
                 }
 
             entry = presenters[key]
             entry["session_count"] += 1
+            if activity_tier > entry["match_tier"]:
+                entry["match_tier"] = activity_tier
+                entry["matched_topic"] = tier_topic
+                entry["tier_session_count"] = 1
+            elif activity_tier == entry["match_tier"] and activity_tier > TIER_SCOPE_ONLY:
+                entry["tier_session_count"] += 1
             if status == "accepted":
                 entry["accepted_count"] += 1
             if is_c_level_audience:
@@ -303,9 +397,13 @@ def _rank_presenters(
     min_tier = _min_seniority_for_audience(audience_level)
 
     def sort_key(p: Dict[str, Any]):
+        # Match strength leads: an exact-topic presenter outranks a
+        # related-topic one regardless of volume. Within a tier, depth on THAT
+        # topic beats lifetime session count.
+        match = (-p.get("match_tier", TIER_SCOPE_ONLY), -p.get("tier_session_count", 0))
         if audience_level:
             meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
-            return (
+            return match + (
                 -meets_tier,
                 -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
                 -p["seniority_tier"],
@@ -314,7 +412,7 @@ def _rank_presenters(
                 -len(p["event_ids"]),
                 -p["latest_ts"],
             )
-        return (
+        return match + (
             -p["accepted_count"],
             -p["session_count"],
             -len(p["event_ids"]),
@@ -325,10 +423,21 @@ def _rank_presenters(
 
     results = []
     for p in ranked[:limit]:
-        topics_summary = ", ".join(p["topics"][:3])
-        if len(p["topics"]) > 3:
-            topics_summary += f" (+{len(p['topics']) - 3} more)"
-        reason_parts = [f"{p['session_count']} session(s)"]
+        tier = p.get("match_tier", TIER_SCOPE_ONLY)
+        # Don't restate the matched topic in the topic list — when it's their
+        # only one the reason would otherwise name it twice.
+        other_topics = [t for t in p["topics"] if t != p.get("matched_topic")]
+        topics_summary = ", ".join(other_topics[:3])
+        if len(other_topics) > 3:
+            topics_summary += f" (+{len(other_topics) - 3} more)"
+        reason_parts = []
+        if tier > TIER_SCOPE_ONLY and p.get("matched_topic"):
+            # Lead with how well they matched — an agent skimming the reason
+            # must not be able to mistake "related" for "exact".
+            reason_parts.append(f"{_TIER_LABELS[tier]}: {p['matched_topic']}")
+            if p.get("tier_session_count"):
+                reason_parts.append(f"{p['tier_session_count']} session(s) on it")
+        reason_parts.append(f"{p['session_count']} session(s) total")
         if p["accepted_count"]:
             reason_parts.append(f"{p['accepted_count']} accepted")
         if audience_level and p["c_level_session_count"]:
@@ -336,7 +445,8 @@ def _rank_presenters(
         if audience_level and p["seniority_tier"] >= min_tier and p["title"]:
             reason_parts.append(f"peer-level ({p['title']})")
         if topics_summary:
-            reason_parts.append(f"on: {topics_summary}")
+            label = "also presents" if tier > TIER_SCOPE_ONLY else "on"
+            reason_parts.append(f"{label}: {topics_summary}")
         results.append(
             {
                 "presenter_name": p["presenter_name"],
@@ -346,6 +456,9 @@ def _rank_presenters(
                 "event_count": len(p["event_ids"]),
                 "c_level_session_count": p["c_level_session_count"],
                 "seniority_tier": p["seniority_tier"],
+                "match_tier": _TIER_LABELS[p.get("match_tier", TIER_SCOPE_ONLY)],
+                "matched_topic": p.get("matched_topic", ""),
+                "tier_session_count": p.get("tier_session_count", 0),
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
                 "sample_event_name": "",
@@ -520,25 +633,27 @@ def get_suggested_presenters(
             "message": "No activity constraint could be derived",
         }
 
-    query = _build_activity_query(
-        topic=topic,
-        event_ids=scoped_event_ids or None,
-        audience_level=audience_level,
-    )
-
-    body = {
-        "query": query,
-        "size": 100,
-        "sort": [{START_TIME: {"order": "desc", "unmapped_type": "long"}}],
-    }
-
     target_index = index or ACTIVITIES_INDEX
     logger.info(
         f"Presenter search: topic={topic}, industry={industry}, "
         f"customer={customer_name}, event_id={event_id}, scoped_events={len(scoped_event_ids)}"
     )
 
-    result = search(index=target_index, body=body)
+    def _run(topic_filter: Optional[str]) -> Dict[str, Any]:
+        body = {
+            "query": _build_activity_query(
+                topic=topic_filter,
+                event_ids=scoped_event_ids or None,
+                audience_level=audience_level,
+            ),
+            "size": 500,
+            "sort": [{START_TIME: {"order": "desc", "unmapped_type": "long"}}],
+        }
+        # Explicit cap — search() otherwise clamps to _MAX_SIZE (50), which
+        # silently truncates the pool the ranking sees.
+        return search(index=target_index, body=body, size_cap=500)
+
+    result = _run(topic)
 
     if not result.get("success"):
         return {
@@ -548,8 +663,48 @@ def get_suggested_presenters(
         }
 
     hits = result.get("hits", [])
+    topic_query = topic
     logger.info(f"Presenter search returned {len(hits)} activity hits")
 
+    # No activity satisfies every word of the topic. Rather than loosening to
+    # any-word (which always returns somebody, for any string), report the miss.
+    if topic and not hits:
+        if scoped_event_ids:
+            # An event/customer scope was asked for, so the caller still wants
+            # that event's presenters — drop the topic filter but say so.
+            logger.info(f"No strict topic match for {topic!r}; retrying scope-only")
+            result = _run(None)
+            hits = result.get("hits", []) if result.get("success") else []
+            topic_query = None
+        else:
+            empty: Dict[str, Any] = {
+                "success": True,
+                "suggested_presenters": [],
+                "searched_topic": topic,
+                "closest_topics": _closest_topics(target_index, topic),
+                "available_topics": _available_topics(target_index),
+                "message": (
+                    f"No one has presented on '{topic}'. No activity topic contains "
+                    "every word of it."
+                ),
+                "guidance": (
+                    "closest_topics share at least one word with what was asked; "
+                    "available_topics is the full vocabulary. Pick the closest "
+                    "genuinely related one, re-query with it, and tell the user "
+                    "plainly which topic you substituted and why — or report that "
+                    f"nobody has presented on '{topic}'. Saying nobody matches is a "
+                    "valid, useful answer. Never describe these presenters as having "
+                    f"'{topic}' experience."
+                ),
+            }
+            logger.info(
+                f"No strict match for topic={topic!r}; returned "
+                f"{len(empty['closest_topics'])} closest / "
+                f"{len(empty['available_topics'])} available topics"
+            )
+            return empty
+
+    unrelated_fallback = False
     if not hits and (customer_name or industry or event_id):
         logger.info("Scoped search returned 0 — falling back to top presenters overall")
         fallback_body = {
@@ -557,41 +712,21 @@ def get_suggested_presenters(
             "size": 200,
             "sort": [{START_TIME: {"order": "desc", "unmapped_type": "long"}}],
         }
-        fb_result = search(index=target_index, body=fallback_body)
+        fb_result = search(index=target_index, body=fallback_body, size_cap=200)
         if fb_result.get("success"):
             hits = fb_result.get("hits", [])
+            unrelated_fallback = bool(hits)
+            topic_query = None
             logger.info(f"Fallback search returned {len(hits)} activity hits")
 
     if not hits:
-        empty: Dict[str, Any] = {
+        return {
             "success": True,
             "suggested_presenters": [],
             "message": "No matching activities with presenters found",
         }
-        if topic:
-            available = _available_topics(target_index)
-            if available:
-                empty["searched_topic"] = topic
-                empty["available_topics"] = available
-                empty["message"] = (
-                    f"No presenter has covered '{topic}'. The topics that do exist are "
-                    "listed in available_topics."
-                )
-                empty["guidance"] = (
-                    f"Do NOT retry with vaguer wording until something returns and then "
-                    f"describe the result as '{topic}' experience — that misrepresents who "
-                    "these people are. Either pick the closest genuinely related topic from "
-                    "available_topics and tell the user plainly which one you substituted and "
-                    f"why, or tell them no one has presented on '{topic}'. Saying nobody "
-                    "matches is a valid, useful answer."
-                )
-                logger.info(
-                    f"No presenters for topic={topic!r}; returned "
-                    f"{len(available)} available topics for the agent to choose from"
-                )
-        return empty
 
-    presenters = _extract_presenters_from_hits(hits)
+    presenters = _extract_presenters_from_hits(hits, topic_query=topic_query)
     ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
 
     logger.info(
@@ -623,11 +758,29 @@ def get_suggested_presenters(
         "total_activities_matched": result.get("total_hits", len(hits)),
         "audience_level": audience_level,
     }
+    if topic:
+        payload["searched_topic"] = topic
     if dropped_scope:
         payload["scope_dropped"] = dropped_scope
         payload["note"] = (
             f"No past events found for '{dropped_scope}', so these are matched on topic "
             f"'{topic}' alone, not on any history with that customer. Say so when "
             "presenting them."
+        )
+    if topic and topic_query is None:
+        # The topic filter was dropped to salvage a scoped request. These people
+        # are the event's presenters, not matches for what was asked.
+        payload["topic_filter_dropped"] = topic
+        payload["note"] = (
+            f"No activity topic contains every word of '{topic}', so these presenters "
+            "come from the requested event/customer scope only — they are NOT matched "
+            f"on '{topic}'. Do not describe them as having presented it."
+        )
+    if unrelated_fallback:
+        payload["unrelated_fallback"] = True
+        payload["note"] = (
+            "Nothing matched the requested scope, so these are simply the most recent "
+            "presenters overall — unrelated to what was asked. Say so, or ask the user "
+            "to broaden the request."
         )
     return payload
