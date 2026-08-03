@@ -333,7 +333,13 @@ def _extract_presenters_from_hits(
             if not full_name and not email:
                 continue
 
-            key = email.lower() or full_name.lower()
+            # Key on BriefingIQ's own person id, not the email — the same person
+            # can hold more than one address (all 5 live presenters carry both an
+            # @allianceit.com and an @briefingiq.com one, sharing a uniqueId), and
+            # keying on email splits their history and fills two slots in the
+            # same top-N. Email/name remain fallbacks for records without an id.
+            unique_id = (presenter.get("uniqueId") or "").strip().lower()
+            key = unique_id or email.lower() or full_name.lower()
             if key not in presenters:
                 presenters[key] = {
                     "presenter_name": full_name or email,
