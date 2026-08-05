@@ -27,11 +27,27 @@ EVT_CUSTOMER_NAME = "eventFormData.VISIT_INFO.customerName"
 EVT_CUSTOMER_INDUSTRY = "eventFormData.VISIT_INFO.customerIndustry"
 EVT_EVENT_NAME = "eventFormData.VISIT_INFO.eventName"
 
+# Opportunity revenue, per event. Reported as context on a presenter, never
+# ranked on: a briefing has several presenters and one revenue figure, so any
+# per-person credit is shared rather than earned, and large accounts draw
+# senior presenters regardless — ranking on it would encode account size.
+EVT_OPP_SECTION = "EVENTS_VISIT_INFO"
+EVT_OPP_INITIAL = "totalInitialOppRevenue"
+EVT_OPP_OPEN = "totalOppRevenue"
+EVT_OPP_CLOSED = "totalClosedOppRevenue"
+
 # Max events to pull when resolving customer/industry → event_ids
 _MAX_SCOPE_EVENTS = 50
 
 # How far ahead to report booked days when the caller gives no time window.
 _LOOKAHEAD_DAYS = 30
+
+# Half-life for weighting past sessions. Counting every session equally means
+# someone who presented thirty times years ago outranks someone active now, so
+# each session is worth 0.5 ** (age / half-life): full weight today, half at
+# one half-life, a quarter at two. Decay rather than a cutoff, so a long-serving
+# presenter fades gradually instead of vanishing the day they cross a line.
+_RECENCY_HALF_LIFE_DAYS = 365.0
 
 # Presenter statuses to exclude (don't suggest people who declined)
 _EXCLUDED_STATUSES = {"declined", "rejected", "cancelled"}
@@ -98,6 +114,21 @@ def _min_seniority_for_audience(audience_level: Optional[str]) -> int:
     if audience_level == AUDIENCE_SENIOR:
         return 1
     return 0
+
+
+def _recency_weight(ts_ms: Any, now_ms: int) -> float:
+    """Weight for a session that happened at ts_ms. 1.0 today, 0.5 a half-life ago.
+
+    Future-dated sessions (a booked briefing that has not happened yet) weigh a
+    full 1.0 rather than more — being on the calendar is current evidence, but
+    it should not outrank having actually delivered.
+    """
+    if not isinstance(ts_ms, (int, float)) or ts_ms <= 0:
+        return 0.0
+    age_days = (now_ms - ts_ms) / 86400000.0
+    if age_days <= 0:
+        return 1.0
+    return 0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS)
 
 
 def _classify_topic_match(topic_name: str, query: str) -> int:
@@ -282,6 +313,9 @@ def _extract_presenters_from_hits(
     tier and the presenter keeps the STRICTEST tier they achieved — someone with
     one exact-topic session outranks someone with five loose ones.
     """
+    import time as _time
+
+    now_ms = int(_time.time() * 1000)
     presenters: Dict[str, Dict[str, Any]] = {}
 
     for hit in hits:
@@ -318,6 +352,7 @@ def _extract_presenters_from_hits(
 
         eid = src.get("eventId") or ""
         ts = _deep_get(src, START_TIME) or 0
+        weight = _recency_weight(ts, now_ms)
 
         for p_entry in presenter_entries:
             # Each topic_presenter entry IS the data object (no nested `.data`).
@@ -365,18 +400,23 @@ def _extract_presenters_from_hits(
                     # so calendar lookups must search all of them or they miss
                     # bookings filed under the other address.
                     "emails": set(),
+                    "recent_weight": 0.0,
+                    "tier_recent_weight": 0.0,
                 }
 
             entry = presenters[key]
             entry["session_count"] += 1
+            entry["recent_weight"] += weight
             if email:
                 entry["emails"].add(email.lower())
             if activity_tier > entry["match_tier"]:
                 entry["match_tier"] = activity_tier
                 entry["matched_topic"] = tier_topic
                 entry["tier_session_count"] = 1
+                entry["tier_recent_weight"] = weight
             elif activity_tier == entry["match_tier"] and activity_tier > TIER_SCOPE_ONLY:
                 entry["tier_session_count"] += 1
+                entry["tier_recent_weight"] += weight
             if status == "accepted":
                 entry["accepted_count"] += 1
             if is_c_level_audience:
@@ -413,10 +453,17 @@ def _rank_presenters(
     min_tier = _min_seniority_for_audience(audience_level)
 
     def sort_key(p: Dict[str, Any]):
-        # Match strength leads: an exact-topic presenter outranks a
-        # related-topic one regardless of volume. Within a tier, depth on THAT
-        # topic beats lifetime session count.
-        match = (-p.get("match_tier", TIER_SCOPE_ONLY), -p.get("tier_session_count", 0))
+        # 1. Match strength leads — an exact-topic presenter outranks a
+        #    related-topic one regardless of volume.
+        # 2. Then decay-weighted depth ON THAT TOPIC. Weighted, not counted, so
+        #    a burst of old sessions loses to steady recent ones; rounded so
+        #    near-identical weights fall through to the later keys rather than
+        #    being separated by floating-point noise.
+        match = (
+            -p.get("match_tier", TIER_SCOPE_ONLY),
+            -round(p.get("tier_recent_weight", 0.0), 3),
+            -p.get("tier_session_count", 0),
+        )
         if audience_level:
             meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
             return match + (
@@ -424,13 +471,13 @@ def _rank_presenters(
                 -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
                 -p["seniority_tier"],
                 -p["accepted_count"],
-                -p["session_count"],
+                -round(p.get("recent_weight", 0.0), 3),
                 -len(p["event_ids"]),
                 -p["latest_ts"],
             )
         return match + (
             -p["accepted_count"],
-            -p["session_count"],
+            -round(p.get("recent_weight", 0.0), 3),
             -len(p["event_ids"]),
             -p["latest_ts"],
         )
@@ -475,7 +522,9 @@ def _rank_presenters(
                 "match_tier": _TIER_LABELS[p.get("match_tier", TIER_SCOPE_ONLY)],
                 "matched_topic": p.get("matched_topic", ""),
                 "tier_session_count": p.get("tier_session_count", 0),
+                "recency_weighted_sessions": round(p.get("recent_weight", 0.0), 2),
                 "all_emails": sorted(p["emails"]),
+                "event_ids": sorted(p["event_ids"]),
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
                 "sample_event_name": "",
@@ -636,6 +685,80 @@ def _upcoming_load(
         f"{len(load)} with bookings"
     )
     return load
+
+
+def _event_revenue(event_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Opportunity revenue per event: initial, latest, and the delta between.
+
+    The delta mirrors how the Oracle report computes it — measure against
+    `closed` once a deal has finished, otherwise against the still-open value,
+    always relative to `initial`. A missing initial is treated as 0, so a first
+    figure with no baseline reads as its full value; `has_baseline` flags that
+    so the caller can tell real growth from an absent starting point.
+
+    EVENTS_VISIT_INFO is an array (one entry per opportunity), so entries are
+    summed rather than taking [0] — otherwise a multi-opportunity event reports
+    only its first deal.
+    """
+    try:
+        from opensearch_client import search
+    except ImportError:
+        return {}
+
+    ids = [e for e in event_ids if e]
+    if not ids:
+        return {}
+
+    result = search(
+        index=EVENTS_INDEX,
+        body={
+            "query": {"ids": {"values": ids[:200]}},
+            "_source": [f"eventFormData.{EVT_OPP_SECTION}"],
+            "size": 200,
+        },
+        size_cap=200,
+    )
+    if not result.get("success"):
+        logger.warning(f"Event revenue lookup failed: {result.get('error')}")
+        return {}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for hit in result.get("hits", []):
+        section = ((hit.get("source") or {}).get("eventFormData") or {}).get(EVT_OPP_SECTION)
+        if section is None:
+            continue
+        if not isinstance(section, list):
+            section = [section]
+
+        initial = latest = 0.0
+        saw_initial = saw_latest = False
+        for opp in section:
+            if not isinstance(opp, dict):
+                continue
+            i = opp.get(EVT_OPP_INITIAL)
+            closed = opp.get(EVT_OPP_CLOSED)
+            open_ = opp.get(EVT_OPP_OPEN)
+            if i is not None:
+                initial += float(i)
+                saw_initial = True
+            # closed wins when present — a finished deal's final number is the
+            # one to measure against, even when it is 0 (a lost deal).
+            current = closed if closed is not None else open_
+            if current is not None:
+                latest += float(current)
+                saw_latest = True
+
+        if not saw_latest and not saw_initial:
+            continue
+        out[hit.get("id")] = {
+            "initial": initial if saw_initial else None,
+            "latest": latest if saw_latest else None,
+            "delta": (latest - initial) if saw_latest else None,
+            "has_baseline": saw_initial,
+        }
+
+    logger.info(f"Revenue lookup: {len(ids)} events → {len(out)} with figures")
+    return out
 
 
 def get_suggested_presenters(
@@ -839,6 +962,11 @@ def get_suggested_presenters(
             hits_for_p = [c for e in (p.get("all_emails") or []) for c in conflicts.get(e, [])]
             p["available"] = not hits_for_p
             p["conflicts"] = hits_for_p[:3]  # cap at 3 for LLM context
+        # Demote the double-booked. Applied after ranking rather than inside the
+        # sort key so it only reorders within the results the caller asked for —
+        # a clashing presenter is still worth showing (they may be freed up),
+        # just not worth showing first.
+        ranked.sort(key=lambda p: 0 if p.get("available") else 1)
     elif all_emails:
         # No window given. "Available" is meaningless without a time, so report
         # forward load instead — useful whether or not a date is in play, and
@@ -852,6 +980,27 @@ def get_suggested_presenters(
                 f"{len(dates)} briefing day(s) booked in the next {_LOOKAHEAD_DAYS} days"
                 if dates
                 else f"no briefings booked in the next {_LOOKAHEAD_DAYS} days"
+            )
+
+    # Revenue at the briefings each presenter appeared at. Context only — it is
+    # deliberately absent from the sort key, because the figure belongs to the
+    # briefing rather than to any one of its several presenters.
+    revenue = _event_revenue(sorted({e for p in ranked for e in p.get("event_ids") or []}))
+    if revenue:
+        for p in ranked:
+            mine = [revenue[e] for e in (p.get("event_ids") or []) if e in revenue]
+            deltas = [m["delta"] for m in mine if m.get("delta") is not None]
+            if not deltas:
+                continue
+            total = sum(deltas)
+            no_baseline = sum(1 for m in mine if not m.get("has_baseline"))
+            p["revenue_events"] = len(deltas)
+            p["revenue_delta"] = round(total, 2)
+            p["revenue_note"] = (
+                f"opportunities at their {len(deltas)} briefing(s) moved "
+                f"{'+' if total >= 0 else ''}{total:,.0f} in total — shared across all "
+                "presenters at those briefings, not attributable to this person alone"
+                + (f"; {no_baseline} had no starting figure" if no_baseline else "")
             )
 
     payload: Dict[str, Any] = {

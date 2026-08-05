@@ -62,40 +62,54 @@ PRESENTERS = {
 #            semantically unrelated. An exact-first ranker must demote her.
 #   H. Raj   = SVP title -> audience_level=vp_plus / c_level probe
 ACTIVITIES = [
-    # A — Priya, specialist (oldest block)
-    (-90, 9,  "Autonomous Database",            [("priya", "Accepted")], "e1"),
-    (-84, 11, "Autonomous Database",            [("priya", "Accepted"), ("marcus", "Accepted")], "e1"),
-    (-77, 14, "Autonomous Database",            [("priya", "Accepted")], "e2"),
-    (-70, 10, "Autonomous Database",            [("priya", "Declined")], "e2"),
-    (-63, 15, "Autonomous Database",            [("priya", "Accepted")], "e3"),
-    (-56, 9,  "Autonomous Database",            [("priya", "Accepted"), ("raj", "Accepted")], "e3"),
+    # A — Priya, specialist. Deliberately OLD so recency decay has something to
+    # bite on: raw counts put her top, decayed weight should not.
+    (-700, 9,  "Oracle RAC",                     [("priya", "Accepted")], "e1"),
+    (-680, 11, "Oracle RAC",                     [("priya", "Accepted"), ("marcus", "Accepted")], "e1"),
+    (-660, 14, "Oracle RAC",                     [("priya", "Accepted")], "e2"),
+    (-640, 10, "Oracle RAC",                     [("priya", "Declined")], "e2"),
+    (-620, 15, "Oracle RAC",                     [("priya", "Accepted")], "e3"),
+    (-600, 9,  "Oracle RAC",                     [("priya", "Accepted"), ("raj", "Accepted")], "e3"),
 
-    # B — Ana, same topic, fewer but newer
-    (-14, 10, "Autonomous Database",            [("ana", "Accepted")], "e1"),
-    (-9,  13, "Autonomous Database",            [("ana", "Accepted")], "e2"),
-    (-4,  11, "Autonomous Database",            [("ana", "Pending")],  "e3"),
+    # B — Ana, same topic, fewer sessions but RECENT. Under raw counts she loses
+    # 5-to-3; with decay she should win.
+    (-20, 10, "Oracle RAC",                      [("ana", "Accepted")], "e1"),
+    (-12, 13, "Oracle RAC",                      [("ana", "Accepted")], "e2"),
+    (-5,  11, "Oracle RAC",                      [("ana", "Pending")],  "e3"),
 
-    # C — Marcus, generalist
-    (-49, 10, "Exadata Cloud Service",          [("marcus", "Accepted")], "e2"),
-    (-42, 14, "GoldenGate Replication",         [("marcus", "Accepted")], "e3"),
-    (-35, 9,  "APEX Low Code",                  [("marcus", "Pending")],  "e1"),
-    (-28, 16, "Observability and Management",   [("marcus", "Accepted")], "e2"),
+    # C — Marcus, generalist across real topics
+    (-49, 10, "Big Data",                        [("marcus", "Accepted")], "e2"),
+    (-42, 14, "Data Streaming",                  [("marcus", "Accepted")], "e3"),
+    (-35, 9,  "API Gateway",                     [("marcus", "Pending")],  "e1"),
+    (-28, 16, "Oracle Linux",                    [("marcus", "Accepted")], "e2"),
 
-    # D — Tom, high volume / low acceptance
-    (-60, 9,  "Autonomous Database Migration",  [("tom", "Declined")], "e1"),
-    (-53, 11, "Autonomous Database Migration",  [("tom", "Declined")], "e2"),
-    (-46, 13, "Autonomous Database Migration",  [("tom", "Accepted")], "e3"),
-    (-39, 15, "Autonomous Database Migration",  [("tom", "Declined")], "e1"),
+    # D — Tom, high volume / low acceptance, on a PHRASE variant of Oracle RAC
+    # so exact-vs-related ordering is exercised
+    (-60, 9,  "Oracle RAC Administration",       [("tom", "Declined")], "e1"),
+    (-53, 11, "Oracle RAC Administration",       [("tom", "Declined")], "e2"),
+    (-46, 13, "Oracle RAC Administration",       [("tom", "Accepted")], "e3"),
+    (-39, 15, "Oracle RAC Administration",       [("tom", "Declined")], "e1"),
 
-    # E — Grace, sole owner of a unique topic
-    (-21, 10, "Quantum Risk Modeling",          [("grace", "Accepted")], "e2"),
+    # E — Grace, sole owner of a topic nobody else touches
+    (-21, 10, "Quantum Risk Modeling",           [("grace", "Accepted")], "e2"),
 
-    # F — Dan, deliberate same-hour double booking (both on day -7 at 14:00)
-    (-7,  14, "Fusion Analytics Warehouse",     [("dan", "Accepted")], "e1"),
-    (-7,  14, "Cloud Kitchen Operations",       [("dan", "Accepted"), ("leila", "Accepted")], "e3"),
+    # F — Dan, deliberate same-hour double booking (both day -7 at 14:00).
+    #     "Cloud Kitchen Operations" is the token trap: shares "cloud" with the
+    #     real vocabulary ("Utilities Cloud") while being unrelated.
+    (-7,  14, "Fusion Analytics Warehouse",      [("dan", "Accepted")], "e1"),
+    (-7,  14, "Cloud Kitchen Operations",        [("dan", "Accepted"), ("leila", "Accepted")], "e3"),
 ]
 
-EVENTS = {"e1": "SEED-EVT-001", "e2": "SEED-EVT-002", "e3": "SEED-EVT-003"}
+# Point at REAL events, so customer/industry scoping resolves and the revenue
+# figures seeded by seed_opp_revenue.py attach to these presenters.
+#   e1 Nikon           initial 450k -> closed 720k   (+270k)
+#   e2 Lamborghini     initial 300k -> open   480k   (+180k)
+#   e3 Alaska Airlines initial 850k -> open   640k   (-210k)
+EVENTS = {
+    "e1": "3238AEE1-AB24-4032-AACD-4016C2B61E4B",
+    "e2": "96AF48FC-1647-4AD1-82CB-7A5030594158",
+    "e3": "3A5195AE-0598-449D-98E9-2C3E172E45D1",
+}
 
 
 def _presenter_obj(key: str) -> dict:
@@ -187,7 +201,7 @@ def build_docs() -> list:
         docs.append((doc_id, {
             "activityId": doc_id,
             "eventId": event_id,
-            "bookingId": f"{event_id}-{i:03d}",
+            "bookingId": f"SEED-{i:03d}",
             "activityType": "Topic",
             "duration": 60,
             "startTime": start,

@@ -27,3 +27,6 @@ auth.txt
 test_briefingiq_write.py
 TODO.md
 agenda_push_flow.html
+
+# local revert data for scripts/seed_opp_revenue.py
+scripts/.opp_revenue_backup.json
