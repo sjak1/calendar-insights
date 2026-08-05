@@ -30,6 +30,9 @@ EVT_EVENT_NAME = "eventFormData.VISIT_INFO.eventName"
 # Max events to pull when resolving customer/industry → event_ids
 _MAX_SCOPE_EVENTS = 50
 
+# How far ahead to report booked days when the caller gives no time window.
+_LOOKAHEAD_DAYS = 30
+
 # Presenter statuses to exclude (don't suggest people who declined)
 _EXCLUDED_STATUSES = {"declined", "rejected", "cancelled"}
 
@@ -357,10 +360,17 @@ def _extract_presenters_from_hits(
                     "match_tier": TIER_SCOPE_ONLY,
                     "matched_topic": "",
                     "tier_session_count": 0,
+                    # Every address this person appears under. Deduping on
+                    # uniqueId means `email` holds only whichever came first,
+                    # so calendar lookups must search all of them or they miss
+                    # bookings filed under the other address.
+                    "emails": set(),
                 }
 
             entry = presenters[key]
             entry["session_count"] += 1
+            if email:
+                entry["emails"].add(email.lower())
             if activity_tier > entry["match_tier"]:
                 entry["match_tier"] = activity_tier
                 entry["matched_topic"] = tier_topic
@@ -465,6 +475,7 @@ def _rank_presenters(
                 "match_tier": _TIER_LABELS[p.get("match_tier", TIER_SCOPE_ONLY)],
                 "matched_topic": p.get("matched_topic", ""),
                 "tier_session_count": p.get("tier_session_count", 0),
+                "all_emails": sorted(p["emails"]),
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
                 "sample_event_name": "",
@@ -554,6 +565,77 @@ def _check_presenter_conflicts(
         f"{len(conflicts)} with conflicts"
     )
     return conflicts
+
+
+def _upcoming_load(
+    presenter_emails: List[str],
+    lookahead_days: int = 30,
+) -> Dict[str, List[str]]:
+    """Briefing dates each presenter already has booked in the next N days.
+
+    Availability only means something relative to a time, so when the caller
+    gives no window we report forward load instead of a yes/no — "3 briefings
+    booked in the next 30 days" is useful with or without a target date, where
+    a bare available:true would not be.
+
+    Note this covers BRIEFING commitments only. It knows nothing about their
+    real calendar (meetings, travel, leave), which is why the wording is
+    "booked" rather than "free".
+
+    Returns {email: [YYYY-MM-DD, ...]} sorted ascending.
+    """
+    try:
+        from opensearch_client import search
+    except ImportError:
+        return {}
+
+    if not presenter_emails:
+        return {}
+
+    import time as _time
+
+    now_ms = int(_time.time() * 1000)
+    end_ms = now_ms + lookahead_days * 86400000
+
+    body = {
+        "query": {"bool": {"must": [
+            {"range": {"startTime.utcMs": {"gte": now_ms, "lt": end_ms}}},
+        ]}},
+        "_source": [
+            "startTime.utcMs",
+            "startTime.requested.requestedZoneDate",
+            PRESENTER_EMAIL_FIELD,
+        ],
+        "size": 500,
+        "sort": [{START_TIME: {"order": "asc", "unmapped_type": "long"}}],
+    }
+
+    result = search(index=ACTIVITIES_INDEX, body=body, size_cap=500)
+    if not result.get("success"):
+        logger.warning(f"Upcoming-load lookup failed: {result.get('error')}")
+        return {}
+
+    email_set = {e.lower() for e in presenter_emails}
+    load: Dict[str, List[str]] = {}
+
+    for hit in result.get("hits", []):
+        src = hit.get("source", {})
+        local = _deep_get(src, "startTime.requested.requestedZoneDate") or ""
+        day = local.split("T")[0] if "T" in local else local
+        if not day:
+            continue
+        for pe in (src.get("activityData") or {}).get("topic_presenter") or []:
+            email = (_deep_get(pe, "presenter.primaryEmail") or "").lower()
+            if email in email_set:
+                dates = load.setdefault(email, [])
+                if day not in dates:
+                    dates.append(day)
+
+    logger.info(
+        f"Upcoming load: {len(presenter_emails)} presenters over {lookahead_days}d, "
+        f"{len(load)} with bookings"
+    )
+    return load
 
 
 def get_suggested_presenters(
@@ -740,23 +822,37 @@ def get_suggested_presenters(
         + (f" (audience_level={audience_level})" if audience_level else "")
     )
 
-    # Availability check — only when caller supplies a time window
+    # Calendar lookups must cover EVERY address a person holds — deduping on
+    # uniqueId means `email` is only whichever came first, and bookings filed
+    # under their other address would otherwise be invisible.
+    all_emails = sorted({e for p in ranked for e in p.get("all_emails") or []})
+
     if check_start_utc_ms and check_end_utc_ms:
-        emails = [p["email"] for p in ranked if p.get("email")]
+        # A window was given: answer the yes/no question directly.
         conflicts = _check_presenter_conflicts(
-            emails,
+            all_emails,
             check_start_utc_ms,
             check_end_utc_ms,
             exclude_event_id=event_id,
         )
         for p in ranked:
-            email_key = (p.get("email") or "").lower()
-            if email_key in conflicts:
-                p["available"] = False
-                p["conflicts"] = conflicts[email_key][:3]  # cap at 3 for LLM context
-            else:
-                p["available"] = True
-                p["conflicts"] = []
+            hits_for_p = [c for e in (p.get("all_emails") or []) for c in conflicts.get(e, [])]
+            p["available"] = not hits_for_p
+            p["conflicts"] = hits_for_p[:3]  # cap at 3 for LLM context
+    elif all_emails:
+        # No window given. "Available" is meaningless without a time, so report
+        # forward load instead — useful whether or not a date is in play, and
+        # honest about being briefing bookings rather than a real calendar.
+        load = _upcoming_load(all_emails, lookahead_days=_LOOKAHEAD_DAYS)
+        for p in ranked:
+            dates = sorted({d for e in (p.get("all_emails") or []) for d in load.get(e, [])})
+            p["upcoming_bookings"] = len(dates)
+            p["upcoming_dates"] = dates[:5]
+            p["availability_note"] = (
+                f"{len(dates)} briefing day(s) booked in the next {_LOOKAHEAD_DAYS} days"
+                if dates
+                else f"no briefings booked in the next {_LOOKAHEAD_DAYS} days"
+            )
 
     payload: Dict[str, Any] = {
         "success": True,

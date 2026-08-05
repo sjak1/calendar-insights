@@ -294,7 +294,10 @@ tools = [
             "original topic — describe presenters by the topic they actually matched. "
             "Set audience_level when the briefing has senior attendees — presenters will be ranked so peers of the audience surface first. "
             "Set check_start_utc_ms + check_end_utc_ms (epoch ms) to get availability — each result will include available:true/false and any conflict details. "
-            "Use time placeholder tokens (TODAY_START etc.) or ISO date strings — the server converts to epoch_ms."
+            "Use time placeholder tokens (TODAY_START etc.) or ISO date strings — the server converts to epoch_ms. "
+            "Without a window each result instead carries upcoming_bookings / upcoming_dates / availability_note — the briefing days that presenter already has booked in the next 30 days. "
+            "So if the user has no particular date in mind, just call it without a window and report the load; only ask them for a date when they need a specific day checked. "
+            "Both cover briefing commitments only, not the presenter's actual calendar — never describe someone as simply 'free'."
         ),
         "parameters": {
             "type": "object",
