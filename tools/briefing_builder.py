@@ -212,67 +212,136 @@ def _resolve_create_fields(
     return data, unresolved
 
 
-def _visit_info_record(headers: Dict[str, str], request_id: str) -> Optional[Dict[str, str]]:
-    """
-    Locate the request's VISIT_INFO record: {form_id, record_id}.
+_VISIT_INFO_CTX_CACHE: Dict[Any, Dict[str, Any]] = {}
+_VISIT_INFO_CTX_TTL = 3600
 
-    The create form carries only 13 intake fields (customer, opportunity,
-    dates, region, tier, ...). Everything the UI shows on an open briefing --
-    objective, company profile, host details -- lives on a separate VISIT_INFO
-    form created alongside the request, which is why those fields read blank
-    when only the create form is written.
 
-    Both ids are read off the event itself rather than hardcoded, so this
-    follows whatever form the tenant has configured.
+def _discover_visit_info_context(headers: Dict[str, str]) -> Optional[Dict[str, str]]:
     """
+    Resolve the tenant's VISIT_INFO form wiring: {module_id, journey_id,
+    page_id, form_id}.
+
+    The create form holds only 13 intake fields; the objective and all the
+    company/meeting detail live on a separate VISIT_INFO form. That form's
+    record is NOT auto-provisioned — the UI creates it — so to fill it from
+    the API we must create it ourselves, which needs the module/journey/page/
+    form wrapper.
+
+    Discovery mirrors the UI, verified live 2026-07-23:
+      GET /admin/moduleaccess      → module (moduleType JOURNEY) named
+                                     "Visit Information"
+      GET /modules/{module}/configs → its single config's form/journey/page,
+                                     confirmed by form.formType.uniqueId ==
+                                     VISIT_INFO
+    Each id is overridable via BRIEFINGIQ_VISIT_INFO_{MODULE,JOURNEY,PAGE,FORM}_ID.
+    Cached per (tenant, category type) for an hour.
+    """
+    cache_key = (
+        headers.get("x-cloud-customerid", ""),
+        headers.get("x-cloud-categorytypeid", ""),
+    )
+    cached = _VISIT_INFO_CTX_CACHE.get(cache_key)
+    if cached and _now() - cached["ts"] < _VISIT_INFO_CTX_TTL:
+        return cached["ctx"]
+
+    env = {
+        "module_id": os.environ.get("BRIEFINGIQ_VISIT_INFO_MODULE_ID", "").strip(),
+        "journey_id": os.environ.get("BRIEFINGIQ_VISIT_INFO_JOURNEY_ID", "").strip(),
+        "page_id": os.environ.get("BRIEFINGIQ_VISIT_INFO_PAGE_ID", "").strip(),
+        "form_id": os.environ.get("BRIEFINGIQ_VISIT_INFO_FORM_ID", "").strip(),
+    }
+    if all(env.values()):
+        _VISIT_INFO_CTX_CACHE[cache_key] = {"ts": _now(), "ctx": env}
+        return env
+
     try:
-        resp = requests.get(f"{BASE_URL}/events/{request_id}", headers=headers, timeout=30)
-        if resp.status_code != 200:
-            logger.warning(f"visit-info lookup: GET event returned HTTP {resp.status_code}")
+        resp = requests.get(f"{BASE_URL}/admin/moduleaccess", headers=headers, timeout=30)
+        resp.raise_for_status()
+        module_id = None
+        for item in _embedded_items(resp.json()):
+            module = item.get("module") or {}
+            mtype = module.get("moduleType")
+            mtype = mtype.get("uniqueId") if isinstance(mtype, dict) else mtype
+            name = (module.get("name") or module.get("moduleName") or "").strip().lower()
+            if mtype == "JOURNEY" and "visit information" in name:
+                module_id = module.get("uniqueId")
+                break
+        if not module_id:
+            logger.warning("visit-info discovery: no 'Visit Information' JOURNEY module")
             return None
-        section = ((resp.json().get("eventFormData") or {}).get("VISIT_INFO")) or None
+
+        resp = requests.get(f"{BASE_URL}/modules/{module_id}/configs", headers=headers, timeout=30)
+        resp.raise_for_status()
+        configs = _embedded_items(resp.json())
+        config = next(
+            (
+                c
+                for c in configs
+                if ((c.get("form") or {}).get("formType") or {}).get("uniqueId") == "VISIT_INFO"
+            ),
+            configs[0] if configs else None,
+        )
+        if not config:
+            logger.warning("visit-info discovery: module has no config")
+            return None
     except (requests.RequestException, ValueError) as exc:
-        logger.warning(f"visit-info lookup failed: {exc}")
+        logger.warning(f"visit-info discovery failed: {exc}")
         return None
 
-    if isinstance(section, list):
-        section = section[0] if section else None
-    if not isinstance(section, dict):
-        logger.warning("visit-info lookup: no VISIT_INFO section on the event")
+    ctx = {
+        "module_id": module_id,
+        "journey_id": (config.get("journey") or {}).get("uniqueId"),
+        "page_id": (config.get("page") or {}).get("uniqueId"),
+        "form_id": (config.get("form") or {}).get("uniqueId"),
+    }
+    ctx = {k: (env[k] or v) for k, v in ctx.items()}  # env wins per-field
+    if not ctx["form_id"]:
+        logger.warning("visit-info discovery: config missing form id")
         return None
+    _VISIT_INFO_CTX_CACHE[cache_key] = {"ts": _now(), "ctx": ctx}
+    logger.info(f"discovered visit-info context: {ctx}")
+    return ctx
 
-    form_id, record_id = section.get("formId"), section.get("id")
-    if not form_id or not record_id:
-        logger.warning("visit-info lookup: VISIT_INFO section missing formId/id")
+
+def _existing_visit_info_record(scoped: Dict[str, str], form_id: str) -> Optional[Dict[str, Any]]:
+    """The event's existing VISIT_INFO record (full object), or None if not yet created."""
+    try:
+        resp = requests.get(f"{BASE_URL}/forms/{form_id}/data", headers=scoped, timeout=30)
+        if resp.status_code != 200:
+            return None
+        records = (resp.json().get("_embedded") or {}).get("formData") or []
+    except (requests.RequestException, ValueError):
         return None
-    return {"form_id": form_id, "record_id": record_id}
+    return records[0] if records else None
 
 
 def _write_visit_info(
     headers: Dict[str, str], request_id: str, values: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Read-modify-write the request's VISIT_INFO record with `values`.
+    Put the briefing's detail fields onto its VISIT_INFO record, creating that
+    record if it does not exist yet (the normal case for an API-created
+    briefing — the UI would otherwise create it on first open).
 
-    Only fields the form actually maps are written; anything unmapped is
-    reported rather than dropped. Values are plain strings on this form
-    (region "JAPAC", meetingObjective "...") -- object-valued fields such as
-    briefingManager are resource references and are not set here.
+    Field names are resolved from the form's own fieldmappings and written
+    under both alias and raw column (as the UI stores them). Unmapped fields
+    are reported, not dropped. Values are plain strings/arrays; object-valued
+    fields (briefingManager, host resources) are references and not set here.
     """
     values = {k: v for k, v in values.items() if v not in (None, "", [])}
     if not values:
         return {"step": "visit_info", "ok": True, "skipped": "nothing to write"}
 
-    located = _visit_info_record(headers, request_id)
-    if not located:
+    ctx = _discover_visit_info_context(headers)
+    if not ctx:
         return {
             "step": "visit_info",
             "ok": False,
-            "error": "Could not locate the VISIT_INFO record; briefing details not stored.",
+            "error": "Could not resolve the VISIT_INFO form; briefing details not stored.",
             "fields": sorted(values),
         }
 
-    form_id, record_id = located["form_id"], located["record_id"]
+    form_id = ctx["form_id"]
     scoped = {**headers, "x-cloud-eventid": request_id}
 
     try:
@@ -281,14 +350,8 @@ def _write_visit_info(
     except Exception as exc:
         return {"step": "visit_info", "ok": False, "error": f"fieldmappings lookup failed: {exc}"}
 
-    try:
-        current = requests.get(
-            f"{BASE_URL}/forms/{form_id}/data/{record_id}", headers=scoped, timeout=30
-        )
-        data = current.json() if current.status_code == 200 else {}
-    except (requests.RequestException, ValueError):
-        data = {}
-    data = data.get("data") if isinstance(data.get("data"), dict) else data
+    existing = _existing_visit_info_record(scoped, form_id)
+    data: Dict[str, Any] = dict(existing.get("data") or {}) if existing else {}
 
     written, unmapped = [], []
     for name, value in values.items():
@@ -308,14 +371,31 @@ def _write_visit_info(
             "unmapped_fields": unmapped,
         }
 
-    url = f"{BASE_URL}/forms/{form_id}/data/{record_id}"
-    logger.info(f"visit_info: PUT {url} fields={written} unmapped={unmapped}")
+    wrapper = {
+        "moduleTypeId": "JOURNEY",
+        "moduleId": ctx["module_id"],
+        "journeyId": ctx["journey_id"],
+        "pageId": ctx["page_id"],
+        "formId": form_id,
+        "eventId": request_id,
+        "formTypeId": "VISIT_INFO",
+        "formIdentifier": "VISIT_INFO",
+        "data": data,
+    }
+
     try:
-        resp = requests.put(url, headers=scoped, json={"data": data}, timeout=30)
+        if existing and existing.get("id"):
+            url = f"{BASE_URL}/forms/{form_id}/data/{existing['id']}"
+            logger.info(f"visit_info: PUT {url} fields={written} unmapped={unmapped}")
+            resp = requests.put(url, headers=scoped, json={**wrapper, "id": existing["id"]}, timeout=30)
+        else:
+            url = f"{BASE_URL}/forms/{form_id}/data"
+            logger.info(f"visit_info: POST {url} (create) fields={written} unmapped={unmapped}")
+            resp = requests.post(url, headers=scoped, json=wrapper, timeout=30)
     except requests.RequestException as exc:
         return {"step": "visit_info", "ok": False, "error": str(exc)}
 
-    if resp.status_code != 200:
+    if resp.status_code not in (200, 201):
         return {
             "step": "visit_info",
             "ok": False,
@@ -323,7 +403,12 @@ def _write_visit_info(
             "body": resp.text[:300],
         }
 
-    result: Dict[str, Any] = {"step": "visit_info", "ok": True, "fields_written": written}
+    result: Dict[str, Any] = {
+        "step": "visit_info",
+        "ok": True,
+        "created": not (existing and existing.get("id")),
+        "fields_written": written,
+    }
     if unmapped:
         result["unmapped_fields"] = unmapped
     return result
