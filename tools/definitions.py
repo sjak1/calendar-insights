@@ -298,10 +298,11 @@ tools = [
             "Without a window each result instead carries upcoming_bookings / upcoming_dates / availability_note — the briefing days that presenter already has booked in the next 30 days. "
             "So if the user has no particular date in mind, just call it without a window and report the load; only ask them for a date when they need a specific day checked. "
             "Both cover briefing commitments only, not the presenter's actual calendar — never describe someone as simply 'free'. "
-            "Results also carry revenue_delta / revenue_note: how the opportunities at that presenter's briefings moved. "
-            "Mention it ONLY when the user asks about deals, revenue, pipeline or account impact — otherwise leave it out, it clutters a 'who should present' answer. "
-            "It is NOT a ranking signal and NOT a measure of the presenter: a briefing has several presenters and one revenue figure, and large accounts draw senior presenters regardless. "
-            "If you do cite it, say the credit is shared across everyone who presented at those briefings — never imply this person moved the deal."
+            "Results also carry revenue_delta / revenue_note (with revenue_events = how many briefings the figure spans): how the opportunities at that presenter's briefings moved. "
+            "Volunteer it as a brief aside when it meaningfully differentiates the candidates or the user is deciding between them — and always when they ask about deals, revenue, pipeline or account impact. Skip it when it adds nothing. "
+            "Frame it as an observation about the BRIEFINGS, never as the presenter's effectiveness: the figure is shared across everyone who presented there, and large accounts draw senior presenters regardless. "
+            "State the sample size — a delta spanning 1-2 briefings is an anecdote, not a track record — and never rank, recommend, or say 'proven/effective' on the strength of it. "
+            "Good shape: 'the deal at X's one briefing grew +180k — single data point, credit shared'. Bad: 'X is more effective, his briefings drive revenue'."
         ),
         "parameters": {
             "type": "object",
