@@ -236,13 +236,14 @@ def process_query(
         # them apart stops anyone from reading one as the other.
         trace_metadata = {
             "response_type": result.get("type"),
+            "answer_chars": len(result.get("text") or ""),
             "app_total_time_seconds": result.get("total_time_seconds"),
             "app_estimated_cost_usd": result.get("total_cost_usd"),
             "app_tokens_in": result.get("tokens_in"),
             "app_tokens_out": result.get("tokens_out"),
         }
         root_span.update(
-            output=result.get("text"),
+            output=observability.content(result.get("text")),
             metadata={k: v for k, v in trace_metadata.items() if v is not None},
         )
         return result
@@ -277,7 +278,10 @@ def _run_query(
         with observability.guardrail_span(
             observability.GUARDRAIL_NAME, input=query
         ) as guard:
-            guard.update(output={"blocked": True, "response": refusal})
+            guard.update(
+                output=observability.content({"response": refusal}),
+                metadata={"blocked": True},
+            )
         return {"text": refusal, "type": "text"}
 
     # Get conversation history for this session
@@ -487,8 +491,10 @@ def _run_query(
                 model=iter_model_id or BEDROCK_MODEL_ID,
                 system=system,
                 messages=input_list,
-                iteration=iteration_count,
-                role=("synthesis" if had_tool_results else "planning"),
+                metadata={
+                    "iteration": iteration_count,
+                    "role": "synthesis" if had_tool_results else "planning",
+                },
             ) as generation:
                 response = bedrock_converse(
                     messages=input_list,
@@ -498,7 +504,9 @@ def _run_query(
                 )
                 usage = response.get("usage", {})
                 generation.update(
-                    output=response.get("output", {}).get("message", {}),
+                    output=observability.content(
+                        response.get("output", {}).get("message", {})
+                    ),
                     usage_details=observability.bedrock_usage(usage),
                     metadata={"stop_reason": response.get("stopReason", "end_turn")},
                 )
@@ -575,8 +583,10 @@ def _run_query(
                 model="gpt-5-mini",
                 system=instructions,
                 messages=input_list,
-                iteration=iteration_count,
-                role=("synthesis" if had_tool_results else "planning"),
+                metadata={
+                    "iteration": iteration_count,
+                    "role": "synthesis" if had_tool_results else "planning",
+                },
             ) as generation:
                 response = client.responses.create(
                     model="gpt-5-mini",
@@ -586,7 +596,7 @@ def _run_query(
                 )
                 usage = getattr(response, "usage", None)
                 generation.update(
-                    output=response.output,
+                    output=observability.content(response.output),
                     usage_details={
                         "input": getattr(usage, "input_tokens", 0) if usage else 0,
                         "output": getattr(usage, "output_tokens", 0) if usage else 0,

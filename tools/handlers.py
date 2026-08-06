@@ -877,7 +877,13 @@ def process_function_calls(
             )
             # Chart/report/pdf tools return (output, payload); only the output
             # is traced — the payload can be raw PDF bytes.
-            span.update(output=result[0] if isinstance(result, tuple) else result)
+            out = result[0] if isinstance(result, tuple) else result
+            # Counts and status go to metadata either way, so a metadata-only
+            # trace still shows a tool that returned nothing or failed.
+            span.update(
+                output=observability.content(out),
+                metadata=observability.tool_result_metadata(out),
+            )
         duration = time.time() - t0
         logger.info(f"   ↳ {item.name} finished in {duration:.2f}s")
         _emit("tool_end", name=item.name, call_id=item.call_id, duration=round(duration, 3))

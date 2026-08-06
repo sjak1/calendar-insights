@@ -192,24 +192,42 @@ def _compose_email_with_llm(payload: Dict[str, Any]) -> Dict[str, str]:
 
     try:
         from bedrock_llm import converse as bedrock_converse
+        import observability
+
         t0 = time.time()
-        resp = bedrock_converse(
-            messages=[{"role": "user", "content": [{"text": user_prompt}]}],
-            system=[{"text": EMAIL_COMPOSER_SYSTEM}],
-            tool_config={
-                "tools": [{
-                    "toolSpec": {
-                        "name": "_noop",
-                        "description": "unused",
-                        "inputSchema": {"json": {"type": "object", "properties": {}}},
-                    }
-                }],
-                "toolChoice": {"auto": {}},
-            },
-            model_id=EMAIL_COMPOSER_MODEL_ID,
-        )
+        messages = [{"role": "user", "content": [{"text": user_prompt}]}]
+        system = [{"text": EMAIL_COMPOSER_SYSTEM}]
+        # Sub-LLM call on its own model — needs its own generation so its
+        # tokens are not silently absorbed into the parent tool's latency.
+        with observability.llm_generation(
+            model=EMAIL_COMPOSER_MODEL_ID,
+            system=system,
+            messages=messages,
+            name="compose-email",
+        ) as generation:
+            resp = bedrock_converse(
+                messages=messages,
+                system=system,
+                tool_config={
+                    "tools": [{
+                        "toolSpec": {
+                            "name": "_noop",
+                            "description": "unused",
+                            "inputSchema": {"json": {"type": "object", "properties": {}}},
+                        }
+                    }],
+                    "toolChoice": {"auto": {}},
+                },
+                model_id=EMAIL_COMPOSER_MODEL_ID,
+            )
+            usage = resp.get("usage", {})
+            generation.update(
+                output=observability.content(
+                    resp.get("output", {}).get("message", {})
+                ),
+                usage_details=observability.bedrock_usage(usage),
+            )
         elapsed = time.time() - t0
-        usage = resp.get("usage", {})
         out_msg = resp.get("output", {}).get("message", {})
         text = "".join(b.get("text", "") for b in out_msg.get("content", []) if "text" in b).strip()
 

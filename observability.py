@@ -73,6 +73,55 @@ def _mask_pii_enabled() -> bool:
     return os.getenv("LANGFUSE_MASK_PII", "1").lower() in ("1", "true", "yes")
 
 
+def capture_content() -> bool:
+    """Whether observation payloads (input/output) are sent to Langfuse.
+
+    Off by default. This app's payloads carry the internal OpenSearch schema
+    reference and real customer briefing data, so shipping them to a hosted
+    Langfuse project is a decision that has to be made deliberately rather than
+    inherited from a default.
+
+    With it off you still get the whole operational picture — models, tokens,
+    cost, latency, which tools ran and in what order, errors and trace shape —
+    just not the content. Turn it on for a self-hosted instance or local
+    debugging, where seeing prompts and results is the point.
+    """
+    return os.getenv("LANGFUSE_CAPTURE_CONTENT", "0").lower() in ("1", "true", "yes")
+
+
+def content(value: Any) -> Optional[Any]:
+    """Pass a payload through only when content capture is enabled.
+
+    Returning None means the SDK never creates the attribute at all, so the
+    payload is not serialized rather than being redacted after the fact.
+    """
+    return value if capture_content() else None
+
+
+def tool_result_metadata(result: Any) -> Dict[str, Any]:
+    """Derive non-sensitive shape information from a tool result.
+
+    Counts and status only, never values. This is what keeps a metadata-only
+    trace useful: you can still see that a tool returned zero rows, or that it
+    failed, without the rows themselves leaving the process.
+    """
+    meta: Dict[str, Any] = {"result_chars": len(str(result))}
+    payload = result
+    # Handlers wrap results as {tool_name: {...}} — unwrap one level.
+    if isinstance(payload, dict) and len(payload) == 1:
+        inner = next(iter(payload.values()))
+        if isinstance(inner, dict):
+            payload = inner
+    if isinstance(payload, dict):
+        for key in ("success", "count", "total_hits", "error"):
+            if key in payload:
+                meta[key] = payload[key] if key != "error" else True
+        hits = payload.get("hits")
+        if isinstance(hits, list):
+            meta["hits_returned"] = len(hits)
+    return meta
+
+
 def _redact(value: str) -> str:
     """Strip credentials (always) and email local parts (unless opted out)."""
     for pattern, replacement in _SECRET_PATTERNS:
@@ -91,17 +140,27 @@ def _mask_otel_spans(*, params):
     """
     from langfuse.types import MaskOtelSpansResult, OtelSpanPatch
 
+    drop_content = not capture_content()
     patches = {}
     for identifier, span in params.spans.items():
         changed = {}
+        dropped = []
         for key, value in span.attributes.items():
+            # Hard guard: in metadata-only mode no payload attribute may leave,
+            # including ones set by code paths that forgot to gate themselves or
+            # by third-party instrumentation we do not control.
+            if drop_content and key.endswith((".input", ".output")):
+                dropped.append(key)
+                continue
             if key in _UNMASKED_ATTRIBUTES or not isinstance(value, str):
                 continue
             redacted = _redact(value)
             if redacted != value:
                 changed[key] = redacted
-        if changed:
-            patches[identifier] = OtelSpanPatch(set_attributes=changed)
+        if changed or dropped:
+            patches[identifier] = OtelSpanPatch(
+                set_attributes=changed, delete_attributes=tuple(dropped)
+            )
 
     return MaskOtelSpansResult(span_patches=patches) if patches else None
 
@@ -228,6 +287,9 @@ def query_trace(
 
     metadata = {
         "page_context": page,
+        # Length is kept even when the question itself is not, so a trace still
+        # shows roughly what came in.
+        "query_chars": len(query or ""),
         "event_id": event_id,
         "category_id": category_id,
         "timezone": (
@@ -243,7 +305,7 @@ def query_trace(
     with client.start_as_current_observation(
         as_type="agent",
         name=ROOT_OBSERVATION_NAME,
-        input=query,
+        input=content(query),
         metadata={k: v for k, v in metadata.items() if v is not None},
     ) as root:
         with propagate_attributes(
@@ -260,10 +322,14 @@ def llm_generation(
     model: str,
     system: Any,
     messages: Sequence[Any],
-    iteration: int,
-    role: str,
+    name: str = GENERATION_NAME,
+    metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Generation observation for one LLM turn of the tool-calling loop.
+    """Generation observation for a single LLM call.
+
+    Used for the main tool-calling loop and for the sub-LLM calls that some
+    tools make on their own (agenda drafting, email composition) — every model
+    call needs one of these or its tokens go unaccounted for.
 
     The system prompt is included in the input because it carries the schema
     reference and time context — without it a trace does not show what the model
@@ -276,10 +342,10 @@ def llm_generation(
 
     with client.start_as_current_observation(
         as_type="generation",
-        name=GENERATION_NAME,
+        name=name,
         model=model,
-        input={"system": system, "messages": list(messages)},
-        metadata={"iteration": iteration, "role": role},
+        input=content({"system": system, "messages": list(messages)}),
+        metadata=metadata,
     ) as generation:
         yield generation
 
@@ -292,7 +358,7 @@ def guardrail_span(name: str, input: Any):
         return
 
     with client.start_as_current_observation(
-        as_type="guardrail", name=name, input=input
+        as_type="guardrail", name=name, input=content(input)
     ) as span:
         yield span
 
@@ -306,7 +372,7 @@ def tool_span(name: str, args: Any):
         return
 
     with client.start_as_current_observation(
-        as_type="tool", name=name, input=args
+        as_type="tool", name=name, input=content(args)
     ) as span:
         yield span
 
