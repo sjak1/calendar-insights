@@ -292,7 +292,7 @@ tools = [
             "or report that nobody has presented on what they asked for. Never retry with vaguer "
             "wording until something returns and then present those people as experts in the "
             "original topic — describe presenters by the topic they actually matched. "
-            "Set audience_level when the briefing has senior attendees — presenters will be ranked so peers of the audience surface first. "
+            "audience_level is accepted but currently has NO effect on ranking — the title and audience-seniority data behind it is unusable, so don't tell the user results are matched to their audience's seniority. "
             "Set check_start_utc_ms + check_end_utc_ms (epoch ms) to get availability — each result will include available:true/false and any conflict details. "
             "Use time placeholder tokens (TODAY_START etc.) or ISO date strings — the server converts to epoch_ms. "
             "Without a window each result instead carries upcoming_bookings / upcoming_dates / availability_note — the briefing days that presenter already has booked in the next 30 days. "
@@ -329,7 +329,7 @@ tools = [
                     "description": (
                         "Seniority of the briefing audience. 'c_level' = CEO/CFO/CTO etc, "
                         "'vp_plus' = VP/EVP/SVP, 'senior' = Director+. "
-                        "When set, presenters with matching title tiers and past experience with that audience are ranked first."
+                        "Accepted for compatibility but currently ignored by ranking."
                     ),
                 },
                 "check_start_utc_ms": {

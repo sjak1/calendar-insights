@@ -446,11 +446,11 @@ def _rank_presenters(
 ) -> List[Dict[str, Any]]:
     """Rank presenters.
 
-    Default order: accepted → total sessions → event coverage → recency.
-    When audience_level is set, seniority match + C-level track record take
-    priority so the top results are peers of the target audience.
+    Order: topic match tier → decay-weighted depth on that topic → accepted →
+    recency → event coverage.
+
+    Seniority/audience-peer ranking is DISABLED — see the note below.
     """
-    min_tier = _min_seniority_for_audience(audience_level)
 
     def sort_key(p: Dict[str, Any]):
         # 1. Match strength leads — an exact-topic presenter outranks a
@@ -464,17 +464,29 @@ def _rank_presenters(
             -round(p.get("tier_recent_weight", 0.0), 3),
             -p.get("tier_session_count", 0),
         )
-        if audience_level:
-            meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
-            return match + (
-                -meets_tier,
-                -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
-                -p["seniority_tier"],
-                -p["accepted_count"],
-                -round(p.get("recent_weight", 0.0), 3),
-                -len(p["event_ids"]),
-                -p["latest_ts"],
-            )
+        # DISABLED: audience-peer tiebreak (seniority_tier + c_level_session_count).
+        # Both inputs are unusable on the current data:
+        #   - designation puts 410 of 433 presenter records in the top tier, so
+        #     the test is one nearly everyone passes and sorts nothing; where it
+        #     does fire it ranks a CHRO above a Principal Cloud Architect for a
+        #     technical briefing, because it measures rank and not role.
+        #   - isCLevelAttendee is absent from all 311 activity docs, so
+        #     c_level_session_count is always 0.
+        # Restore only alongside a role-type classifier (architect / solution
+        # engineer / product) and a populated audience-seniority field.
+        #
+        # if audience_level:
+        #     min_tier = _min_seniority_for_audience(audience_level)
+        #     meets_tier = 1 if p["seniority_tier"] >= min_tier else 0
+        #     return match + (
+        #         -meets_tier,
+        #         -p["c_level_session_count"] if audience_level == AUDIENCE_C_LEVEL else 0,
+        #         -p["seniority_tier"],
+        #         -p["accepted_count"],
+        #         -round(p.get("recent_weight", 0.0), 3),
+        #         -len(p["event_ids"]),
+        #         -p["latest_ts"],
+        #     )
         return match + (
             -p["accepted_count"],
             -round(p.get("recent_weight", 0.0), 3),
@@ -503,10 +515,8 @@ def _rank_presenters(
         reason_parts.append(f"{p['session_count']} session(s) total")
         if p["accepted_count"]:
             reason_parts.append(f"{p['accepted_count']} accepted")
-        if audience_level and p["c_level_session_count"]:
-            reason_parts.append(f"{p['c_level_session_count']} C-level audience")
-        if audience_level and p["seniority_tier"] >= min_tier and p["title"]:
-            reason_parts.append(f"peer-level ({p['title']})")
+        # No "peer-level" / "C-level audience" claims while the seniority
+        # tiebreak is disabled — the reason must describe what actually ranked.
         if topics_summary:
             label = "also presents" if tier > TIER_SCOPE_ONLY else "on"
             reason_parts.append(f"{label}: {topics_summary}")
