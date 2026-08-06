@@ -14,6 +14,7 @@ import time
 from sqlalchemy import text
 
 from logging_config import get_logger
+import observability
 from schema_reference import SCHEMA_REFERENCE
 from tools import tools
 from tools.handlers import process_function_calls
@@ -203,6 +204,60 @@ def process_query(
     Returns:
         Dict with response text and optional chart data
     """
+    # Resolved here rather than in the loop below so the whole trace — including
+    # a guardrail rejection — is grouped into the right Langfuse session.
+    session_id = get_or_create_session(session_id)
+
+    with observability.query_trace(
+        query=query,
+        session_id=session_id,
+        user_info=user_info,
+        event_id=event_id,
+        category_id=category_id,
+        provider="bedrock" if USE_BEDROCK else "openai",
+    ) as root_span:
+        result = _run_query(
+            query,
+            schedule_headers=schedule_headers,
+            session_id=session_id,
+            event_id=event_id,
+            category_id=category_id,
+            user_info=user_info,
+            on_event=on_event,
+        )
+        # Trace output is the assistant's answer; the usage numbers the app
+        # already computes go to metadata so they stay filterable without
+        # cluttering the output a reviewer reads.
+        #
+        # The cost key is prefixed `app_` deliberately: this is the app's own
+        # estimate, which prices only input+output tokens. Langfuse computes its
+        # own cost from the per-generation usage, and that one also prices
+        # prompt-cache reads/writes — so the two legitimately differ. Naming
+        # them apart stops anyone from reading one as the other.
+        trace_metadata = {
+            "response_type": result.get("type"),
+            "app_total_time_seconds": result.get("total_time_seconds"),
+            "app_estimated_cost_usd": result.get("total_cost_usd"),
+            "app_tokens_in": result.get("tokens_in"),
+            "app_tokens_out": result.get("tokens_out"),
+        }
+        root_span.update(
+            output=result.get("text"),
+            metadata={k: v for k, v in trace_metadata.items() if v is not None},
+        )
+        return result
+
+
+def _run_query(
+    query,
+    schedule_headers=None,
+    session_id=None,
+    event_id=None,
+    category_id=None,
+    user_info=None,
+    on_event=None,
+):
+    """Tool-calling loop for one turn. Runs inside the Langfuse root observation."""
     if event_id:
         logger.info(f"🔑 Context: event_id from header available: {event_id}")
     if category_id:
@@ -214,17 +269,16 @@ def process_query(
     # Refuse pasted raw OpenSearch query bodies before they reach the model.
     if _looks_like_raw_dsl(query):
         logger.warning("🛑 Rejected query containing a raw OpenSearch DSL body")
-        return {
-            "text": (
-                "I can't run raw database queries. Tell me what you'd like to "
-                "know in plain language (e.g. \"how many confirmed events this "
-                "month\") and I'll take care of it."
-            ),
-            "type": "text",
-        }
-
-    # Get or create session
-    session_id = get_or_create_session(session_id)
+        refusal = (
+            "I can't run raw database queries. Tell me what you'd like to "
+            "know in plain language (e.g. \"how many confirmed events this "
+            "month\") and I'll take care of it."
+        )
+        with observability.guardrail_span(
+            observability.GUARDRAIL_NAME, input=query
+        ) as guard:
+            guard.update(output={"blocked": True, "response": refusal})
+        return {"text": refusal, "type": "text"}
 
     # Get conversation history for this session
     conversation_history = get_session_history(session_id)
@@ -429,14 +483,27 @@ def process_query(
                 model=(iter_model_id or BEDROCK_MODEL_ID).split(".")[-1],
                 role=("synthesis" if had_tool_results else "planning"),
             )
-            response = bedrock_converse(
-                messages=input_list,
+            with observability.llm_generation(
+                model=iter_model_id or BEDROCK_MODEL_ID,
                 system=system,
-                tool_config=tool_config,
-                model_id=iter_model_id,
-            )
+                messages=input_list,
+                iteration=iteration_count,
+                role=("synthesis" if had_tool_results else "planning"),
+            ) as generation:
+                response = bedrock_converse(
+                    messages=input_list,
+                    system=system,
+                    tool_config=tool_config,
+                    model_id=iter_model_id,
+                )
+                usage = response.get("usage", {})
+                generation.update(
+                    output=response.get("output", {}).get("message", {}),
+                    usage_details=observability.bedrock_usage(usage),
+                    metadata={"stop_reason": response.get("stopReason", "end_turn")},
+                )
+
             llm_elapsed = time.time() - llm_start
-            usage = response.get("usage", {})
             iter_in = usage.get("inputTokens", 0)
             iter_out = usage.get("outputTokens", 0)
             cache_read = usage.get("cacheReadInputTokens", 0)
@@ -499,16 +566,34 @@ def process_query(
                     {"output_text": final_response_text, "output": []},
                 )()
         else:
-            response = client.responses.create(
-                model="gpt-5-mini",
-                tools=tools,
-                input=input_list,
-                instructions=AI_INSTRUCTIONS
+            instructions = (
+                AI_INSTRUCTIONS
                 + "\ntodays date is "
-                + datetime.datetime.now().strftime("%Y-%m-%d"),
+                + datetime.datetime.now().strftime("%Y-%m-%d")
             )
+            with observability.llm_generation(
+                model="gpt-5-mini",
+                system=instructions,
+                messages=input_list,
+                iteration=iteration_count,
+                role=("synthesis" if had_tool_results else "planning"),
+            ) as generation:
+                response = client.responses.create(
+                    model="gpt-5-mini",
+                    tools=tools,
+                    input=input_list,
+                    instructions=instructions,
+                )
+                usage = getattr(response, "usage", None)
+                generation.update(
+                    output=response.output,
+                    usage_details={
+                        "input": getattr(usage, "input_tokens", 0) if usage else 0,
+                        "output": getattr(usage, "output_tokens", 0) if usage else 0,
+                    },
+                )
+
             llm_elapsed = time.time() - llm_start
-            usage = getattr(response, "usage", None)
             iter_in = getattr(usage, "input_tokens", 0) if usage else 0
             iter_out = getattr(usage, "output_tokens", 0) if usage else 0
             total_tokens_in += iter_in
@@ -670,3 +755,4 @@ if __name__ == "__main__":
     logger.info("Running test query")
     result = handle_query(db_query_15, None)
     logger.info(f"Test query result: {result}")
+    observability.flush()  # short-lived process: send spans before exit
