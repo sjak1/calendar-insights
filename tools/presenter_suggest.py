@@ -18,6 +18,8 @@ EVENTS_INDEX = "events"
 TOPIC_NAME = "activityData.topic.topic.textField1"
 PRESENTER_LIST = "activityData.topic_presenter"
 PRESENTER_EMAIL_FIELD = "activityData.topic_presenter.presenter.primaryEmail"
+# Unused: absent from all 311 activity docs. Kept as the verified path for
+# whoever restores the audience-seniority work (see _rank_presenters).
 ACT_IS_CLEVEL = "activityData.EVENTS_VISIT_INFO.isCLevelAttendee"
 EVENT_ID = "eventId"
 START_TIME = "startTime.utcMs"
@@ -268,18 +270,17 @@ def _available_topics(index: str, limit: int = 40) -> List[str]:
 def _build_activity_query(
     topic: Optional[str],
     event_ids: Optional[List[str]],
-    audience_level: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build OpenSearch query for the activities index.
 
-    When audience_level is supplied, activities attended by a matching audience
-    are boosted (not required) — so we still get results if nobody has a
-    perfectly-matching history.
+    Retrieval only — nothing here influences order. `_score` is never read;
+    ranking is a plain sort in _rank_presenters, so a `should` clause would
+    move a number nobody consumes. audience_level is therefore ignored (it
+    once added a C-level boost; see the note in _rank_presenters).
     """
     must: List[Dict[str, Any]] = [
         {"exists": {"field": PRESENTER_EMAIL_FIELD}},
     ]
-    should: List[Dict[str, Any]] = []
 
     if event_ids:
         must.append({"terms": {f"{EVENT_ID}.keyword": event_ids}})
@@ -289,16 +290,7 @@ def _build_activity_query(
         # returned "Cloud Kitchen Operations" for "cloud computing".
         must.append({"match": {TOPIC_NAME: {"query": topic, "operator": "and"}}})
 
-    if audience_level == AUDIENCE_C_LEVEL:
-        should.append({"term": {ACT_IS_CLEVEL: {"value": True, "boost": 2}}})
-
-    query: Dict[str, Any] = {"bool": {"must": must}}
-    if should:
-        # Pure boost — never a filter, so a missing audience signal can't
-        # eliminate an otherwise good presenter.
-        query["bool"]["should"] = should
-
-    return query
+    return {"bool": {"must": must}}
 
 
 def _extract_presenters_from_hits(
@@ -868,7 +860,6 @@ def get_suggested_presenters(
             "query": _build_activity_query(
                 topic=topic_filter,
                 event_ids=scoped_event_ids or None,
-                audience_level=audience_level,
             ),
             "size": 500,
             "sort": [{START_TIME: {"order": "desc", "unmapped_type": "long"}}],
