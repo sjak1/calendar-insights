@@ -1,6 +1,7 @@
 from mangum import Mangum
 from api import app
 from logging_config import setup_logging
+import observability
 import os
 
 # Configure logging for Lambda environment
@@ -16,4 +17,16 @@ setup_logging(
 logger = setup_logging()
 logger.info("🚀 Lambda handler initialized - logs will appear in CloudWatch")
 
-handler = Mangum(app)  
+_asgi_handler = Mangum(app)
+
+
+def handler(event, context):
+    """Lambda entrypoint.
+
+    Lambda freezes the execution environment between invocations, so Langfuse's
+    background export thread may not get to run. Flush before returning.
+    """
+    try:
+        return _asgi_handler(event, context)
+    finally:
+        observability.flush()  

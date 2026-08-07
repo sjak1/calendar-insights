@@ -33,6 +33,7 @@ from database import engine  # noqa: E402 — shared engine from database.py
 from logging_config import get_logger  # noqa: E402
 from tools.extract_ebd import extract_pptx_content, format_extracted_content  # noqa: E402
 from bedrock_llm import converse as bedrock_converse  # noqa: E402
+import observability  # noqa: E402
 try:
     from opensearch_client import search as os_search, get_suggested_presenters  # noqa: E402
 except ImportError:
@@ -1541,13 +1542,29 @@ def _call_llm_bedrock(
 
     for attempt in range(2):
         try:
-            response = bedrock_converse(
-                messages=messages,
+            # Its own generation: this runs on a different model than the main
+            # loop, so without it the agenda's tokens go unaccounted for.
+            with observability.llm_generation(
+                model=AGENDA_BEDROCK_MODEL_ID,
                 system=system_blocks,
-                tool_config=tool_config,
-                model_id=AGENDA_BEDROCK_MODEL_ID,
-            )
-            usage = response.get("usage", {}) or {}
+                messages=messages,
+                name="generate-agenda",
+                metadata={"attempt": attempt + 1},
+            ) as generation:
+                response = bedrock_converse(
+                    messages=messages,
+                    system=system_blocks,
+                    tool_config=tool_config,
+                    model_id=AGENDA_BEDROCK_MODEL_ID,
+                )
+                usage = response.get("usage", {}) or {}
+                generation.update(
+                    output=observability.content(
+                        response.get("output", {}).get("message", {})
+                    ),
+                    usage_details=observability.bedrock_usage(usage),
+                    metadata={"stop_reason": response.get("stopReason", "end_turn")},
+                )
             logger.info(
                 f"Agenda Bedrock call: tokens in={usage.get('inputTokens', 0)}, "
                 f"out={usage.get('outputTokens', 0)}, "

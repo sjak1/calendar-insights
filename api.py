@@ -7,16 +7,28 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
+from contextlib import asynccontextmanager
 from query_processor import handle_query
 from pydantic import BaseModel
 import os
 from logging_config import setup_logging, get_logger
+import observability
 
 # Setup logging for FastAPI
 setup_logging()
 logger = get_logger(__name__)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialise at boot so bad Langfuse credentials surface here rather than
+    # on the first query, and flush buffered spans on the way out.
+    observability.init_tracing()
+    yield
+    observability.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Mount static files directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")

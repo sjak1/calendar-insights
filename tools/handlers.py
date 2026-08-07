@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date as _date, time as _time, timedelta, timezone as _timezone
 from logging_config import get_logger
+import observability
 
 try:
     from zoneinfo import ZoneInfo
@@ -853,19 +854,36 @@ def process_function_calls(
             except Exception:
                 pass  # never let a broken listener break the pipeline
 
+    # The thread pool below does not carry contextvars into its workers, so the
+    # active trace context is captured here and re-attached inside each worker.
+    # Without this, tool spans would be orphaned into traces of their own.
+    trace_context = observability.current_context()
+
     def _run(item):
         args = json.loads(item.arguments) if item.arguments else {}
         args_str = json.dumps(args, indent=2, ensure_ascii=False)
         logger.info(f"→ Calling function: {item.name} with args:\n{args_str}")
         t0 = time.time()
         _emit("tool_start", name=item.name, call_id=item.call_id, args_preview=args_str[:400])
-        result = execute_tool(
-            item.name,
-            args,
-            schedule_headers,
-            context_event_id=context_event_id,
-            context_category_id=context_category_id,
-        )
+        with observability.use_context(trace_context), observability.tool_span(
+            item.name, args
+        ) as span:
+            result = execute_tool(
+                item.name,
+                args,
+                schedule_headers,
+                context_event_id=context_event_id,
+                context_category_id=context_category_id,
+            )
+            # Chart/report/pdf tools return (output, payload); only the output
+            # is traced — the payload can be raw PDF bytes.
+            out = result[0] if isinstance(result, tuple) else result
+            # Counts and status go to metadata either way, so a metadata-only
+            # trace still shows a tool that returned nothing or failed.
+            span.update(
+                output=observability.content(out),
+                metadata=observability.tool_result_metadata(out),
+            )
         duration = time.time() - t0
         logger.info(f"   ↳ {item.name} finished in {duration:.2f}s")
         _emit("tool_end", name=item.name, call_id=item.call_id, duration=round(duration, 3))
