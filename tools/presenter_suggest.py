@@ -789,14 +789,17 @@ def get_suggested_presenters(
     1. If customer_name or industry, resolve them to a list of event_ids
        via the events index.
     2. Query the activities index filtered by those event_ids and/or topic.
-       If audience_level is set, boost activities with a matching audience.
-    3. Aggregate presenters across matching activities, rank using audience
-       seniority when requested, return top N.
+    3. Aggregate presenters across matching activities, rank, return top N.
 
-    audience_level values:
-      - "c_level"  → prefer presenters with C-suite/Chief/President titles
-      - "vp_plus"  → prefer VP+ titles
-      - "senior"   → prefer Director+ titles
+    Ranking order (see _rank_presenters): topic match tier → recency-weighted
+    depth on that topic → accepted count → overall recency → event coverage.
+    Revenue is attached as context and is deliberately not a ranking key.
+
+    audience_level is validated and echoed back, but has NO effect on ranking.
+    The seniority tiebreak it used to drive is disabled — its two inputs are
+    unusable on the current data, with the measurements recorded in
+    _rank_presenters. Kept as a parameter so callers and the tool schema
+    continue to work.
     """
     try:
         from opensearch_client import search
