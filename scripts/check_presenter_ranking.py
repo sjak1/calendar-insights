@@ -165,6 +165,70 @@ def _no_window():
         "available present without a window" if any("available" in p for p in ps) else "absent as expected"
 
 
+def _session_window_for(emails):
+    """A real (start, end) window in which one of `emails` is booked.
+
+    Derived from the index rather than from upcoming_dates: a presenter's
+    sessions are often all in the past, which leaves upcoming_dates empty
+    while the clash is still perfectly checkable.
+    """
+    from opensearch_client import search
+    from tools.presenter_suggest import _build_activity_query, _deep_get
+
+    want = {e.lower() for e in emails}
+    result = search(
+        index="activities",
+        body={"query": _build_activity_query(SEED_TOPIC, None), "size": 50},
+    )
+    for hit in result.get("hits", []):
+        src = hit.get("source", {})
+        start = _deep_get(src, "startTime.utcMs")
+        end = _deep_get(src, "endTime.utcMs")
+        if not start or not end:
+            continue
+        for pe in (src.get("activityData") or {}).get("topic_presenter") or []:
+            email = (_deep_get(pe, "presenter.primaryEmail") or "").lower()
+            if email in want:
+                return int(start), int(end)
+    return None, None
+
+
+@case("availability: a free presenter below the cut is not lost to booked ones")
+def _availability_pool():
+    # The bug this pins: availability was applied AFTER truncating to `limit`,
+    # so it could only reorder people already in the list — ask for 1 on a day
+    # the leader is busy and you got the busy leader, never the free runner-up.
+    wide = get_suggested_presenters(topic=SEED_TOPIC, limit=10)
+    ps = wide.get("suggested_presenters", [])
+    if len(ps) < 2:
+        return None, "need at least 2 seeded presenters on the topic"
+
+    leader = ps[0]
+    start, end = _session_window_for(leader.get("all_emails") or [leader.get("email", "")])
+    if not start:
+        return None, f"no indexed session found for {leader['presenter_name']}"
+
+    r = get_suggested_presenters(
+        topic=SEED_TOPIC, limit=1,
+        check_start_utc_ms=start, check_end_utc_ms=end,
+    )
+    got = r.get("suggested_presenters", [])
+    if not got:
+        return None, "windowed query returned nothing"
+
+    top = got[0]
+    if top.get("available"):
+        return True, f"slot went to {top['presenter_name']} (free), not {leader['presenter_name']} (booked)"
+
+    # Only acceptable if genuinely nobody on this topic is free in that window.
+    everyone = get_suggested_presenters(
+        topic=SEED_TOPIC, limit=10,
+        check_start_utc_ms=start, check_end_utc_ms=end,
+    ).get("suggested_presenters", [])
+    free = [p["presenter_name"] for p in everyone if p.get("available")]
+    return not free, f"returned booked {top['presenter_name']} while these were free: {free}"
+
+
 @case("identity: one person never occupies two slots")
 def _identity():
     r = get_suggested_presenters(topic=SEED_TOPIC, limit=20)

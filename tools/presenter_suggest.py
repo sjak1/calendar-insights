@@ -44,6 +44,11 @@ _MAX_SCOPE_EVENTS = 50
 # How far ahead to report booked days when the caller gives no time window.
 _LOOKAHEAD_DAYS = 30
 
+# When a time window is given, rank this many times `limit` before checking
+# availability, then cut to `limit` afterwards. Availability can only promote
+# candidates it can see, so the pool has to be deeper than the answer.
+_AVAILABILITY_POOL_FACTOR = 3
+
 # Half-life for weighting past sessions. Counting every session equally means
 # someone who presented thirty times years ago outranks someone active now, so
 # each session is worth 0.5 ** (age / half-life): full weight today, half at
@@ -942,10 +947,21 @@ def get_suggested_presenters(
         }
 
     presenters = _extract_presenters_from_hits(hits, topic_query=topic_query)
-    ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
+
+    # Rank a wider pool when availability is going to reorder the list. The
+    # availability pass can only promote people it can see, so cutting to
+    # `limit` first means a free presenter ranked just below the cut is never
+    # reachable — ask for 10 on a day all 10 are booked and the free 11th stays
+    # invisible. Widening costs nothing at the index: _check_presenter_conflicts
+    # queries by time window and filters emails locally, so 30 candidates is the
+    # same single request as 10.
+    window_given = bool(check_start_utc_ms and check_end_utc_ms)
+    pool_limit = limit * _AVAILABILITY_POOL_FACTOR if window_given else limit
+    ranked = _rank_presenters(presenters, pool_limit, audience_level=audience_level)
 
     logger.info(
         f"Found {len(ranked)} unique presenters from {len(hits)} activities"
+        + (f" (pool of {pool_limit} for availability)" if window_given else "")
         + (f" (audience_level={audience_level})" if audience_level else "")
     )
 
@@ -966,11 +982,13 @@ def get_suggested_presenters(
             hits_for_p = [c for e in (p.get("all_emails") or []) for c in conflicts.get(e, [])]
             p["available"] = not hits_for_p
             p["conflicts"] = hits_for_p[:3]  # cap at 3 for LLM context
-        # Demote the double-booked. Applied after ranking rather than inside the
-        # sort key so it only reorders within the results the caller asked for —
-        # a clashing presenter is still worth showing (they may be freed up),
-        # just not worth showing first.
+        # Demote the double-booked rather than dropping them — a clashing
+        # presenter may still get freed up, so they stay in the list, just not
+        # at the top. sort() is stable, so ranking order survives inside each
+        # group. Only now is the pool cut to what the caller asked for, so a
+        # free presenter from deeper in the ranking can take a booked one's slot.
         ranked.sort(key=lambda p: 0 if p.get("available") else 1)
+        ranked = ranked[:limit]
     elif all_emails:
         # No window given. "Available" is meaningless without a time, so report
         # forward load instead — useful whether or not a date is in play, and
