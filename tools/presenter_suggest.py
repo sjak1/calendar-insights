@@ -44,6 +44,23 @@ _MAX_SCOPE_EVENTS = 50
 # How far ahead to report booked days when the caller gives no time window.
 _LOOKAHEAD_DAYS = 30
 
+# When a time window is given, rank this many times `limit` before checking
+# availability, then cut to `limit` afterwards. Availability can only promote
+# candidates it can see, so the pool has to be deeper than the answer.
+_AVAILABILITY_POOL_FACTOR = 3
+
+# Both availability scans fetch by time window and match presenters locally, so
+# these caps bound how many briefings are examined — NOT how many presenters.
+# They must be passed to search() as size_cap too: the body's "size" alone is
+# clamped to _MAX_SIZE (50), and a truncated scan reports a booked presenter as
+# free. Sized well above the busiest plausible window.
+_CONFLICT_SCAN_SIZE = 1000
+_LOAD_SCAN_SIZE = 1000
+
+# Hard ceiling on results, whatever the caller asks for. The public entry point
+# is reachable from an LLM tool call, so limit arrives as model-generated input.
+_MAX_LIMIT = 50
+
 # Half-life for weighting past sessions. Counting every session equally means
 # someone who presented thirty times years ago outranks someone active now, so
 # each session is worth 0.5 ** (age / half-life): full weight today, half at
@@ -138,7 +155,13 @@ def _classify_topic_match(topic_name: str, query: str) -> int:
 
     Mirrors what OpenSearch would score, but locally, so retrieval stays a
     single request. Topic names are short (median 2 words) which is why a
-    substring test stands in for match_phrase here.
+    phrase test stands in for match_phrase here.
+
+    The phrase test is anchored on word boundaries, not a bare substring: `in`
+    made "AI" a phrase match for "M-ai-ntenance Strategy" and "Tr-ai-ning",
+    silently reintroducing the loose matching that tiering exists to prevent.
+    Short queries are exactly the ones users type, so the bug hit the common
+    case hardest.
     """
     if not topic_name or not query:
         return TIER_SCOPE_ONLY
@@ -146,7 +169,9 @@ def _classify_topic_match(topic_name: str, query: str) -> int:
     q = query.strip().lower()
     if name == q:
         return TIER_EXACT
-    if q in name:
+    # \b on each end: "big data" still matches "big data appliance", but "ai"
+    # no longer matches inside another word.
+    if re.search(rf"\b{re.escape(q)}\b", name):
         return TIER_PHRASE
     q_tokens = set(re.findall(r"[a-z0-9]+", q))
     name_tokens = set(re.findall(r"[a-z0-9]+", name))
@@ -180,6 +205,35 @@ def _closest_topics(index: str, topic: str, limit: int = 12) -> List[str]:
         return []
 
 
+def _coerce_amount(value: Any) -> Optional[float]:
+    """Parse a revenue figure that may arrive as a formatted string.
+
+    These come from user-entered form fields, so alongside real numbers you get
+    "", "1,200", "$500" and None. A bare float() raises on every one of those,
+    and the call sites sit in the main path with no guard — so one dirty cell
+    took down the whole presenter response, not just its revenue.
+
+    Returns None for anything unparseable, which callers already treat as
+    "no figure recorded".
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    # Strip currency symbols, thousands separators and spaces; keep sign and point.
+    cleaned = re.sub(r"[^0-9.\-]", "", text)
+    if not cleaned or cleaned in {"-", ".", "-."}:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        logger.warning(f"Unparseable revenue value {value!r}; treated as absent")
+        return None
+
+
 def _deep_get(d: Any, path: str) -> Any:
     """Retrieve a nested value from a dict using dot-separated path."""
     for key in path.split("."):
@@ -203,7 +257,22 @@ def _fetch_event_ids_by_scope(
     except ImportError:
         return []
 
-    should = []
+    # Industry goes in `must` (required), the two customer-name variants go in
+    # `should` with minimum_should_match=1 (either spelling will do). Together
+    # that reads: industry AND (exact name OR fuzzy name) — so asking for a
+    # customer in an industry requires both. Previously all three sat in one
+    # `should`, which turned it into "this customer OR anyone in that industry".
+    #
+    # Deliberately a FLAT bool rather than one nested per filter: the shared
+    # client's normalize_query_structure() unwraps `bool` objects found inside
+    # a must/should list, so a nested form arrives at OpenSearch malformed.
+    must: List[Dict[str, Any]] = []
+    should: List[Dict[str, Any]] = []
+
+    if industry:
+        must.append(
+            {"term": {f"{EVT_CUSTOMER_INDUSTRY}.keyword": {"value": industry, "boost": 2}}}
+        )
     if customer_name:
         should.append(
             {"term": {f"{EVT_CUSTOMER_NAME}.keyword": {"value": customer_name, "boost": 3}}}
@@ -211,16 +280,19 @@ def _fetch_event_ids_by_scope(
         should.append(
             {"match": {EVT_CUSTOMER_NAME: {"query": customer_name, "fuzziness": "AUTO"}}}
         )
-    if industry:
-        should.append(
-            {"term": {f"{EVT_CUSTOMER_INDUSTRY}.keyword": {"value": industry, "boost": 2}}}
-        )
 
-    if not should:
+    if not must and not should:
         return []
 
+    bool_q: Dict[str, Any] = {}
+    if must:
+        bool_q["must"] = must
+    if should:
+        bool_q["should"] = should
+        bool_q["minimum_should_match"] = 1
+
     body = {
-        "query": {"bool": {"should": should, "minimum_should_match": 1}},
+        "query": {"bool": bool_q},
         "_source": False,
         "size": _MAX_SCOPE_EVENTS,
     }
@@ -373,6 +445,9 @@ def _extract_presenters_from_hits(
             if key not in presenters:
                 presenters[key] = {
                     "presenter_name": full_name or email,
+                    # Original-case uniqueId — the dedupe key above is lowercased,
+                    # but BriefingIQ resource lookups need it exactly as issued.
+                    "presenter_id": (presenter.get("uniqueId") or "").strip(),
                     "email": email,
                     "title": title,
                     "session_count": 0,
@@ -515,6 +590,7 @@ def _rank_presenters(
         results.append(
             {
                 "presenter_name": p["presenter_name"],
+                "presenter_id": p.get("presenter_id", ""),
                 "email": p["email"],
                 "title": p["title"],
                 "session_count": p["session_count"],
@@ -572,12 +648,16 @@ def _check_presenter_conflicts(
             "startTime.utcMs", "endTime.utcMs",
             "startTime.requested.requestedZoneDate",
             "endTime.requested.requestedZoneDate",
-            PRESENTER_EMAIL_FIELD,
+            PRESENTER_LIST,
         ],
-        "size": 200,
+        "size": _CONFLICT_SCAN_SIZE,
     }
 
-    result = search(index=ACTIVITIES_INDEX, body=body)
+    # Explicit size_cap: search() otherwise clamps to _MAX_SIZE (50). A busy
+    # window holds far more than 50 briefings, and the ones past the cut are
+    # simply not seen — which reports a genuinely double-booked presenter as
+    # available. Under-reporting a clash is the worst failure this function has.
+    result = search(index=ACTIVITIES_INDEX, body=body, size_cap=_CONFLICT_SCAN_SIZE)
     if not result.get("success"):
         logger.warning(f"Availability check failed: {result.get('error')}")
         return {}
@@ -589,7 +669,17 @@ def _check_presenter_conflicts(
         src = hit.get("source", {})
         presenter_entries = (src.get("activityData") or {}).get("topic_presenter") or []
         for pe in presenter_entries:
-            email = _deep_get(pe, "presenter.primaryEmail") or ""
+            # Someone who declined this briefing is not committed to it, so it
+            # is not a clash. Without this, declining a slot made a presenter
+            # look busy for it — marking free people unavailable.
+            if (pe.get("presenterStatus") or "").strip().lower() in _EXCLUDED_STATUSES:
+                continue
+            # Same fallback the extraction side uses: a record may carry the
+            # address on the entry rather than the nested presenter object, and
+            # checking only one of the two silently misses that person's clashes.
+            email = (
+                _deep_get(pe, "presenter.primaryEmail") or pe.get("presenterEmail") or ""
+            )
             if email.lower() not in email_set:
                 continue
             start_ms = _deep_get(src, "startTime.utcMs") or 0
@@ -655,13 +745,13 @@ def _upcoming_load(
         "_source": [
             "startTime.utcMs",
             "startTime.requested.requestedZoneDate",
-            PRESENTER_EMAIL_FIELD,
+            PRESENTER_LIST,
         ],
-        "size": 500,
+        "size": _LOAD_SCAN_SIZE,
         "sort": [{START_TIME: {"order": "asc", "unmapped_type": "long"}}],
     }
 
-    result = search(index=ACTIVITIES_INDEX, body=body, size_cap=500)
+    result = search(index=ACTIVITIES_INDEX, body=body, size_cap=_LOAD_SCAN_SIZE)
     if not result.get("success"):
         logger.warning(f"Upcoming-load lookup failed: {result.get('error')}")
         return {}
@@ -676,7 +766,13 @@ def _upcoming_load(
         if not day:
             continue
         for pe in (src.get("activityData") or {}).get("topic_presenter") or []:
-            email = (_deep_get(pe, "presenter.primaryEmail") or "").lower()
+            # Declined slots are not commitments — reporting them as booked days
+            # overstates how loaded someone is. Same rule as the conflict scan.
+            if (pe.get("presenterStatus") or "").strip().lower() in _EXCLUDED_STATUSES:
+                continue
+            email = (
+                _deep_get(pe, "presenter.primaryEmail") or pe.get("presenterEmail") or ""
+            ).lower()
             if email in email_set:
                 dates = load.setdefault(email, [])
                 if day not in dates:
@@ -687,6 +783,40 @@ def _upcoming_load(
         f"{len(load)} with bookings"
     )
     return load
+
+
+def _presenter_blocks_in_window(
+    ranked: List[Dict[str, Any]],
+    start_ms: int,
+    end_ms: int,
+    api_token: Optional[str],
+    api_headers: Optional[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Blocked (non-briefing) time per presenter id, from the BriefingIQ API.
+
+    Optional enrichment: without a token — background jobs, tests, any caller
+    outside a request — this returns {} and availability falls back to briefing
+    bookings alone, exactly as before. It never raises.
+
+    One HTTP call per presenter, so it runs on the ranked pool rather than every
+    candidate, and only when a time window was actually supplied.
+    """
+    if not api_token:
+        return {}
+    ids = [p.get("presenter_id") for p in ranked if p.get("presenter_id")]
+    if not ids:
+        return {}
+    try:
+        from tools.briefingiq_writer import get_presenter_blocks
+
+        return get_presenter_blocks(
+            ids, api_token, api_headers, start_ms=start_ms, end_ms=end_ms
+        )
+    except Exception as exc:
+        # Availability is advisory; a calendar outage must not cost the caller
+        # their presenter list.
+        logger.warning(f"Presenter block lookup failed: {type(exc).__name__}: {exc}")
+        return {}
 
 
 def _event_revenue(event_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -740,14 +870,16 @@ def _event_revenue(event_ids: List[str]) -> Dict[str, Dict[str, Any]]:
             i = opp.get(EVT_OPP_INITIAL)
             closed = opp.get(EVT_OPP_CLOSED)
             open_ = opp.get(EVT_OPP_OPEN)
+            i = _coerce_amount(i)
             if i is not None:
-                initial += float(i)
+                initial += i
                 saw_initial = True
             # closed wins when present — a finished deal's final number is the
             # one to measure against, even when it is 0 (a lost deal).
             current = closed if closed is not None else open_
+            current = _coerce_amount(current)
             if current is not None:
-                latest += float(current)
+                latest += current
                 saw_latest = True
 
         if not saw_latest and not saw_initial:
@@ -773,6 +905,8 @@ def get_suggested_presenters(
     index: Optional[str] = None,
     check_start_utc_ms: Optional[int] = None,
     check_end_utc_ms: Optional[int] = None,
+    api_token: Optional[str] = None,
+    api_headers: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Query OpenSearch for presenters matching the given filters.
@@ -786,6 +920,12 @@ def get_suggested_presenters(
     Ranking order (see _rank_presenters): topic match tier → recency-weighted
     depth on that topic → accepted count → overall recency → event coverage.
     Revenue is attached as context and is deliberately not a ranking key.
+
+    api_token / api_headers are the caller's BriefingIQ credentials, forwarded
+    from the incoming request. When present AND a time window is given, the
+    live presenter calendar is consulted for blocked time (leave, travel, holds)
+    that the activities index cannot know about. Optional throughout: without
+    them, availability is briefing bookings only, as before.
 
     audience_level is validated and echoed back, but has NO effect on ranking.
     The seniority tiebreak it used to drive is disabled — its two inputs are
@@ -806,6 +946,36 @@ def get_suggested_presenters(
         return {
             "success": False,
             "error": f"Invalid audience_level '{audience_level}'. Expected one of: {sorted(_AUDIENCE_LEVELS)}",
+            "suggested_presenters": [],
+        }
+
+    # Validate here rather than trusting the handler: this is a public function
+    # and `limit` reaches it from an LLM tool call, so it is model-generated
+    # input. A non-int or a huge value would otherwise reach the slicing and
+    # the availability pool unchecked.
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": f"limit must be an integer, got {limit!r}",
+            "suggested_presenters": [],
+        }
+    limit = max(1, min(limit, _MAX_LIMIT))
+
+    # A half-open window silently fell through to the no-window branch, which
+    # reports forward load — so a caller who asked "is anyone free on the 3rd?"
+    # got booking counts back and no answer to their actual question.
+    if bool(check_start_utc_ms) != bool(check_end_utc_ms):
+        return {
+            "success": False,
+            "error": "check_start_utc_ms and check_end_utc_ms must be given together",
+            "suggested_presenters": [],
+        }
+    if check_start_utc_ms and check_end_utc_ms and check_start_utc_ms >= check_end_utc_ms:
+        return {
+            "success": False,
+            "error": "check_start_utc_ms must be earlier than check_end_utc_ms",
             "suggested_presenters": [],
         }
 
@@ -942,10 +1112,21 @@ def get_suggested_presenters(
         }
 
     presenters = _extract_presenters_from_hits(hits, topic_query=topic_query)
-    ranked = _rank_presenters(presenters, limit, audience_level=audience_level)
+
+    # Rank a wider pool when availability is going to reorder the list. The
+    # availability pass can only promote people it can see, so cutting to
+    # `limit` first means a free presenter ranked just below the cut is never
+    # reachable — ask for 10 on a day all 10 are booked and the free 11th stays
+    # invisible. Widening costs nothing at the index: _check_presenter_conflicts
+    # queries by time window and filters emails locally, so 30 candidates is the
+    # same single request as 10.
+    window_given = bool(check_start_utc_ms and check_end_utc_ms)
+    pool_limit = limit * _AVAILABILITY_POOL_FACTOR if window_given else limit
+    ranked = _rank_presenters(presenters, pool_limit, audience_level=audience_level)
 
     logger.info(
         f"Found {len(ranked)} unique presenters from {len(hits)} activities"
+        + (f" (pool of {pool_limit} for availability)" if window_given else "")
         + (f" (audience_level={audience_level})" if audience_level else "")
     )
 
@@ -962,15 +1143,31 @@ def get_suggested_presenters(
             check_end_utc_ms,
             exclude_event_id=event_id,
         )
+        # The index only records briefing bookings, so leave, travel and manual
+        # holds are invisible to it. Ask BriefingIQ for those before deciding
+        # who is free — a presenter with nothing booked may still be on leave.
+        blocks = _presenter_blocks_in_window(
+            ranked, check_start_utc_ms, check_end_utc_ms, api_token, api_headers
+        )
         for p in ranked:
             hits_for_p = [c for e in (p.get("all_emails") or []) for c in conflicts.get(e, [])]
-            p["available"] = not hits_for_p
+            blocked = blocks.get(p.get("presenter_id") or "", [])
+            p["available"] = not hits_for_p and not blocked
             p["conflicts"] = hits_for_p[:3]  # cap at 3 for LLM context
-        # Demote the double-booked. Applied after ranking rather than inside the
-        # sort key so it only reorders within the results the caller asked for —
-        # a clashing presenter is still worth showing (they may be freed up),
-        # just not worth showing first.
+            if blocked:
+                p["blocked_time"] = blocked[:3]
+                p["blocked_note"] = (
+                    f"{len(blocked)} calendar block(s) in this window "
+                    f"({', '.join(sorted({b['kind'] for b in blocked}))}) — "
+                    "not a briefing, so this is time they are otherwise unavailable"
+                )
+        # Demote the double-booked rather than dropping them — a clashing
+        # presenter may still get freed up, so they stay in the list, just not
+        # at the top. sort() is stable, so ranking order survives inside each
+        # group. Only now is the pool cut to what the caller asked for, so a
+        # free presenter from deeper in the ranking can take a booked one's slot.
         ranked.sort(key=lambda p: 0 if p.get("available") else 1)
+        ranked = ranked[:limit]
     elif all_emails:
         # No window given. "Available" is meaningless without a time, so report
         # forward load instead — useful whether or not a date is in play, and

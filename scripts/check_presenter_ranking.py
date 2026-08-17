@@ -102,6 +102,105 @@ def _tier_label():
         f"{tom.get('match_tier')} on {tom.get('matched_topic')!r}"
 
 
+@case("tier: a short query never matches inside a longer word")
+def _word_boundary():
+    # The phrase tier used a bare substring test, so "AI" was a phrase match for
+    # "M-ai-ntenance Strategy" and "Tr-ai-ning" — loose matching creeping back in
+    # through the tier that is supposed to be strict, on exactly the short
+    # queries people actually type.
+    from tools.presenter_suggest import _classify_topic_match, TIER_SCOPE_ONLY, TIER_PHRASE
+
+    inside_word = [("Maintenance Strategy", "AI"), ("Cloud Training", "ai"),
+                   ("Database Administration", "data")]
+    real_phrase = [("AI Platform", "AI"), ("Big Data Appliance", "Big Data")]
+
+    bad = [(n, q) for n, q in inside_word if _classify_topic_match(n, q) != TIER_SCOPE_ONLY]
+    missed = [(n, q) for n, q in real_phrase if _classify_topic_match(n, q) != TIER_PHRASE]
+    return not bad and not missed, f"substring hits={bad} missed phrases={missed}"
+
+
+@case("revenue: formatted amounts parse instead of raising")
+def _revenue_coercion():
+    # These arrive from user-entered form fields. float() raises on every one,
+    # and the call site has no guard, so a single dirty cell took down the whole
+    # response rather than just its revenue.
+    from tools.presenter_suggest import _coerce_amount
+
+    cases = {"": None, "  ": None, "abc": None, None: None,
+             "1,200": 1200.0, "$500": 500.0, "-1,000.50": -1000.5, 0: 0.0, 42.5: 42.5}
+    wrong = {}
+    for raw, want in cases.items():
+        try:
+            got = _coerce_amount(raw)
+        except Exception as exc:
+            got = f"RAISED {type(exc).__name__}"
+        if got != want:
+            wrong[repr(raw)] = f"{got} != {want}"
+    return not wrong, f"mismatches={wrong}" if wrong else "all parsed"
+
+
+@case("guards: a half-open or inverted time window is rejected")
+def _window_guard():
+    # A half-open window used to fall through to the no-window branch, so a
+    # caller asking "is anyone free on the 3rd?" silently got booking counts
+    # back instead of an answer.
+    half = get_suggested_presenters(topic=SEED_TOPIC, check_start_utc_ms=1_700_000_000_000)
+    inverted = get_suggested_presenters(
+        topic=SEED_TOPIC, check_start_utc_ms=5_000, check_end_utc_ms=2_000
+    )
+    bad_limit = get_suggested_presenters(topic=SEED_TOPIC, limit="abc")
+    ok = (not half.get("success") and not inverted.get("success")
+          and not bad_limit.get("success"))
+    return ok, (f"half={half.get('error')!r} inverted={inverted.get('error')!r} "
+                f"limit={bad_limit.get('error')!r}")
+
+
+@case("scope: customer and industry together constrain, not widen")
+def _scope_and():
+    # All three clauses used to sit in one `should`, turning "this customer in
+    # this industry" into "this customer OR anyone in that industry".
+    from tools.presenter_suggest import _fetch_event_ids_by_scope
+    from opensearch_client import search
+
+    agg = search(index="events", body={"size": 0, "aggs": {
+        "c": {"terms": {"field": "eventFormData.VISIT_INFO.customerName.keyword", "size": 1}},
+        "i": {"terms": {"field": "eventFormData.VISIT_INFO.customerIndustry.keyword", "size": 1}},
+    }}).get("aggregations") or {}
+    cust = [b["key"] for b in agg.get("c", {}).get("buckets", [])]
+    inds = [b["key"] for b in agg.get("i", {}).get("buckets", [])]
+    if not cust or not inds:
+        return None, "no customer/industry values indexed"
+
+    only_c = _fetch_event_ids_by_scope(cust[0], None)
+    only_i = _fetch_event_ids_by_scope(None, inds[0])
+    both = _fetch_event_ids_by_scope(cust[0], inds[0])
+    if not only_c and not only_i:
+        return None, "neither filter resolved any events"
+    return len(both) <= min(len(only_c), len(only_i)), \
+        f"customer={len(only_c)} industry={len(only_i)} both={len(both)}"
+
+
+@case("availability: the conflict scan is not silently capped at 50")
+def _conflict_scan_depth():
+    # The scan asked for size 200 but never passed size_cap, so the wrapper
+    # clamped it to 50 and everything past that was invisible — reporting a
+    # genuinely double-booked presenter as free.
+    import time
+    from tools.presenter_suggest import _check_presenter_conflicts, _CONFLICT_SCAN_SIZE
+
+    r = get_suggested_presenters(topic=SEED_TOPIC, limit=10)
+    emails = sorted({e for p in r.get("suggested_presenters", []) for e in p.get("all_emails") or []})
+    if not emails:
+        return None, "no presenters to check"
+
+    now = int(time.time() * 1000)
+    wide = _check_presenter_conflicts(emails, now - 86400000 * 400, now + 86400000 * 400)
+    total = sum(len(v) for v in wide.values())
+    if total < 50:
+        return None, f"only {total} conflicts in range — cannot distinguish a 50 cap"
+    return total > 50, f"{total} conflicts found across {len(emails)} emails (cap {_CONFLICT_SCAN_SIZE})"
+
+
 @case("miss: a topic nobody has covered returns nobody")
 def _miss():
     r = get_suggested_presenters(topic="Quantum Teleportation Ethics", limit=5)
@@ -163,6 +262,70 @@ def _no_window():
         return None, "no results"
     return all("available" not in p for p in ps), \
         "available present without a window" if any("available" in p for p in ps) else "absent as expected"
+
+
+def _session_window_for(emails):
+    """A real (start, end) window in which one of `emails` is booked.
+
+    Derived from the index rather than from upcoming_dates: a presenter's
+    sessions are often all in the past, which leaves upcoming_dates empty
+    while the clash is still perfectly checkable.
+    """
+    from opensearch_client import search
+    from tools.presenter_suggest import _build_activity_query, _deep_get
+
+    want = {e.lower() for e in emails}
+    result = search(
+        index="activities",
+        body={"query": _build_activity_query(SEED_TOPIC, None), "size": 50},
+    )
+    for hit in result.get("hits", []):
+        src = hit.get("source", {})
+        start = _deep_get(src, "startTime.utcMs")
+        end = _deep_get(src, "endTime.utcMs")
+        if not start or not end:
+            continue
+        for pe in (src.get("activityData") or {}).get("topic_presenter") or []:
+            email = (_deep_get(pe, "presenter.primaryEmail") or "").lower()
+            if email in want:
+                return int(start), int(end)
+    return None, None
+
+
+@case("availability: a free presenter below the cut is not lost to booked ones")
+def _availability_pool():
+    # The bug this pins: availability was applied AFTER truncating to `limit`,
+    # so it could only reorder people already in the list — ask for 1 on a day
+    # the leader is busy and you got the busy leader, never the free runner-up.
+    wide = get_suggested_presenters(topic=SEED_TOPIC, limit=10)
+    ps = wide.get("suggested_presenters", [])
+    if len(ps) < 2:
+        return None, "need at least 2 seeded presenters on the topic"
+
+    leader = ps[0]
+    start, end = _session_window_for(leader.get("all_emails") or [leader.get("email", "")])
+    if not start:
+        return None, f"no indexed session found for {leader['presenter_name']}"
+
+    r = get_suggested_presenters(
+        topic=SEED_TOPIC, limit=1,
+        check_start_utc_ms=start, check_end_utc_ms=end,
+    )
+    got = r.get("suggested_presenters", [])
+    if not got:
+        return None, "windowed query returned nothing"
+
+    top = got[0]
+    if top.get("available"):
+        return True, f"slot went to {top['presenter_name']} (free), not {leader['presenter_name']} (booked)"
+
+    # Only acceptable if genuinely nobody on this topic is free in that window.
+    everyone = get_suggested_presenters(
+        topic=SEED_TOPIC, limit=10,
+        check_start_utc_ms=start, check_end_utc_ms=end,
+    ).get("suggested_presenters", [])
+    free = [p["presenter_name"] for p in everyone if p.get("available")]
+    return not free, f"returned booked {top['presenter_name']} while these were free: {free}"
 
 
 @case("identity: one person never occupies two slots")

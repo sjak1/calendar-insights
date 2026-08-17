@@ -319,8 +319,16 @@ def get_suggested_presenters(
     index: Optional[str] = None,
     check_start_utc_ms: Optional[int] = None,
     check_end_utc_ms: Optional[int] = None,
+    api_token: Optional[str] = None,
+    api_headers: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Suggest presenters from activity matches. Delegates to tools.presenter_suggest."""
+    """Suggest presenters from activity matches. Delegates to tools.presenter_suggest.
+
+    Keep this signature in step with the implementation — callers import
+    get_suggested_presenters from HERE, not from tools.presenter_suggest, so a
+    parameter added there but not mirrored here fails at call time with an
+    unexpected-keyword TypeError rather than at import.
+    """
     try:
         from tools.presenter_suggest import get_suggested_presenters as _impl
 
@@ -334,6 +342,8 @@ def get_suggested_presenters(
             index=index,
             check_start_utc_ms=check_start_utc_ms,
             check_end_utc_ms=check_end_utc_ms,
+            api_token=api_token,
+            api_headers=api_headers,
         )
     except ImportError:
         return {

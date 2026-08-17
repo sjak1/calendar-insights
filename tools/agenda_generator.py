@@ -920,7 +920,12 @@ def _merge_presenter_recommendations(
     suggestions: List[Dict[str, Any]],
     source: str,
 ) -> None:
-    """Merge presenter suggestions from multiple scopes into one ranked map."""
+    """Merge presenter suggestions from multiple scopes into one ranked map.
+
+    Carries through the signals suggest_presenters already computed — match
+    tier, recency-weighted depth, accepted count — so the merged list can be
+    ordered on them instead of re-deriving an order from raw session counts.
+    """
     for suggestion in suggestions:
         name = (suggestion.get("presenter_name") or "").strip()
         if not name:
@@ -930,6 +935,7 @@ def _merge_presenter_recommendations(
             name,
             {
                 "presenter_name": name,
+                "presenter_id": suggestion.get("presenter_id", ""),
                 "session_count": 0,
                 "event_count": 0,
                 "sources": [],
@@ -937,13 +943,36 @@ def _merge_presenter_recommendations(
                 "sample_event_id": suggestion.get("sample_event_id"),
                 "sample_event_name": suggestion.get("sample_event_name"),
                 "reasons": [],
+                # Ranked signals, kept at their strongest across scopes.
+                "match_tier": "",
+                "recency_weighted_sessions": 0.0,
+                "accepted_count": 0,
             },
         )
-        existing["session_count"] += int(suggestion.get("session_count") or 0)
+        # Take the max, never the sum: the same person is returned by several
+        # scopes, and their session_count is the SAME underlying history each
+        # time. Adding them made anyone matched by all three look three times
+        # as experienced as they are.
+        existing["session_count"] = max(
+            existing["session_count"],
+            int(suggestion.get("session_count") or 0),
+        )
         existing["event_count"] = max(
             existing["event_count"],
             int(suggestion.get("event_count") or 0),
         )
+        existing["accepted_count"] = max(
+            existing["accepted_count"],
+            int(suggestion.get("accepted_count") or 0),
+        )
+        existing["recency_weighted_sessions"] = max(
+            existing["recency_weighted_sessions"],
+            float(suggestion.get("recency_weighted_sessions") or 0.0),
+        )
+        if suggestion.get("match_tier") and not existing["match_tier"]:
+            existing["match_tier"] = suggestion["match_tier"]
+        if not existing.get("presenter_id") and suggestion.get("presenter_id"):
+            existing["presenter_id"] = suggestion["presenter_id"]
         if source not in existing["sources"]:
             existing["sources"].append(source)
         reason = suggestion.get("reason")
@@ -1035,14 +1064,32 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
         except Exception as e:
             logger.warning(f"Presenter suggestions failed for source '{source}': {e}")
 
-    ranked = sorted(
-        combined.values(),
-        key=lambda item: (
-            -item["session_count"],
-            -item["event_count"],
+    # Order on what suggest_presenters already worked out, not on raw volume.
+    # Sorting by session_count alone undid the ranking entirely — no topic tier,
+    # no recency decay, no acceptance — so someone with thirty stale sessions
+    # outranked someone active this quarter, which is exactly what the decay in
+    # _rank_presenters exists to prevent.
+    #
+    # Scope leads, because it is the one thing the agenda knows that the ranking
+    # cannot: having presented at THIS event beats a company match, which beats
+    # a bare industry match, however deep that person's history is.
+    _SCOPE_RANK = {"same_event": 0, "same_company": 1, "industry": 2}
+
+    def _agenda_sort_key(item: Dict[str, Any]):
+        best_scope = min(
+            (_SCOPE_RANK.get(s, 9) for s in item.get("sources") or []), default=9
+        )
+        return (
+            best_scope,
+            0 if item.get("available") is not False else 1,   # free first
+            -round(float(item.get("recency_weighted_sessions") or 0.0), 3),
+            -int(item.get("accepted_count") or 0),
+            -int(item.get("session_count") or 0),
+            -int(item.get("event_count") or 0),
             item["presenter_name"].lower(),
-        ),
-    )
+        )
+
+    ranked = sorted(combined.values(), key=_agenda_sort_key)
 
     # Cross-validate: exclude presenters who are actually attendees at this event
     attendee_names = {
