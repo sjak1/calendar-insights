@@ -681,6 +681,13 @@ def execute_tool(
                     limit=limit,
                     check_start_utc_ms=_resolve_ms(args.get("check_start_utc_ms")),
                     check_end_utc_ms=_resolve_ms(args.get("check_end_utc_ms")),
+                    # Forward the caller's own credentials so availability can
+                    # include blocked time (leave, travel) from the live
+                    # calendar. Same pattern the room tools use. Absent in
+                    # non-request contexts, where availability degrades to
+                    # briefing bookings only.
+                    api_token=(schedule_headers or {}).get("Authorization", ""),
+                    api_headers=schedule_headers,
                 )
                 output = {"suggest_presenters": result}
             logger.info(f"✓ suggest_presenters returned {len(output.get('suggest_presenters', {}).get('suggested_presenters', []))} presenters")

@@ -706,6 +706,88 @@ def get_resource_schedule(
     return out
 
 
+def get_presenter_blocks(
+    presenter_ids: List[str],
+    token: str,
+    schedule_headers: Optional[Dict] = None,
+    start_ms: Optional[int] = None,
+    end_ms: Optional[int] = None,
+) -> Dict[str, List[Dict]]:
+    """Blocked time per presenter, from the live BriefingIQ calendar.
+
+    Presenters are tenant resources, so a presenter's own uniqueId works
+    directly against /resources/{id}/calendars — the same endpoint rooms use.
+    (The API catalog lists /presenters/{id}/calendars, but that route 404s on
+    the live host; /resources/{id}/calendars is what actually serves.)
+
+    This is the one availability signal the activities index cannot supply.
+    The index only knows briefing bookings, so leave, travel and manual holds
+    are invisible to it — which is why presenter_suggest says "booked" rather
+    than "free". These entries are that missing half.
+
+    Fails soft and per-presenter: a token that expired mid-request, or one
+    resource erroring, degrades to "no blocks known for that person" rather
+    than failing the whole suggestion. Availability is advisory here; losing it
+    must never cost the caller their presenter list.
+
+    Returns {presenter_id: [{unique_id, kind, start_utc_ms, end_utc_ms,
+    comments}]}, only for presenters that actually have blocks.
+    """
+    if not presenter_ids or not token:
+        return {}
+
+    out: Dict[str, List[Dict]] = {}
+    headers = _make_headers(token, None, schedule_headers)
+
+    for pid in presenter_ids:
+        if not pid:
+            continue
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/resources/{pid}/calendars", headers=headers, timeout=15
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    f"presenter blocks {pid}: HTTP {resp.status_code} {resp.text[:120]}"
+                )
+                continue
+            entries = resp.json().get("_embedded", {}).get("resourceCalendars", []) or []
+        except Exception as exc:
+            logger.warning(f"presenter blocks {pid} failed: {type(exc).__name__}: {exc}")
+            continue
+
+        blocks = []
+        for e in entries:
+            if e.get("isActive") is False:
+                continue
+            st = (e.get("calendarStartTime") or {}).get("utcMs")
+            et = (e.get("calendarEndTime") or {}).get("utcMs")
+            if st is None or et is None:
+                continue
+            # Filter to the window here rather than in the query: the endpoint
+            # takes no date range, so it returns the resource's whole history.
+            if start_ms is not None and end_ms is not None:
+                if not (et > start_ms and st < end_ms):
+                    continue
+            blocks.append({
+                "unique_id": e.get("uniqueId"),
+                "kind": e.get("calendarType") or "BLOCKED",
+                "start_utc_ms": st,
+                "end_utc_ms": et,
+                "all_day": bool(e.get("blockAllDay")),
+                "comments": e.get("comments"),
+            })
+        if blocks:
+            blocks.sort(key=lambda b: b["start_utc_ms"])
+            out[pid] = blocks
+
+    logger.info(
+        f"get_presenter_blocks: {len(presenter_ids)} presenter(s) checked, "
+        f"{len(out)} with blocked time"
+    )
+    return out
+
+
 def find_vacant_slots(
     resource_id: str,
     date: str,
