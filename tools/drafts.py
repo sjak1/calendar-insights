@@ -252,7 +252,11 @@ def draft_confirmation_email(
     a focused sub-LLM (Haiku) writing the actual prose. Returns subject + body.
     """
     headers = schedule_headers or {}
-    token = headers.get("Authorization", "")
+    # Case-tolerant: HTTP/2 lowercases header names, so a browser sends
+    # `authorization` and a plain .get("Authorization") returns "".
+    from tools.handlers import _bearer_token
+
+    token = _bearer_token(headers)
 
     evt = _fetch_event(event_id)
     activities = _fetch_activities(event_id, token, headers)
@@ -338,7 +342,11 @@ def draft_catering_sheet(
     headcount, AV, and catering notes derived from activity data.
     """
     headers = schedule_headers or {}
-    token = headers.get("Authorization", "")
+    # Case-tolerant: HTTP/2 lowercases header names, so a browser sends
+    # `authorization` and a plain .get("Authorization") returns "".
+    from tools.handlers import _bearer_token
+
+    token = _bearer_token(headers)
 
     evt = _fetch_event(event_id)
     activities = _fetch_activities(event_id, token, headers)

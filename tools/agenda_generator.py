@@ -1069,7 +1069,13 @@ def _get_presenter_recommendations(
             # bookings. Optional: without them this degrades to booking-only
             # availability, which is what the agenda had before.
             if schedule_headers:
-                cleaned_kwargs["api_token"] = schedule_headers.get("Authorization", "")
+                # Case-tolerant: HTTP/2 lowercases header names, so a browser
+                # sends `authorization` and a plain .get("Authorization") is
+                # empty. Same helper the tool handlers use — do not inline a
+                # .get() here, that is exactly the bug this replaced.
+                from tools.handlers import _bearer_token
+
+                cleaned_kwargs["api_token"] = _bearer_token(schedule_headers)
                 cleaned_kwargs["api_headers"] = schedule_headers
             result = get_suggested_presenters(**cleaned_kwargs)
             if result.get("success"):
