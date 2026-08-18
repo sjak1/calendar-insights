@@ -106,6 +106,12 @@ class TopicPresenterSuggestion(BaseModel):
     matched_topic: Optional[str] = None
     available: Optional[bool] = None
     reason: Optional[str] = None
+    # Deal movement at the briefings this person presented at. Context only —
+    # never a ranking input, and always carried WITH its caveat, because a
+    # briefing has several presenters and one revenue figure.
+    revenue_delta: Optional[float] = None
+    revenue_events: Optional[int] = None
+    revenue_note: Optional[str] = None
 
 
 class AgendaSession(BaseModel):
@@ -960,85 +966,6 @@ def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
     return ebd_context
 
 
-def _merge_presenter_recommendations(
-    combined: Dict[str, Dict[str, Any]],
-    suggestions: List[Dict[str, Any]],
-    source: str,
-) -> None:
-    """Merge presenter suggestions from multiple scopes into one ranked map.
-
-    Carries through the signals suggest_presenters already computed — match
-    tier, recency-weighted depth, accepted count — so the merged list can be
-    ordered on them instead of re-deriving an order from raw session counts.
-    """
-    for suggestion in suggestions:
-        name = (suggestion.get("presenter_name") or "").strip()
-        if not name:
-            continue
-
-        existing = combined.setdefault(
-            name,
-            {
-                "presenter_name": name,
-                "presenter_id": suggestion.get("presenter_id", ""),
-                "session_count": 0,
-                "event_count": 0,
-                "sources": [],
-                "sample_topic": suggestion.get("sample_topic"),
-                "sample_event_id": suggestion.get("sample_event_id"),
-                "sample_event_name": suggestion.get("sample_event_name"),
-                "reasons": [],
-                # Ranked signals, kept at their strongest across scopes.
-                "match_tier": "",
-                "recency_weighted_sessions": 0.0,
-                "accepted_count": 0,
-            },
-        )
-        # Take the max, never the sum: the same person is returned by several
-        # scopes, and their session_count is the SAME underlying history each
-        # time. Adding them made anyone matched by all three look three times
-        # as experienced as they are.
-        existing["session_count"] = max(
-            existing["session_count"],
-            int(suggestion.get("session_count") or 0),
-        )
-        existing["event_count"] = max(
-            existing["event_count"],
-            int(suggestion.get("event_count") or 0),
-        )
-        existing["accepted_count"] = max(
-            existing["accepted_count"],
-            int(suggestion.get("accepted_count") or 0),
-        )
-        existing["recency_weighted_sessions"] = max(
-            existing["recency_weighted_sessions"],
-            float(suggestion.get("recency_weighted_sessions") or 0.0),
-        )
-        if suggestion.get("match_tier") and not existing["match_tier"]:
-            existing["match_tier"] = suggestion["match_tier"]
-        if not existing.get("presenter_id") and suggestion.get("presenter_id"):
-            existing["presenter_id"] = suggestion["presenter_id"]
-        if source not in existing["sources"]:
-            existing["sources"].append(source)
-        reason = suggestion.get("reason")
-        if reason and reason not in existing["reasons"]:
-            existing["reasons"].append(reason)
-        if not existing.get("sample_topic") and suggestion.get("sample_topic"):
-            existing["sample_topic"] = suggestion.get("sample_topic")
-        if not existing.get("sample_event_id") and suggestion.get("sample_event_id"):
-            existing["sample_event_id"] = suggestion.get("sample_event_id")
-        if not existing.get("sample_event_name") and suggestion.get("sample_event_name"):
-            existing["sample_event_name"] = suggestion.get("sample_event_name")
-        # Carry availability — once flagged as booked, stays booked even if another
-        # scope returns them as available (conservative: surface conflicts)
-        if "available" not in existing:
-            existing["available"] = suggestion.get("available")
-            existing["conflicts"] = suggestion.get("conflicts", [])
-        elif suggestion.get("available") is False:
-            existing["available"] = False
-            existing["conflicts"] = suggestion.get("conflicts", [])
-
-
 def _availability_window(meeting: Dict[str, Any]):
     """Start/end of the event day in the EVENT's own timezone, as epoch ms.
 
@@ -1162,6 +1089,9 @@ def _assign_presenters_by_topic(
             matched_topic=best.get("matched_topic"),
             available=best.get("available"),
             reason=best.get("reason"),
+            revenue_delta=best.get("revenue_delta"),
+            revenue_events=best.get("revenue_events"),
+            revenue_note=best.get("revenue_note"),
         )
         # An unfilled slot is a different decision from a filled one. When the
         # session has no real presenter — TBD, blank, or a placeholder — a
@@ -1192,11 +1122,51 @@ def _assign_presenters_by_topic(
             reassigned += 1
             break
 
+    # A plain-language account of every pick, so the answer can show its
+    # working rather than asserting a name. One entry per distinct topic, in
+    # the ranking's own words plus the revenue caveat where there is one.
+    rationale = []
+    for topic in topics:
+        people = by_topic.get(topic) or []
+        if not people:
+            rationale.append({
+                "topic": topic,
+                "chosen": None,
+                "why": "nobody in the history has presented this topic",
+            })
+            continue
+        best = people[0]
+        entry = {
+            "topic": topic,
+            "chosen": best.get("presenter_name"),
+            "why": best.get("reason") or "",
+            "available": best.get("available"),
+            "runners_up": [
+                {"presenter_name": c.get("presenter_name"), "why": c.get("reason") or ""}
+                for c in people[1:3]
+            ],
+        }
+        if best.get("revenue_note"):
+            entry["revenue"] = best["revenue_note"]
+        rationale.append(entry)
+
     logger.info(
         f"Per-session presenters: {len(topics)} topic(s) looked up, "
         f"{matched} session(s) matched, {reassigned} reassigned"
     )
-    return {"checked": len(topics), "matched": matched, "reassigned": reassigned}
+    return {
+        "checked": len(topics),
+        "matched": matched,
+        "reassigned": reassigned,
+        "rationale": rationale,
+        "guidance": (
+            "rationale explains why each presenter was picked for their topic — "
+            "depth on that topic, acceptance record, and availability. Show it when "
+            "the user asks who was chosen or why. Revenue, where present, is deal "
+            "movement at that person's briefings: quote it only with its caveat, "
+            "since a briefing has several presenters and one figure."
+        ),
+    }
 
 
 def _get_presenter_recommendations(
@@ -1225,79 +1195,53 @@ def _get_presenter_recommendations(
     # Event-day availability window, in the event's own timezone.
     check_start_ms, check_end_ms = _availability_window(meeting)
 
-    combined: Dict[str, Dict[str, Any]] = {}
-    # NB: event_id is deliberately only on the same_event call. It doubles as
-    # the SCOPE filter in get_suggested_presenters — passing it here as well
-    # would collapse the company and industry lookups into three copies of the
-    # same-event query. The cost is that this event's own sessions count as
-    # conflicts on those two calls, so presenters already booked onto it read
-    # as double-booked. Fixing that needs an exclude_event_id separate from
-    # the scope filter, not a wider event_id.
-    scoped_calls = [
-        ("same_event", {"event_id": event_id, "limit": 5}),
-        ("same_company", {"customer_name": company_name, "limit": 5}),
-        ("industry", {"industry": industry, "limit": 8}),
+    # ONE ranked call, not three merged. get_suggested_presenters already
+    # returns candidates in ranked order; the agenda used to make three scoped
+    # calls and re-sort the union, which meant a second ranking sitting on top
+    # of the real one and drifting from it. Scopes are tried most-specific
+    # first and the first that returns anything wins — the same intent the
+    # merge had, without a competing sort.
+    scopes = [
+        ("same_event", {"event_id": event_id}),
+        ("same_company", {"customer_name": company_name}),
+        ("industry", {"industry": industry}),
     ]
 
-    for source, kwargs in scoped_calls:
-        cleaned_kwargs = {k: v for k, v in kwargs.items() if v}
-        if not cleaned_kwargs:
+    ranked: List[Dict[str, Any]] = []
+    source = ""
+    for label, scope_kwargs in scopes:
+        kwargs = {k: v for k, v in scope_kwargs.items() if v}
+        if not kwargs:
             continue
+        kwargs["limit"] = 8
         if check_start_ms and check_end_ms:
-            cleaned_kwargs["check_start_utc_ms"] = check_start_ms
-            cleaned_kwargs["check_end_utc_ms"] = check_end_ms
+            kwargs["check_start_utc_ms"] = check_start_ms
+            kwargs["check_end_utc_ms"] = check_end_ms
+        if schedule_headers:
+            # Case-tolerant: HTTP/2 lowercases header names, so a browser sends
+            # `authorization` and a plain .get("Authorization") is empty. Use
+            # the shared helper — inlining a .get() here is exactly the bug it
+            # replaced.
+            from tools.handlers import _bearer_token
+
+            kwargs["api_token"] = _bearer_token(schedule_headers)
+            kwargs["api_headers"] = schedule_headers
         try:
-            # Forward the caller's BriefingIQ credentials so availability can
-            # include blocked time (leave, travel, holds) alongside briefing
-            # bookings. Optional: without them this degrades to booking-only
-            # availability, which is what the agenda had before.
-            if schedule_headers:
-                # Case-tolerant: HTTP/2 lowercases header names, so a browser
-                # sends `authorization` and a plain .get("Authorization") is
-                # empty. Same helper the tool handlers use — do not inline a
-                # .get() here, that is exactly the bug this replaced.
-                from tools.handlers import _bearer_token
-
-                cleaned_kwargs["api_token"] = _bearer_token(schedule_headers)
-                cleaned_kwargs["api_headers"] = schedule_headers
-            result = get_suggested_presenters(**cleaned_kwargs)
-            if result.get("success"):
-                _merge_presenter_recommendations(
-                    combined,
-                    result.get("suggested_presenters", []),
-                    source,
-                )
+            result = get_suggested_presenters(**kwargs)
         except Exception as e:
-            logger.warning(f"Presenter suggestions failed for source '{source}': {e}")
+            logger.warning(f"Presenter suggestions failed for scope '{label}': {e}")
+            continue
+        if result.get("success") and result.get("suggested_presenters"):
+            ranked = result["suggested_presenters"]
+            source = label
+            logger.info(f"Presenter pool from scope '{label}': {len(ranked)} candidates")
+            break
 
-    # Order on what suggest_presenters already worked out, not on raw volume.
-    # Sorting by session_count alone undid the ranking entirely — no topic tier,
-    # no recency decay, no acceptance — so someone with thirty stale sessions
-    # outranked someone active this quarter, which is exactly what the decay in
-    # _rank_presenters exists to prevent.
-    #
-    # Scope leads, because it is the one thing the agenda knows that the ranking
-    # cannot: having presented at THIS event beats a company match, which beats
-    # a bare industry match, however deep that person's history is.
-    _SCOPE_RANK = {"same_event": 0, "same_company": 1, "industry": 2}
+    if not ranked:
+        return []
 
-    def _agenda_sort_key(item: Dict[str, Any]):
-        best_scope = min(
-            (_SCOPE_RANK.get(s, 9) for s in item.get("sources") or []), default=9
-        )
-        return (
-            best_scope,
-            0 if item.get("available") is not False else 1,   # free first
-            -round(float(item.get("recency_weighted_sessions") or 0.0), 3),
-            -int(item.get("accepted_count") or 0),
-            -int(item.get("session_count") or 0),
-            -int(item.get("event_count") or 0),
-            item["presenter_name"].lower(),
-        )
-
-    ranked = sorted(combined.values(), key=_agenda_sort_key)
-
-    # Cross-validate: exclude presenters who are actually attendees at this event
+    # Exclude anyone attending as a customer — they are in the room, not
+    # presenting to it.
     attendee_names = {
         a.get("name", "").strip().lower()
         for a in context.get("attendees", [])
@@ -1305,31 +1249,40 @@ def _get_presenter_recommendations(
     }
 
     recommendations = []
-    for item in ranked[:8]:
-        name_lower = item["presenter_name"].strip().lower()
+    for item in ranked:
+        name_lower = (item.get("presenter_name") or "").strip().lower()
         if name_lower in attendee_names:
-            logger.info(f"Excluding presenter rec '{item['presenter_name']}' — is an external attendee")
+            logger.info(
+                f"Excluding presenter rec {item.get('presenter_name')!r} — is an external attendee"
+            )
             continue
-        source_label = ", ".join(item["sources"]) if item["sources"] else "unknown"
-        reason_bits = list(item["reasons"]) or [f"{item['session_count']} matched activities"]
         conflict_note = ""
         available = item.get("available")
         if available is False:
-            top_conflicts = item.get("conflicts", [])[:2]
-            slots = ", ".join(c.get("time", "") for c in top_conflicts if c.get("time"))
-            conflict_note = f" ⚠️ May be double-booked on event day ({slots})" if slots else " ⚠️ May be double-booked on event day"
+            slots = ", ".join(
+                c.get("time", "") for c in (item.get("conflicts") or [])[:2] if c.get("time")
+            )
+            conflict_note = (
+                f" ⚠️ May be double-booked on event day ({slots})"
+                if slots
+                else " ⚠️ May be double-booked on event day"
+            )
         recommendations.append(
             {
-                "presenter_name": item["presenter_name"],
-                "session_count": item["session_count"],
-                "event_count": item["event_count"],
-                "sources": item["sources"],
+                "presenter_name": item.get("presenter_name"),
+                "presenter_id": item.get("presenter_id", ""),
+                "title": item.get("title", ""),
+                "session_count": item.get("session_count", 0),
+                "event_count": item.get("event_count", 0),
+                "match_tier": item.get("match_tier", ""),
+                "recency_weighted_sessions": item.get("recency_weighted_sessions", 0),
+                "accepted_count": item.get("accepted_count", 0),
+                "source": source,
                 "sample_topic": item.get("sample_topic"),
                 "sample_event_id": item.get("sample_event_id"),
-                "sample_event_name": item.get("sample_event_name"),
                 "available": available,
-                "conflicts": item.get("conflicts", [])[:2],
-                "reason": f"Sources: {source_label}. " + " | ".join(reason_bits[:2]) + conflict_note,
+                "conflicts": (item.get("conflicts") or [])[:2],
+                "reason": f"Scope: {source}. {item.get('reason', '')}{conflict_note}",
             }
         )
 
@@ -1735,6 +1688,7 @@ External: {len(external_attendees)}
 7. Vary session formats (Presentation, Demo, Roundtable, Working Session).
 8. {'ATTENDEES ARE NOT PRESENTERS. The document lists who will be in the room — account team, points of contact, executives attending. Never put those names in a presenter field. Only use a name from the document if it explicitly says that person is presenting or speaking on a topic.' if has_ebd else 'Use presenter recommendations below when relevant.'}
 9. {'Presenters come from the PRESENTER RECOMMENDATIONS below, chosen per session by topic fit. Use TBD when none fits — TBD is correct and expected; inventing a presenter, or promoting an attendee into the role, is not.' if presenter_recommendations else 'If no strong presenter match is available, use TBD.'}
+9b. Put the presenter's name ONLY in the `presenter` field. Never name them in `description` — write "this session covers X", not "Deepa will cover X". Assignments are re-checked against topic expertise and availability after you generate, so a name written into prose can end up contradicting the presenter actually assigned.
 10. {'Extract any dollar figures / KPIs from the document into key_metrics fields.' if has_ebd else ''}
 11. {'Use any customer references found in the document.' if has_ebd else ''}
 12. Prioritise high-relevance previous meetings when designing the flow; avoid repeating topics from recent meetings.
