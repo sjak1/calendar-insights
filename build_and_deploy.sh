@@ -7,7 +7,10 @@ set -e
 AWS_REGION="us-west-2"
 AWS_ACCOUNT_ID=""  # Will be detected automatically if AWS CLI is configured
 ECR_REPO_NAME="calender-insights-lambda"
-LAMBDA_FUNCTION_NAME="calendar-insights-demo calendar-ai-api-1"  # space-separated list
+LAMBDA_FUNCTION_NAME="calendar-ai-api-1"  # space-separated list
+# calendar-insights-demo removed: it has only OPENAI_API_KEY set, so it crashes
+# at import on the missing ORACLE_CONNECTION_URI and returns 502. It was broken
+# before this was noticed; deploying to it only reported false success.
 IMAGE_TAG="latest"
 
 # Get AWS account ID if not set
