@@ -285,8 +285,18 @@ def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Dict with 'raw_text' and 'has_ebd' if found, None otherwise
     """
-    logger.info(f"Attempting to fetch EBD from database for event: {event_id}")
-    
+    # VW_EVENT_DOCUMENT_REPORT.eventid holds the NUMERIC id, while callers pass
+    # the UUID from x-cloud-eventid. Comparing those never matches, so every EBD
+    # lookup returned "not found" regardless of whether a document was attached.
+    from tools.event_resolver import resolve_numeric_event_id
+
+    numeric_id = resolve_numeric_event_id(event_id)
+    if not numeric_id:
+        logger.info(f"Could not resolve a numeric id for event {event_id}; skipping EBD lookup")
+        return None
+    if numeric_id != event_id:
+        logger.info(f"EBD lookup: {event_id} → numeric id {numeric_id}")
+
     try:
         with engine.connect() as conn:
             # Query for EBD document blob
@@ -298,7 +308,7 @@ def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
                 AND document IS NOT NULL
                 FETCH FIRST 1 ROW ONLY
             """)
-            result = conn.execute(query, {"event_id": event_id})
+            result = conn.execute(query, {"event_id": numeric_id})
             row = result.fetchone()
             
             if not row:

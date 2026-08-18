@@ -63,6 +63,54 @@ def _deep_get(obj: Any, dotted_path: str) -> Any:
     return obj
 
 
+def resolve_numeric_event_id(event_id: Optional[str]) -> Optional[str]:
+    """Resolve any event identifier to the NUMERIC id (m_request_master.id).
+
+    A briefing carries three identifiers and different stores key on different
+    ones:
+      - UUID              391C88BE-...   OpenSearch, and the x-cloud-eventid header
+      - CBR event number  CBR-20260820-190
+      - numeric id        731318021042   Oracle document views
+
+    resolve_event_id() converts to the CBR form for OpenSearch. This is its
+    counterpart for the SQL side: VW_EVENT_DOCUMENT_REPORT.eventid holds the
+    numeric id, so a UUID passed straight into that query matches nothing —
+    silently, for every event. That is why EBD lookups always reported
+    "No EBD found" even when the document was correctly attached.
+
+    Returns the numeric id as a string, or None when it cannot be resolved.
+    """
+    if not event_id:
+        return None
+    if str(event_id).isdigit():
+        return str(event_id)
+
+    is_uuid = "-" in event_id and len(event_id) == 36
+    is_cbr = str(event_id).startswith("CBR-")
+    if not (is_uuid or is_cbr):
+        return None
+
+    where_col = "unique_id" if is_uuid else "event_number"
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    f"SELECT id FROM m_request_master "
+                    f"WHERE UPPER({where_col}) = UPPER(:val)"
+                ),
+                {"val": event_id},
+            ).fetchone()
+            if row and row[0] is not None:
+                numeric = str(row[0])
+                logger.info(f"Resolved {event_id} → numeric id {numeric}")
+                return numeric
+            logger.warning(f"No numeric id for {event_id} via m_request_master.{where_col}")
+            return None
+    except Exception as e:
+        logger.error(f"Error resolving numeric event_id: {e}")
+        return None
+
+
 def resolve_event_id(event_id: Optional[str]) -> Optional[str]:
     """
     Resolve event_id to the form OpenSearch indexes (CBR-style `event_number`).
