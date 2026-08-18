@@ -1160,11 +1160,23 @@ def _assign_presenters_by_topic(
         "reassigned": reassigned,
         "rationale": rationale,
         "guidance": (
-            "rationale explains why each presenter was picked for their topic — "
-            "depth on that topic, acceptance record, and availability. Show it when "
-            "the user asks who was chosen or why. Revenue, where present, is deal "
-            "movement at that person's briefings: quote it only with its caveat, "
-            "since a briefing has several presenters and one figure."
+            "ALWAYS end the agenda with a short 'Why these presenters' section — "
+            "do not wait to be asked. A staffing choice a reader cannot check is a "
+            "choice they cannot trust, and the whole point of ranking on evidence "
+            "is that the evidence can be shown.\n"
+            "Keep it to ONE line per presenter: name, the topic they matched, and "
+            "the depth that won it (e.g. 'Naveen Sajja — Commerce Cloud: 2 sessions "
+            "on it, 1 accepted'). Flag anyone unavailable on the day. Do not list "
+            "runners-up, do not repeat the full reason string, and do not restate "
+            "the agenda — the table above already carries the assignments.\n"
+            "Give runners-up and the fuller reasoning only if the user asks who "
+            "else was considered.\n"
+            "Revenue, where present, is deal movement at that person's briefings. "
+            "Mention it only where it distinguishes candidates, and never without "
+            "its caveat: a briefing has several presenters and one figure, so the "
+            "credit is shared rather than earned.\n"
+            "Where 'chosen' is null nobody has presented that topic — say so "
+            "plainly rather than omitting the line."
         ),
     }
 
