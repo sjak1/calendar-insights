@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -103,7 +104,25 @@ class AgendaSession(BaseModel):
         description="Session format type"
     )
     presenter: str = Field(description="Presenter name and title")
+    topic: Optional[str] = Field(
+        default=None,
+        description=(
+            "The briefing topic this session covers, copied EXACTLY from the "
+            "AVAILABLE TOPICS list. This is what the presenter must be an "
+            "expert in — it drives per-session presenter matching. Leave null "
+            "for non-content slots (welcome, breaks, close) and whenever no "
+            "listed topic genuinely fits; never invent one."
+        ),
+    )
     description: str = Field(description="What will be covered in this session")
+    topic_presenter_suggestion: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Filled in after generation: best presenter for this session's topic, with match tier and availability.",
+    )
+    presenter_before_topic_match: Optional[str] = Field(
+        default=None,
+        description="The originally generated presenter, kept when topic matching replaced it.",
+    )
     key_metrics: Optional[str] = Field(
         default=None, 
         description="Any $ figures or KPIs being addressed (e.g., '$50M inefficient spend')"
@@ -994,6 +1013,131 @@ def _merge_presenter_recommendations(
             existing["conflicts"] = suggestion.get("conflicts", [])
 
 
+def _availability_window(meeting: Dict[str, Any]):
+    """Start/end of the event day in the EVENT's own timezone, as epoch ms.
+
+    Falls back to UTC rather than a hardcoded region, so non-US briefings get
+    the right day. Returns (None, None) when the event has no start time.
+    """
+    start_time_ms = meeting.get("start_time_ms")
+    if not start_time_ms:
+        return None, None
+    try:
+        from datetime import timezone as _tz
+        from datetime import datetime as _dt, timedelta as _td, time as _t
+
+        tz_obj = _tz.utc
+        event_tz = meeting.get("timezone")
+        if event_tz:
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+
+                tz_obj = _ZI(str(event_tz))
+            except Exception:
+                logger.debug(f"Unknown event timezone '{event_tz}', using UTC")
+        event_dt = _dt.fromtimestamp(start_time_ms / 1000, tz=tz_obj)
+        sod = _dt.combine(event_dt.date(), _t(0, 0, 0), tzinfo=tz_obj)
+        return int(sod.timestamp() * 1000), int((sod + _td(days=1)).timestamp() * 1000)
+    except Exception:
+        return None, None
+
+
+def _assign_presenters_by_topic(
+    sessions: List[Any],
+    context: Dict[str, Any],
+    schedule_headers: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Phase two — match a presenter to each session's own topic.
+
+    The pool fetched before generation is scoped by event/customer/industry
+    only, because at that point no session exists yet to have a topic. That
+    means the strongest ranking signals — match tier and depth on the matched
+    topic — sit idle, and the model assigns names from a pool on its own
+    judgement. This runs after generation, when each session finally has a
+    subject, and asks the ranking the question it is actually good at: who is
+    the best person for THIS topic.
+
+    Conservative by design. It records a suggestion per session and only
+    overrides the model's choice when the topic match is strong (exact or
+    related) and the person is not already booked. A weak match, an
+    unavailable expert, or any error leaves the generated agenda untouched.
+
+    Returns a summary for logging/telemetry; sessions are annotated in place.
+    """
+    if not sessions:
+        return {"checked": 0, "matched": 0, "reassigned": 0}
+
+    topics = []
+    for sess in sessions:
+        t = (getattr(sess, "topic", None) or "").strip()
+        if t and t not in topics:
+            topics.append(t)
+    if not topics:
+        logger.info("Per-session presenters: no session carried a topic; skipped")
+        return {"checked": 0, "matched": 0, "reassigned": 0}
+
+    meeting = context.get("meeting_details") or {}
+    start_ms, end_ms = _availability_window(meeting)
+
+    def lookup(topic: str):
+        kwargs: Dict[str, Any] = {"topic": topic, "limit": 3}
+        if start_ms and end_ms:
+            kwargs["check_start_utc_ms"] = start_ms
+            kwargs["check_end_utc_ms"] = end_ms
+        if schedule_headers:
+            from tools.handlers import _bearer_token
+
+            kwargs["api_token"] = _bearer_token(schedule_headers)
+            kwargs["api_headers"] = schedule_headers
+        try:
+            r = get_suggested_presenters(**kwargs)
+            return topic, (r.get("suggested_presenters") or []) if r.get("success") else []
+        except Exception as exc:
+            logger.warning(f"Per-session presenter lookup failed for {topic!r}: {exc}")
+            return topic, []
+
+    # One lookup per DISTINCT topic, run concurrently: they are independent and
+    # I/O-bound, so N topics cost roughly one round trip rather than N.
+    by_topic: Dict[str, List[Dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=min(6, len(topics))) as pool:
+        for topic, people in pool.map(lookup, topics):
+            by_topic[topic] = people
+
+    # Tiers strong enough to overrule the model's own assignment.
+    STRONG = {"exact match", "related topic"}
+    matched = reassigned = 0
+
+    for sess in sessions:
+        topic = (getattr(sess, "topic", None) or "").strip()
+        if not topic:
+            continue
+        people = by_topic.get(topic) or []
+        if not people:
+            continue
+        matched += 1
+        best = people[0]
+        sess.topic_presenter_suggestion = {
+            "presenter_name": best.get("presenter_name"),
+            "match_tier": best.get("match_tier"),
+            "matched_topic": best.get("matched_topic"),
+            "available": best.get("available"),
+            "reason": best.get("reason"),
+        }
+        strong = best.get("match_tier") in STRONG
+        free = best.get("available") is not False
+        already = (best.get("presenter_name") or "").lower() in (sess.presenter or "").lower()
+        if strong and free and not already:
+            sess.presenter_before_topic_match = sess.presenter
+            sess.presenter = best.get("presenter_name") or sess.presenter
+            reassigned += 1
+
+    logger.info(
+        f"Per-session presenters: {len(topics)} topic(s) looked up, "
+        f"{matched} session(s) matched, {reassigned} reassigned"
+    )
+    return {"checked": len(topics), "matched": matched, "reassigned": reassigned}
+
+
 def _get_presenter_recommendations(
     context: Dict[str, Any],
     schedule_headers: Optional[Dict[str, Any]] = None,
@@ -1319,6 +1463,19 @@ Use what you find; ignore what's missing.
 """
 
     presenter_section = ""
+    topic_vocabulary = context.get("available_topics") or []
+    topics_section = ""
+    if topic_vocabulary:
+        topics_section = (
+            "\n\n## AVAILABLE TOPICS\n\n"
+            "Tag each content session with the ONE topic below that best describes it, "
+            "copied exactly, in the session's `topic` field. These are the only topics "
+            "this tenant has presenter history for, so the tag is what lets the right "
+            "expert be matched to the session. Use null for welcome slots, breaks and "
+            "closes, and whenever nothing here genuinely fits — never invent a topic.\n\n"
+            + ", ".join(topic_vocabulary)
+        )
+
     if presenter_recommendations:
         presenter_section = f"""
 
@@ -1330,6 +1487,7 @@ Only use them when they fit the session. If a presenter title is unknown, keep
 the title as TBD instead of inventing one.
 
 {json.dumps(presenter_recommendations, indent=2)}
+{topics_section}
 """
 
     # Multi-day: how many briefing days to schedule (from the event's duration)
@@ -1961,6 +2119,16 @@ def generate_agenda(
         attendees = context["attendees"]
         presenter_recommendations = _get_presenter_recommendations(context, schedule_headers)
         context["presenter_recommendations"] = presenter_recommendations
+        # The tenant's real topic vocabulary. Sessions are tagged from this list
+        # so phase two can match a presenter to each session's actual subject;
+        # a tag outside the vocabulary would match nobody.
+        try:
+            from tools.presenter_suggest import _available_topics, ACTIVITIES_INDEX
+
+            context["available_topics"] = _available_topics(ACTIVITIES_INDEX)
+        except Exception as exc:
+            logger.warning(f"Topic vocabulary lookup failed: {exc}")
+            context["available_topics"] = []
 
         # Step 2: Resolve EBD via chain
         ebd_result = _resolve_ebd(
@@ -2047,6 +2215,19 @@ def generate_agenda(
             "confidence": confidence,
             "validation_issues": validation_issues,
         }
+
+        # Phase two: now that sessions exist and carry topics, ask the ranking
+        # who is best for each one. The pool gathered before generation could
+        # only be scoped by event/customer/industry, so topic tier and depth —
+        # the top two keys in the sort — were never exercised until here.
+        try:
+            topic_match_summary = _assign_presenters_by_topic(
+                agenda.sessions, context, schedule_headers
+            )
+        except Exception as exc:
+            logger.warning(f"Per-session presenter matching failed: {exc}")
+            topic_match_summary = {"checked": 0, "matched": 0, "reassigned": 0, "error": str(exc)}
+        result["topic_presenter_matching"] = topic_match_summary
 
         if output_format in ("structured", "both"):
             result["agenda_structured"] = agenda
