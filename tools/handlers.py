@@ -583,7 +583,12 @@ def execute_tool(
                 )
 
             result = generate_agenda(
-                event_id=effective_event_id, company_name=args.get("company_name")
+                event_id=effective_event_id,
+                company_name=args.get("company_name"),
+                # Presenter availability inside the agenda needs the caller's
+                # own credentials to see blocked calendar time, same as the
+                # direct suggest_presenters path.
+                schedule_headers=schedule_headers,
             )
             output = {"generate_agenda": result}
             output_str = json_dumps_safe(output, indent=2)

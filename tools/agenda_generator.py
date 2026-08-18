@@ -994,7 +994,10 @@ def _merge_presenter_recommendations(
             existing["conflicts"] = suggestion.get("conflicts", [])
 
 
-def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _get_presenter_recommendations(
+    context: Dict[str, Any],
+    schedule_headers: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """
     Fetch presenter recommendations to guide agenda generation.
 
@@ -1040,6 +1043,13 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
             pass
 
     combined: Dict[str, Dict[str, Any]] = {}
+    # NB: event_id is deliberately only on the same_event call. It doubles as
+    # the SCOPE filter in get_suggested_presenters — passing it here as well
+    # would collapse the company and industry lookups into three copies of the
+    # same-event query. The cost is that this event's own sessions count as
+    # conflicts on those two calls, so presenters already booked onto it read
+    # as double-booked. Fixing that needs an exclude_event_id separate from
+    # the scope filter, not a wider event_id.
     scoped_calls = [
         ("same_event", {"event_id": event_id, "limit": 5}),
         ("same_company", {"customer_name": company_name, "limit": 5}),
@@ -1054,6 +1064,13 @@ def _get_presenter_recommendations(context: Dict[str, Any]) -> List[Dict[str, An
             cleaned_kwargs["check_start_utc_ms"] = check_start_ms
             cleaned_kwargs["check_end_utc_ms"] = check_end_ms
         try:
+            # Forward the caller's BriefingIQ credentials so availability can
+            # include blocked time (leave, travel, holds) alongside briefing
+            # bookings. Optional: without them this degrades to booking-only
+            # availability, which is what the agenda had before.
+            if schedule_headers:
+                cleaned_kwargs["api_token"] = schedule_headers.get("Authorization", "")
+                cleaned_kwargs["api_headers"] = schedule_headers
             result = get_suggested_presenters(**cleaned_kwargs)
             if result.get("success"):
                 _merge_presenter_recommendations(
@@ -1882,6 +1899,7 @@ def _compute_confidence(
 def generate_agenda(
     event_id: Optional[str] = None,
     company_name: Optional[str] = None,
+    schedule_headers: Optional[Dict[str, Any]] = None,
     ebd_path: Optional[str] = None,
     ebd_url: Optional[str] = None,
     pass_ebd_directly: bool = False,
@@ -1935,7 +1953,7 @@ def generate_agenda(
         actual_event_id = context["meeting_details"]["event_id"]
         meeting = context["meeting_details"]
         attendees = context["attendees"]
-        presenter_recommendations = _get_presenter_recommendations(context)
+        presenter_recommendations = _get_presenter_recommendations(context, schedule_headers)
         context["presenter_recommendations"] = presenter_recommendations
 
         # Step 2: Resolve EBD via chain
