@@ -1163,15 +1163,23 @@ def _assign_presenters_by_topic(
             available=best.get("available"),
             reason=best.get("reason"),
         )
-        # Reassign to the strongest candidate who is free and not already
-        # saturated by this pass. limit=3 supplies the alternates.
+        # An unfilled slot is a different decision from a filled one. When the
+        # session has no real presenter — TBD, blank, or a placeholder — a
+        # booked expert still beats TBD: the reader gets a name plus the
+        # conflict, instead of nothing. Only when a slot already has someone do
+        # we insist the replacement be free, since displacing a named presenter
+        # with someone unavailable would be a downgrade.
+        current = (sess.presenter or "").strip()
+        unfilled = current.upper() in {"", "TBD", "TBA", "N/A", "-"}
+
+        # Reassign to the strongest candidate. limit=3 supplies the alternates.
         for cand in people:
             name = cand.get("presenter_name") or ""
             strong = cand.get("match_tier") in STRONG
             # available is only set when a window was given; without one there
             # is nothing to check, so topic strength alone decides.
             free = cand.get("available") is not False
-            if not (strong and free and name):
+            if not (strong and name) or not (free or unfilled):
                 continue
             if _names_match(name, sess.presenter or ""):
                 break  # the model already picked this expert — leave it
@@ -1725,8 +1733,8 @@ External: {len(external_attendees)}
 5. Incorporate sales plays: {meeting.get('sales_plays')}.
 6. Use hybrid format if remote attendees ({len(remote_attendees)} remote).
 7. Vary session formats (Presentation, Demo, Roundtable, Working Session).
-8. {'Use presenter names from the document when available.' if has_ebd else 'Use presenter recommendations below when relevant.'}
-9. {'If the document does not provide presenters, prefer the presenter recommendations when they fit the session; otherwise use TBD.' if presenter_recommendations else 'If no strong presenter match is available, use TBD.'}
+8. {'ATTENDEES ARE NOT PRESENTERS. The document lists who will be in the room — account team, points of contact, executives attending. Never put those names in a presenter field. Only use a name from the document if it explicitly says that person is presenting or speaking on a topic.' if has_ebd else 'Use presenter recommendations below when relevant.'}
+9. {'Presenters come from the PRESENTER RECOMMENDATIONS below, chosen per session by topic fit. Use TBD when none fits — TBD is correct and expected; inventing a presenter, or promoting an attendee into the role, is not.' if presenter_recommendations else 'If no strong presenter match is available, use TBD.'}
 10. {'Extract any dollar figures / KPIs from the document into key_metrics fields.' if has_ebd else ''}
 11. {'Use any customer references found in the document.' if has_ebd else ''}
 12. Prioritise high-relevance previous meetings when designing the flow; avoid repeating topics from recent meetings.
