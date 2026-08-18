@@ -92,6 +92,22 @@ class OraclePresenter(BaseModel):
     title: str = Field(description="Job title of the presenter")
 
 
+class TopicPresenterSuggestion(BaseModel):
+    """Best-ranked presenter for a session's topic, attached after generation.
+
+    A typed model rather than a free dict on purpose: AgendaSession is the
+    OpenAI structured-output schema, and strict mode rejects free-form objects
+    — to_strict_json_schema() raises on Dict[str, Any], which would fail every
+    agenda request on the default provider path before the model was called.
+    """
+    presenter_name: Optional[str] = None
+    title: Optional[str] = None
+    match_tier: Optional[str] = None
+    matched_topic: Optional[str] = None
+    available: Optional[bool] = None
+    reason: Optional[str] = None
+
+
 class AgendaSession(BaseModel):
     """A single session in the agenda."""
     day: int = Field(
@@ -115,9 +131,9 @@ class AgendaSession(BaseModel):
         ),
     )
     description: str = Field(description="What will be covered in this session")
-    topic_presenter_suggestion: Optional[Dict[str, Any]] = Field(
+    topic_presenter_suggestion: Optional[TopicPresenterSuggestion] = Field(
         default=None,
-        description="Filled in after generation: best presenter for this session's topic, with match tier and availability.",
+        description="Leave null. Filled in after generation by ranked topic matching, never by you.",
     )
     presenter_before_topic_match: Optional[str] = Field(
         default=None,
@@ -1106,6 +1122,19 @@ def _assign_presenters_by_topic(
     # Tiers strong enough to overrule the model's own assignment.
     STRONG = {"exact match", "related topic"}
     matched = reassigned = 0
+    # Sessions each person has been GIVEN by this pass. Sessions are matched
+    # independently, so without this the same expert wins every slot their
+    # topic covers and ends up presenting the whole day — the model's spread
+    # of names is worth keeping unless a specific session has a better expert.
+    assigned_here: Dict[str, int] = {}
+    _MAX_REASSIGNS_PER_PERSON = 2
+
+    def _names_match(name: str, presenter_field: str) -> bool:
+        # The presenter field is "name and title" prose, so compare on word
+        # boundaries — a bare substring test makes "Dan" match "Danielle".
+        if not name or not presenter_field:
+            return False
+        return re.search(rf"\b{re.escape(name)}\b", presenter_field, re.IGNORECASE) is not None
 
     for sess in sessions:
         topic = (getattr(sess, "topic", None) or "").strip()
@@ -1116,20 +1145,34 @@ def _assign_presenters_by_topic(
             continue
         matched += 1
         best = people[0]
-        sess.topic_presenter_suggestion = {
-            "presenter_name": best.get("presenter_name"),
-            "match_tier": best.get("match_tier"),
-            "matched_topic": best.get("matched_topic"),
-            "available": best.get("available"),
-            "reason": best.get("reason"),
-        }
-        strong = best.get("match_tier") in STRONG
-        free = best.get("available") is not False
-        already = (best.get("presenter_name") or "").lower() in (sess.presenter or "").lower()
-        if strong and free and not already:
+        sess.topic_presenter_suggestion = TopicPresenterSuggestion(
+            presenter_name=best.get("presenter_name"),
+            title=best.get("title"),
+            match_tier=best.get("match_tier"),
+            matched_topic=best.get("matched_topic"),
+            available=best.get("available"),
+            reason=best.get("reason"),
+        )
+        # Reassign to the strongest candidate who is free and not already
+        # saturated by this pass. limit=3 supplies the alternates.
+        for cand in people:
+            name = cand.get("presenter_name") or ""
+            strong = cand.get("match_tier") in STRONG
+            # available is only set when a window was given; without one there
+            # is nothing to check, so topic strength alone decides.
+            free = cand.get("available") is not False
+            if not (strong and free and name):
+                continue
+            if _names_match(name, sess.presenter or ""):
+                break  # the model already picked this expert — leave it
+            if assigned_here.get(name.lower(), 0) >= _MAX_REASSIGNS_PER_PERSON:
+                continue  # spread the day; try the next-ranked expert
             sess.presenter_before_topic_match = sess.presenter
-            sess.presenter = best.get("presenter_name") or sess.presenter
+            title = (cand.get("title") or "").strip()
+            sess.presenter = f"{name} — {title}" if title else name
+            assigned_here[name.lower()] = assigned_here.get(name.lower(), 0) + 1
             reassigned += 1
+            break
 
     logger.info(
         f"Per-session presenters: {len(topics)} topic(s) looked up, "
@@ -1161,30 +1204,8 @@ def _get_presenter_recommendations(
     visit_focus = meeting.get("visit_focus")
     start_time_ms = meeting.get("start_time_ms")
 
-    # Compute event-day availability window so we can flag double-booked presenters.
-    # Use start-of-day → end-of-day for the event date (covers the full briefing day).
-    # Anchor the day to the EVENT's own timezone (falls back to UTC, not a hardcoded
-    # region) so the window is correct for non-US briefings.
-    check_start_ms = None
-    check_end_ms = None
-    if start_time_ms:
-        try:
-            from datetime import timezone as _tz
-            from datetime import datetime as _dt, timedelta as _td, time as _t
-            _tz_obj = _tz.utc
-            _event_tz = meeting.get("timezone")
-            if _event_tz:
-                try:
-                    from zoneinfo import ZoneInfo as _ZI
-                    _tz_obj = _ZI(str(_event_tz))
-                except Exception:
-                    logger.debug(f"Unknown event timezone '{_event_tz}', using UTC for availability window")
-            _event_dt = _dt.fromtimestamp(start_time_ms / 1000, tz=_tz_obj)
-            _sod = _dt.combine(_event_dt.date(), _t(0, 0, 0), tzinfo=_tz_obj)
-            check_start_ms = int(_sod.timestamp() * 1000)
-            check_end_ms = int((_sod + _td(days=1)).timestamp() * 1000)
-        except Exception:
-            pass
+    # Event-day availability window, in the event's own timezone.
+    check_start_ms, check_end_ms = _availability_window(meeting)
 
     combined: Dict[str, Dict[str, Any]] = {}
     # NB: event_id is deliberately only on the same_event call. It doubles as
@@ -1476,7 +1497,16 @@ Use what you find; ignore what's missing.
             + ", ".join(topic_vocabulary)
         )
 
-    if presenter_recommendations:
+    # Emitted whenever EITHER half exists: the topic vocabulary must reach the
+    # prompt even when no presenter history matched — an event with no history
+    # is exactly the case where per-session topic matching is the only way a
+    # presenter gets picked at all.
+    if presenter_recommendations or topics_section:
+        rec_block = (
+            json.dumps(presenter_recommendations, indent=2)
+            if presenter_recommendations
+            else "(no historical matches — leave presenters as TBD unless the document names them)"
+        )
         presenter_section = f"""
 
 ## PRESENTER RECOMMENDATIONS
@@ -1486,7 +1516,7 @@ activities in the same event, same company, or same topic/industry.
 Only use them when they fit the session. If a presenter title is unknown, keep
 the title as TBD instead of inventing one.
 
-{json.dumps(presenter_recommendations, indent=2)}
+{rec_block}
 {topics_section}
 """
 
@@ -2125,7 +2155,10 @@ def generate_agenda(
         try:
             from tools.presenter_suggest import _available_topics, ACTIVITIES_INDEX
 
-            context["available_topics"] = _available_topics(ACTIVITIES_INDEX)
+            # Explicit cap: the helper defaults to 40, which silently hid most
+            # of the vocabulary (266 topics at last count). 150 short names is
+            # ~1KB of prompt — cheap next to the rest of it.
+            context["available_topics"] = _available_topics(ACTIVITIES_INDEX, limit=150)
         except Exception as exc:
             logger.warning(f"Topic vocabulary lookup failed: {exc}")
             context["available_topics"] = []
@@ -2215,6 +2248,14 @@ def generate_agenda(
             "confidence": confidence,
             "validation_issues": validation_issues,
         }
+
+        # Strict structured output forces every schema field to be emitted, so
+        # the model returns the two annotation fields too — normally null, but
+        # nothing stops it inventing content for them. They belong to phase
+        # two alone; clear anything the model put there.
+        for _sess in agenda.sessions:
+            _sess.topic_presenter_suggestion = None
+            _sess.presenter_before_topic_match = None
 
         # Phase two: now that sessions exist and carry topics, ask the ranking
         # who is best for each one. The pool gathered before generation could
