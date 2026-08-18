@@ -638,11 +638,18 @@ def _check_presenter_conflicts(
         {"range": {"startTime.utcMs": {"lt": check_end_ms}}},
         {"range": {"endTime.utcMs": {"gt": check_start_ms}}},
     ]
+    # must_not goes on the SAME bool as must, not nested inside a bool in the
+    # must list: the shared client's normalize_query_structure() unwraps bool
+    # objects found inside must/should, which turned this into a bare
+    # {"must_not": [...]} and made OpenSearch reject the whole query with
+    # "[must_not] query malformed". The availability check then failed for
+    # every call that excluded an event — silently, since it only warns.
+    bool_q: Dict[str, Any] = {"must": must}
     if exclude_event_id:
-        must.append({"bool": {"must_not": [{"term": {"eventId.keyword": exclude_event_id}}]}})
+        bool_q["must_not"] = [{"term": {"eventId.keyword": exclude_event_id}}]
 
     body = {
-        "query": {"bool": {"must": must}},
+        "query": {"bool": bool_q},
         "_source": [
             "eventId", "bookingId",
             "startTime.utcMs", "endTime.utcMs",

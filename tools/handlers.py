@@ -174,6 +174,27 @@ def _substitute_time_tokens(obj, timezone_name: str, token_map=None):
     return obj
 
 
+def _bearer_token(schedule_headers=None) -> str:
+    """Authorization header, however the client cased it.
+
+    HTTP/2 lowercases every header name, so a browser sends `authorization`.
+    api.py stores both the original key and its lowercase form, but when the
+    client already sent lowercase those are the same key — so a plain
+    .get("Authorization") returns "" and every BriefingIQ API call silently
+    goes out unauthenticated.
+    """
+    h = schedule_headers or {}
+    for k in ("Authorization", "authorization", "AUTHORIZATION"):
+        v = h.get(k)
+        if v:
+            return v
+    # last resort: scan case-insensitively for anything spelled authorization
+    for k, v in h.items():
+        if isinstance(k, str) and k.lower() == "authorization" and v:
+            return v
+    return ""
+
+
 def _get_query_timezone(schedule_headers=None) -> str:
     """Pick the best timezone available for relative-date OpenSearch queries."""
     headers = schedule_headers or {}
@@ -293,7 +314,7 @@ def execute_tool(
             return output
 
         elif tool_name == "list_rooms":
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             event_id = args.get("event_id") or context_event_id or ""
             result = list_rooms(token, schedule_headers, event_id=event_id)
             output = {"list_rooms": result}
@@ -301,7 +322,7 @@ def execute_tool(
             return output
 
         elif tool_name == "list_event_activities":
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             event_id = args.get("event_id") or context_event_id or ""
             date = args.get("date") or None
             result = list_event_activities(token, schedule_headers, event_id=event_id, date=date)
@@ -310,14 +331,14 @@ def execute_tool(
             return output
 
         elif tool_name == "get_resource_schedule":
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             result = get_resource_schedule(args["resource_id"], token, schedule_headers)
             output = {"get_resource_schedule": result}
             logger.info(f"✓ {tool_name} returned {len(result)} entries")
             return output
 
         elif tool_name == "find_vacant_slots":
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             result = find_vacant_slots(
                 resource_id=args["resource_id"],
                 date=args["date"],
@@ -332,7 +353,7 @@ def execute_tool(
             return output
 
         elif tool_name == "block_calendar":
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             result = block_calendar(
                 resource_id=args["resource_id"],
                 start_iso=args["start_iso"],
@@ -603,7 +624,7 @@ def execute_tool(
 
         elif tool_name == "get_event_rooms":
             # Legacy alias — routes through merged list_rooms
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             event_id = context_event_id or args.get("event_id", "")
             result = list_rooms(token, schedule_headers, event_id=event_id)
             output = {"get_event_rooms": {"rooms": result, "count": len(result)}}
@@ -612,7 +633,7 @@ def execute_tool(
 
         elif tool_name == "push_agenda_to_briefingiq":
             from tools.briefingiq_writer import push_agenda_to_app
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             effective_event_id = context_event_id or args["event_id"]
             result = push_agenda_to_app(
                 event_id=effective_event_id,
@@ -691,7 +712,7 @@ def execute_tool(
                     # calendar. Same pattern the room tools use. Absent in
                     # non-request contexts, where availability degrades to
                     # briefing bookings only.
-                    api_token=(schedule_headers or {}).get("Authorization", ""),
+                    api_token=_bearer_token(schedule_headers),
                     api_headers=schedule_headers,
                 )
                 output = {"suggest_presenters": result}
@@ -749,7 +770,7 @@ def execute_tool(
 
         elif tool_name == "draft_briefing":
             from tools.briefing_builder import draft_briefing
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             result = draft_briefing(
                 token=token,
                 customer_name=args.get("customer_name", ""),
@@ -774,7 +795,7 @@ def execute_tool(
 
         elif tool_name == "push_briefing":
             from tools.briefing_builder import push_briefing
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             result = push_briefing(
                 draft_id=args["draft_id"],
                 token=token,
@@ -794,7 +815,7 @@ def execute_tool(
             "change_briefing_state",
         ):
             from tools import briefing_editor
-            token = (schedule_headers or {}).get("Authorization", "")
+            token = _bearer_token(schedule_headers)
             request_id = args.get("request_id") or context_event_id or ""
             common = {"request_id": request_id, "token": token, "schedule_headers": schedule_headers}
             if tool_name == "get_briefing":
