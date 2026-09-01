@@ -28,6 +28,7 @@ from tools.agenda_generator import (  # noqa: E402
     _parse_clock,
     _parse_time_slot,
     _schedule_agenda_sessions,
+    _session_count_range,
     _schedule_summary,
     _validate_agenda_sessions,
 )
@@ -148,10 +149,15 @@ class TestBriefingWindow(unittest.TestCase):
         self.assertEqual(datetime.fromtimestamp(d2_start / 1000, tz=NY).hour, 8)
         self.assertEqual(datetime.fromtimestamp(d2_end / 1000, tz=NY).hour, 16)
 
-    def test_thirteen_hour_span_is_accepted(self):
-        # NOTE: the docstring calls 07:00-20:00 a placeholder, but the guard is
-        # `hours > 13`, so exactly 13h passes. Documenting actual behaviour.
+    def test_canonical_13h_placeholder_is_rejected(self):
+        # 07:00-20:00 is the placeholder span this data is full of. It is
+        # exactly 13h, so a strict `> 13` let the very case the guard names
+        # straight through.
         m = meeting_ny(start=(7, 0), end=(20, 0))
+        self.assertEqual(_briefing_window(m)[:2], (None, None))
+
+    def test_a_long_but_plausible_day_still_counts_as_booked(self):
+        m = meeting_ny(start=(8, 0), end=(19, 0))  # 11h
         self.assertIsNotNone(_briefing_window(m)[0])
 
 
@@ -236,6 +242,24 @@ class TestValidation(unittest.TestCase):
                       session("Lunch", "12:00 PM - 1:00 PM"))
         issues = _validate_agenda_sessions(a, 2, meeting_ny())
         self.assertTrue(any("day 2" in i.lower() for i in issues))
+
+
+class TestSessionCountRange(unittest.TestCase):
+    def test_a_standard_seven_hour_day_reproduces_the_old_range(self):
+        self.assertEqual(_session_count_range(480), (6, 10))
+
+    def test_a_half_day_asks_for_fewer_sessions(self):
+        low, high = _session_count_range(240)
+        self.assertEqual((low, high), (3, 5))
+
+    def test_a_very_long_day_is_capped(self):
+        low, high = _session_count_range(720)
+        self.assertLessEqual(high, 12)
+        self.assertLess(low, high)
+
+    def test_no_window_falls_back_to_the_configured_range(self):
+        self.assertEqual(_session_count_range(0),
+                         (ag.AGENDA_SESSION_MIN, ag.AGENDA_SESSION_MAX))
 
 
 class TestEventNumDays(unittest.TestCase):
@@ -366,6 +390,32 @@ class TestScheduleAgendaSessions(unittest.TestCase):
         self.assertIn("no booked hours on file", summary["windows"][0])
         self.assertTrue(a.sessions[0].time_slot.startswith(
             ag.AGENDA_DAY_START.replace(" AM", "").replace(" PM", "").lstrip("0")))
+
+    def test_free_alternates_are_attached_as_backup_presenters(self):
+        ada = {"presenter_name": "Ada", "title": "Chief Architect",
+               "email": "ada@x.com", "all_emails": ["ada@x.com"]}
+        grace = {"presenter_name": "Grace", "title": "VP Eng",
+                 "email": "grace@x.com", "all_emails": ["grace@x.com"]}
+        busy_alt = {"presenter_name": "Alan", "email": "alan@x.com",
+                    "all_emails": ["alan@x.com"]}
+        base = datetime(2026, 3, 10, tzinfo=NY)
+        a = agenda_of(session("Strategy", duration=60, topic="Cloud Migration"))
+        conflicts = {"alan@x.com": [{
+            "start_ms": ms(base.replace(hour=8, minute=0)),
+            "end_ms": ms(base.replace(hour=17, minute=0)),
+        }]}
+        summary, _ = self._run(a, by_topic={"Cloud Migration": [ada, grace, busy_alt]},
+                               conflicts=conflicts)
+        names = [b.presenter_name for b in a.sessions[0].backup_presenters]
+        self.assertEqual(names, ["Grace"])          # Alan is busy, excluded
+        self.assertEqual(a.sessions[0].backup_presenters[0].title, "VP Eng")
+        self.assertEqual(summary["backups_offered"], 1)
+
+    def test_sessions_without_candidates_get_no_backups(self):
+        a = agenda_of(session("Lunch", duration=60))
+        summary, _ = self._run(a)
+        self.assertEqual(a.sessions[0].backup_presenters, [])
+        self.assertEqual(summary["backups_offered"], 0)
 
     def test_this_events_own_bookings_are_excluded_from_the_busy_map(self):
         ada = {"presenter_name": "Ada", "email": "ada@x.com", "all_emails": ["ada@x.com"]}

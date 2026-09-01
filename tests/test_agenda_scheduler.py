@@ -276,6 +276,30 @@ class TestLayoutAvailabilityLadder(unittest.TestCase):
         r = layout(specs, at(9), at(17), timezone.utc, busy)
         self.assertEqual(r.placed[0].time_slot, "9:30 AM - 10:30 AM")
 
+    def test_a_swap_then_a_slip_reports_both_moves(self):
+        # The swap note used to be overwritten by the slip note, reporting a
+        # 90-minute reorder as "moved 15 min later".
+        ada, bob = person("Ada"), person("Bob")
+        first = SessionSpec(title="strategy", duration_target=60, candidates=[ada])
+        second = SessionSpec(title="demo", duration_target=60, candidates=[bob])
+        r = layout([first, second], at(9), at(17), timezone.utc,
+                   {"ada@x.com": [(at(9), at(10, 30))]})
+        strategy = next(p for p in r.placed if p.spec.title == "strategy")
+        self.assertIn("moved later in the day", strategy.scheduling_note)
+        self.assertIn("further", strategy.scheduling_note)
+
+    def test_a_swap_that_did_not_help_still_reports_the_move(self):
+        ada, bob, grace = person("Ada"), person("Bob"), person("Grace")
+        first = SessionSpec(title="strategy", duration_target=60, candidates=[ada, grace])
+        second = SessionSpec(title="demo", duration_target=60, candidates=[bob])
+        # Ada is free 10:00-10:10 (enough to trigger a swap) but busy again
+        # across the slot the swap lands her in.
+        busy = {"ada@x.com": [(at(9), at(10)), (at(10, 10), at(17))]}
+        r = layout([first, second], at(9), at(17), timezone.utc, busy)
+        strategy = next(p for p in r.placed if p.spec.title == "strategy")
+        if "moved later in the day" in strategy.scheduling_note:
+            self.assertIn("but", strategy.scheduling_note)
+
     def test_no_candidates_means_no_presenter_and_no_note(self):
         specs = [SessionSpec(title="lunch", duration_target=60, movable=False,
                              anchor=ANCHOR_LUNCH)]

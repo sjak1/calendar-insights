@@ -114,6 +114,19 @@ class TopicPresenterSuggestion(BaseModel):
     revenue_note: Optional[str] = None
 
 
+class BackupPresenter(BaseModel):
+    """A ranked alternate for a session, verified free at its final time.
+
+    Typed rather than a free dict for the same reason as
+    TopicPresenterSuggestion: AgendaSession is the structured-output schema and
+    strict mode rejects Dict[str, Any].
+    """
+    presenter_name: str
+    title: Optional[str] = None
+    match_tier: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class AgendaSession(BaseModel):
     """A single session in the agenda."""
     day: int = Field(
@@ -195,6 +208,14 @@ class AgendaSession(BaseModel):
         description=(
             "Leave null. Filled in by the scheduler when it had to reshape the day "
             "— e.g. moving a session to keep the best-matched presenter."
+        ),
+    )
+    backup_presenters: List[BackupPresenter] = Field(
+        default_factory=list,
+        description=(
+            "Leave empty. Filled in by the scheduler with the next-ranked people "
+            "who are ALSO free at this session's final time — a briefing team's "
+            "first question when a presenter drops out."
         ),
     )
     key_metrics: Optional[str] = Field(
@@ -1103,7 +1124,10 @@ def _briefing_window(meeting: Dict[str, Any], day_index: int = 1):
                 return None, None, tz_obj
 
         hours = (end_dt - start_dt).total_seconds() / 3600
-        if hours < 1 or hours > 13:
+        # >= 13, not > 13: the canonical placeholder in this data is 07:00-20:00,
+        # which is exactly 13 hours and slipped through the strict comparison —
+        # so the very span this guard names was the one it let past.
+        if hours < 1 or hours >= 13:
             logger.info(f"Event window looks like a placeholder ({hours:.1f}h) — using day defaults")
             return None, None, tz_obj
 
@@ -1674,6 +1698,7 @@ def _schedule_agenda_sessions(
     unplaced_titles: List[str] = []
     notes: List[str] = []
     conflicts = 0
+    backups = 0
     windows: List[str] = []
     # Rebuilt in placement order. The scheduler may reorder a day to keep the
     # best presenter, and leaving agenda.sessions in the model's original order
@@ -1725,6 +1750,21 @@ def _schedule_agenda_sessions(
                 # Carry the reason onto the session so the answer can explain
                 # the shape of the day instead of just asserting it.
                 sess.scheduling_note = placed.scheduling_note
+            # The alternates the scheduler already checked are free at this
+            # exact slot. Computing them and dropping them meant the one
+            # question a briefing team always asks — "who else could do this?"
+            # — had an answer that never left the scheduler.
+            sess.backup_presenters = [
+                BackupPresenter(
+                    presenter_name=alt.get("presenter_name") or "",
+                    title=(alt.get("title") or "").strip() or None,
+                    match_tier=alt.get("match_tier"),
+                    reason=alt.get("reason"),
+                )
+                for alt in placed.alternates
+                if alt.get("presenter_name")
+            ]
+            backups += len(sess.backup_presenters)
             if placed.has_conflict:
                 conflicts += 1
             total_placed += 1
@@ -1745,15 +1785,37 @@ def _schedule_agenda_sessions(
         "windows": windows,
         "moved": notes,
         "unavoidable_conflicts": conflicts,
+        "backups_offered": backups,
         "did_not_fit": unplaced_titles,
         "guidance": (
             "Session times came from the event's booked hours and the presenters' "
             "real calendars, not from a template — state the date and hours as fact. "
             "Where a session carries a scheduling note, mention it once: it explains "
             "why the day is shaped as it is. If anything is listed under did_not_fit, "
-            "say plainly that it was dropped for lack of time rather than omitting it."
+            "say plainly that it was dropped for lack of time rather than omitting it. "
+            "Where a session carries backup_presenters, those people were checked free "
+            "at that exact slot — offer them as the fallback if the primary drops out."
         ),
     }
+
+
+def _session_count_range(window_minutes: int) -> tuple:
+    """How many sessions a day of this length can carry, as (min, max).
+
+    AGENDA_SESSION_MIN/MAX are one fixed range for every briefing, so a
+    four-hour visit was asked for the same 6-10 sessions as a full day and the
+    model met the count by shrinking everything to fit. Deriving the range from
+    the booked window instead means one session per ~75 min at the loose end
+    and per ~45 min at the tight end — which reproduces the old 6-10 for a
+    standard seven-hour day, and scales honestly either side of it.
+
+    Falls back to the configured range when there is no window to measure.
+    """
+    if not window_minutes or window_minutes <= 0:
+        return AGENDA_SESSION_MIN, AGENDA_SESSION_MAX
+    low = max(3, window_minutes // 75)
+    high = min(12, max(low + 1, window_minutes // 45))
+    return low, high
 
 
 def _event_num_days(meeting: Optional[Dict[str, Any]]) -> int:
@@ -2029,17 +2091,20 @@ def _build_agenda_prompt(
         if window_minutes
         else ""
     )
+    # Session count scales with the booked day rather than being one fixed
+    # range for a four-hour visit and a full day alike.
+    sess_min, sess_max = _session_count_range(window_minutes)
 
     if num_days > 1:
         day_requirement = (
             f"1. This is a {num_days}-DAY briefing. Create sessions for EVERY day: set the day field "
             f"(1..{num_days}) on each session. Each day runs {day_span} with "
-            f"{AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions AND its own lunch break.{budget} Give each day a "
+            f"{sess_min}-{sess_max} sessions AND its own lunch break.{budget} Give each day a "
             "coherent theme (e.g. day 1 = vision/strategy, day 2 = deep-dives/planning) and avoid repeating sessions across days."
         )
     else:
         day_requirement = (
-            f"1. Create {AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions filling "
+            f"1. Create {sess_min}-{sess_max} sessions filling "
             f"{day_span} (single day; day field = 1).{budget}"
         )
     return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}{gaps_section}
@@ -2376,6 +2441,14 @@ def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
         lines.append(f"**Format:** {session.format}  ")
         lines.append(f"**Presenter:** {session.presenter}  ")
         lines.append(f"**Description:** {session.description}  ")
+        if session.backup_presenters:
+            names = ", ".join(
+                f"{b.presenter_name}{f' ({b.title})' if b.title else ''}"
+                for b in session.backup_presenters
+            )
+            lines.append(f"**Backup Presenters:** {names}  ")
+        if session.scheduling_note:
+            lines.append(f"**Scheduling Note:** {session.scheduling_note}  ")
         if session.key_metrics:
             lines.append(f"**Key Metrics:** {session.key_metrics}  ")
         if session.customer_reference:
@@ -2633,6 +2706,7 @@ def generate_agenda(
             _sess.topic_presenter_suggestion = None
             _sess.presenter_before_topic_match = None
             _sess.scheduling_note = None
+            _sess.backup_presenters = []
             _sess.time_slot = ""  # the scheduler owns this; discard any model guess
 
         # Phase two: now that sessions exist and carry topics, ask the ranking

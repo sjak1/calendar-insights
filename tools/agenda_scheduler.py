@@ -383,7 +383,15 @@ def layout(
             if slipped:
                 delay = (slip_start - start) // _MIN_MS
                 start, end = slip_start, slip_start + duration
-                note = f"moved {delay} min later to keep {name}"
+                # A pending note means this session was ALREADY swapped back to
+                # reach this slot. Overwriting it reported a 90-minute reorder
+                # as "moved 15 min later" — the note is how the agenda shows its
+                # working, so it has to carry the whole move, not the last step.
+                note = (
+                    f"{note}, and a further {delay} min to clear their calendar"
+                    if note
+                    else f"moved {delay} min later to keep {name}"
+                )
             else:
                 # Rung 2 — swap with a nearby movable session whose own top
                 # presenter can take this slot, so `spec` lands later where its
@@ -418,14 +426,17 @@ def layout(
                 alt = _pick_free_candidate(candidates[1:], start, end, busy_map)
                 if alt is not None:
                     chosen = alt
-                    note = (
+                    fallback = (
                         f"{name} is booked at this time; "
                         f"{alt.get('presenter_name') or 'next-ranked presenter'} takes the session"
                     )
                 else:
                     chosen = top
                     conflict = True
-                    note = f"{name} is double-booked — no free alternate for this slot"
+                    fallback = f"{name} is double-booked — no free alternate for this slot"
+                # Same reasoning as the slip branch: a move already made is part
+                # of the explanation, even when it did not end up helping.
+                note = f"{note}, but {fallback}" if note else fallback
 
         alternates = [c for c in candidates if c is not chosen]
         alternates = [
