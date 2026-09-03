@@ -252,10 +252,20 @@ class TestSessionCountRange(unittest.TestCase):
         low, high = _session_count_range(240)
         self.assertEqual((low, high), (3, 5))
 
-    def test_a_very_long_day_is_capped(self):
+    def test_a_very_long_day_is_capped_per_day(self):
         low, high = _session_count_range(720)
-        self.assertLessEqual(high, 12)
+        self.assertLessEqual(high, 10)
         self.assertLess(low, high)
+
+    def test_a_long_multi_day_briefing_is_capped_in_total(self):
+        # 12h x 3 days sized per-day worked out to 9-12 a day (up to 36) and
+        # stalled generation outright.
+        low, high = _session_count_range(720, num_days=3)
+        self.assertLessEqual(high * 3, 24)
+        self.assertLess(low, high)
+
+    def test_a_standard_two_day_briefing_is_not_squeezed(self):
+        self.assertEqual(_session_count_range(480, num_days=2), (6, 10))
 
     def test_no_window_falls_back_to_the_configured_range(self):
         self.assertEqual(_session_count_range(0),

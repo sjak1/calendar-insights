@@ -52,11 +52,17 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
-# Provider: "openai" (gpt-5-mini, default) or "bedrock" (Claude Haiku on Bedrock)
-AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "openai").lower()
+# Provider: "bedrock" (Sonnet 4.6, default) or "openai" (gpt-5-mini).
+# Measured over 4 runs each on the same event (Bosch, 2026-09-02): Sonnet's LLM
+# call ran 41.6-49.3s against gpt-5-mini's 58.3-70.5s — ranges that do not
+# overlap — for ~45% fewer output tokens and a steadier session count. It costs
+# ~$0.06 per agenda against ~$0.013, which is the whole of the trade. Keeping
+# the agenda on Bedrock also puts it on the same provider as the outer agent, so
+# the OpenAI SDK's own max_retries=2 no longer stacks on top of our retry loop.
+AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "bedrock").lower()
 LLM_MODEL: str = os.getenv("AGENDA_LLM_MODEL", "gpt-5-mini")
 AGENDA_BEDROCK_MODEL_ID: str = os.getenv(
-    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001"
+    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
 )
 MAX_DOCUMENT_CHARS: int = int(os.getenv("MAX_DOCUMENT_CHARS", "30000"))
 AGENDA_SESSION_MIN: int = int(os.getenv("AGENDA_SESSION_MIN", "6"))
@@ -1799,8 +1805,17 @@ def _schedule_agenda_sessions(
     }
 
 
-def _session_count_range(window_minutes: int) -> tuple:
-    """How many sessions a day of this length can carry, as (min, max).
+# A briefing day has a practical ceiling on distinct sessions regardless of how
+# many hours are booked — past this you are describing a conference timetable,
+# not a briefing, and the structured-output call grows accordingly.
+_MAX_SESSIONS_PER_DAY = 10
+# And a ceiling across the whole briefing: a 12-hour window over three days
+# asked for up to 36 sessions, which stalled generation outright.
+_MAX_SESSIONS_TOTAL = 24
+
+
+def _session_count_range(window_minutes: int, num_days: int = 1) -> tuple:
+    """How many sessions this briefing can carry per day, as (min, max).
 
     AGENDA_SESSION_MIN/MAX are one fixed range for every briefing, so a
     four-hour visit was asked for the same 6-10 sessions as a full day and the
@@ -1809,12 +1824,26 @@ def _session_count_range(window_minutes: int) -> tuple:
     and per ~45 min at the tight end — which reproduces the old 6-10 for a
     standard seven-hour day, and scales honestly either side of it.
 
+    Both ends are then capped. Sizing purely off the window is what a long
+    booking exposes: a 12-hour window over three days worked out to 9-12
+    sessions a day, 36 in total, and the generation call simply stalled. Hours
+    booked is evidence of how long the room is held, not of how many distinct
+    sessions anyone wants to sit through.
+
     Falls back to the configured range when there is no window to measure.
     """
     if not window_minutes or window_minutes <= 0:
         return AGENDA_SESSION_MIN, AGENDA_SESSION_MAX
+
     low = max(3, window_minutes // 75)
-    high = min(12, max(low + 1, window_minutes // 45))
+    high = max(low + 1, window_minutes // 45)
+
+    high = min(high, _MAX_SESSIONS_PER_DAY)
+    if num_days > 1:
+        # Spread the total budget across the days rather than per-day sizing
+        # each one as though it were the only day.
+        high = min(high, max(4, _MAX_SESSIONS_TOTAL // num_days))
+    low = min(low, max(3, high - 1))
     return low, high
 
 
@@ -2093,7 +2122,7 @@ def _build_agenda_prompt(
     )
     # Session count scales with the booked day rather than being one fixed
     # range for a four-hour visit and a full day alike.
-    sess_min, sess_max = _session_count_range(window_minutes)
+    sess_min, sess_max = _session_count_range(window_minutes, num_days)
 
     if num_days > 1:
         day_requirement = (
@@ -2329,6 +2358,12 @@ def _call_llm_with_retry(
                 temperature=1,
                 timeout=LLM_TIMEOUT_SECONDS,
             )
+            _u = getattr(response, "usage", None)
+            if _u:
+                logger.info(
+                    f"Agenda OpenAI call: tokens in={getattr(_u, 'prompt_tokens', 0)}, "
+                    f"out={getattr(_u, 'completion_tokens', 0)}"
+                )
             return response.choices[0].message.parsed
         except Exception as e:
             if attempt == 0:
