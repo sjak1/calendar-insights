@@ -52,17 +52,31 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
-# Provider: "bedrock" (Sonnet 4.6, default) or "openai" (gpt-5-mini).
-# Measured over 4 runs each on the same event (Bosch, 2026-09-02): Sonnet's LLM
-# call ran 41.6-49.3s against gpt-5-mini's 58.3-70.5s — ranges that do not
-# overlap — for ~45% fewer output tokens and a steadier session count. It costs
-# ~$0.06 per agenda against ~$0.013, which is the whole of the trade. Keeping
-# the agenda on Bedrock also puts it on the same provider as the outer agent, so
-# the OpenAI SDK's own max_retries=2 no longer stacks on top of our retry loop.
+# Provider: "bedrock" (Sonnet 5, default) or "openai" (gpt-5-mini).
+# Sonnet 5 replaced Sonnet 4.6 after an 8-model comparison on the same event
+# (Bosch, 2026-09-03), one run each, isolating the agenda LLM call:
+#
+#   sonnet-5      30.4s  3083 out  101.5 tok/s  9 sessions
+#   sonnet-4-6    48.2s  3077 out   63.8 tok/s  8 sessions
+#   haiku-4-5     17.3s  1897 out  109.7 tok/s  7 sessions
+#   gpt-5.6-sol   28.1s  2599 out   92.4 tok/s  8 sessions
+#   gpt-5.6-terra 20.0s  1998 out  100.1 tok/s  8 sessions
+#   gpt-5.6-luna  17.8s     — failed schema validation twice
+#   kimi-k2.5     19.6s  1880 out   95.9 tok/s  8 sessions
+#   glm-4.7       54.4s  1462 out   26.9 tok/s  7 sessions
+#
+# Sonnet 5 is 37% faster than 4.6 for the same output token count and $2/$10
+# against $3/$15. Its newer tokenizer does cost ~30% more INPUT tokens (6147 vs
+# 4747), but input is prefilled in parallel and priced lower, so it does not
+# show up in latency. Haiku 4.5 and gpt-5.6-terra are faster still and remain
+# worth revisiting, but both produced a shorter agenda, and the two non-Claude
+# providers reject Anthropic's cachePoint block and report input tokens as 129
+# regardless of prompt size — prompt caching and cost tracking would both need
+# work before either could ship.
 AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "bedrock").lower()
 LLM_MODEL: str = os.getenv("AGENDA_LLM_MODEL", "gpt-5-mini")
 AGENDA_BEDROCK_MODEL_ID: str = os.getenv(
-    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
+    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5"
 )
 MAX_DOCUMENT_CHARS: int = int(os.getenv("MAX_DOCUMENT_CHARS", "30000"))
 AGENDA_SESSION_MIN: int = int(os.getenv("AGENDA_SESSION_MIN", "6"))

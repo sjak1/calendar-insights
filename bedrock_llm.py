@@ -14,8 +14,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Model ID - Claude Haiku on Bedrock (cross-region inference)
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID") or "us.anthropic.claude-sonnet-4-6"
+# Model ID - Claude Sonnet 5 on Bedrock (cross-region inference).
+# Sonnet 5 beats 4.6 on every tool-use benchmark and costs less ($2/$10 against
+# $3/$15), which is the whole trade for a loop that is mostly tool calls.
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID") or "us.anthropic.claude-sonnet-5"
 BEDROCK_REGION = os.getenv("AWS_REGION", os.getenv("BEDROCK_REGION", "us-west-2"))
 
 _bedrock_client = None
