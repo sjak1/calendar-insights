@@ -130,6 +130,7 @@ def converse(
     system,
     tool_config: Optional[Dict] = None,
     model_id: Optional[str] = None,
+    max_tokens: Optional[int] = None,
 ) -> Dict:
     """
     Call Bedrock Converse API.
@@ -138,6 +139,13 @@ def converse(
     or a pre-built list of Bedrock system content blocks — use the list form
     to insert ``{"cachePoint": {"type": "default"}}`` markers for prompt
     caching of static prefixes.
+
+    `max_tokens` caps the response. Leaving it unset is not the same as "no
+    limit": Converse then applies its own default of 4096, which silently
+    truncated every multi-day agenda mid-JSON — the model stopped partway
+    through the tool-use object and pydantic reported the fields that never
+    arrived as missing. Callers that generate long structured output must
+    pass a ceiling that fits the whole thing.
 
     Returns the raw response dict.
     """
@@ -191,5 +199,7 @@ def converse(
     }
     if tool_config is not None:
         request["toolConfig"] = tool_config
+    if max_tokens is not None:
+        request["inferenceConfig"] = {"maxTokens": max_tokens}
     response = client.converse(**request)
     return response

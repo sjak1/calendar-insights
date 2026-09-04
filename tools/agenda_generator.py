@@ -86,6 +86,14 @@ AGENDA_DAY_END: str = os.getenv("AGENDA_DAY_END", "5:00 PM")
 AGENDA_MAX_ATTENDEES: int = int(os.getenv("AGENDA_MAX_ATTENDEES", "20"))
 LLM_TIMEOUT_SECONDS: int = int(os.getenv("AGENDA_LLM_TIMEOUT", "120"))
 
+# Ceiling on the agenda tool-use response. Converse defaults to 4096 when no
+# inferenceConfig is sent, which is under what a multi-day briefing needs: a
+# five-day Zurich agenda measured 7253 output tokens, and every event with
+# duration > 1 failed in production because the JSON was cut off partway. This
+# is a cap and not a target — billing is on tokens actually generated, so the
+# headroom is free. _MAX_SESSIONS_TOTAL is what keeps the length sane.
+AGENDA_MAX_OUTPUT_TOKENS: int = int(os.getenv("AGENDA_MAX_OUTPUT_TOKENS", "16000"))
+
 # EBD quality gate: skip extracted text that is too short or mostly non-alpha
 EBD_MIN_WORDS: int = 100
 EBD_MAX_NOISE_RATIO: float = 0.5  # if >50% of chars are non-alphanumeric, skip
@@ -100,6 +108,14 @@ def _get_openai_client() -> OpenAI:
     if _openai_client is None:
         _openai_client = OpenAI()
     return _openai_client
+
+
+class AgendaTruncated(RuntimeError):
+    """The model ran out of output budget partway through the agenda object.
+
+    Distinct from a schema error: the agenda we got back is not wrong, it is
+    unfinished, and the retry has to ask for less rather than send less.
+    """
 
 
 # ============================================================================
@@ -1861,6 +1877,24 @@ def _session_count_range(window_minutes: int, num_days: int = 1) -> tuple:
     return low, high
 
 
+def _enforce_session_cap(agenda: "GeneratedAgenda") -> "GeneratedAgenda":
+    """Hold the agenda to _MAX_SESSIONS_TOTAL, in place.
+
+    The budget is stated in the prompt but the model treats it as advice: a
+    five-day Zurich briefing was asked for 20 sessions and wrote 35, which is
+    how the response ran past its output ceiling in the first place. Trimming
+    here means length stops depending on the model complying.
+    """
+    extra = len(agenda.sessions) - _MAX_SESSIONS_TOTAL
+    if extra > 0:
+        logger.warning(
+            f"Agenda came back with {len(agenda.sessions)} sessions, over the "
+            f"{_MAX_SESSIONS_TOTAL} cap; dropping the last {extra}"
+        )
+        agenda.sessions = agenda.sessions[:_MAX_SESSIONS_TOTAL]
+    return agenda
+
+
 def _event_num_days(meeting: Optional[Dict[str, Any]]) -> int:
     """Number of briefing days to schedule, from the event's duration field.
     Clamped to 1..5 (longer durations are almost certainly data errors)."""
@@ -2304,6 +2338,7 @@ def _call_llm_bedrock(
                 system=system_blocks,
                 tool_config=tool_config,
                 model_id=AGENDA_BEDROCK_MODEL_ID,
+                max_tokens=AGENDA_MAX_OUTPUT_TOKENS,
             )
             usage = response.get("usage", {}) or {}
             logger.info(
@@ -2312,6 +2347,15 @@ def _call_llm_bedrock(
                 f"cache_read={usage.get('cacheReadInputTokens', 0)}, "
                 f"cache_write={usage.get('cacheWriteInputTokens', 0)}"
             )
+            # Catch truncation here rather than letting pydantic report the
+            # fields that never arrived as "missing" — that error named
+            # sessions and strategic_notes and said nothing about the cause.
+            if response.get("stopReason") == "max_tokens":
+                raise AgendaTruncated(
+                    f"agenda response hit the {AGENDA_MAX_OUTPUT_TOKENS}-token output "
+                    f"limit after {usage.get('outputTokens', 0)} tokens and was cut off "
+                    f"mid-object"
+                )
             output_msg = response.get("output", {}).get("message", {})
             for block in output_msg.get("content", []):
                 tu = block.get("toolUse")
@@ -2332,6 +2376,17 @@ def _call_llm_bedrock(
                     "## SIMILAR BRIEFINGS\n\nOmitted.\n\n",
                     user_text, flags=re.DOTALL,
                 )
+                # Trimming the prompt only helps when the input was the problem.
+                # Against an output ceiling the second attempt regenerates the
+                # same over-long agenda and dies in the same place, so ask for a
+                # shorter one instead.
+                if isinstance(e, AgendaTruncated):
+                    user_text += (
+                        "\n\n## LENGTH CORRECTION\n\n"
+                        "The previous attempt ran past the output limit and was cut off. "
+                        "Produce a SHORTER agenda this time: fewer sessions, and keep every "
+                        "description to one sentence.\n"
+                    )
                 messages = [{"role": "user", "content": user_text}]
             else:
                 raise
@@ -2721,6 +2776,8 @@ def generate_agenda(
         # scheduling, as a cheap assertion on the result.
         expected_days = _event_num_days(meeting)
         validation_issues: List[str] = []
+
+        _enforce_session_cap(agenda)
 
         logger.info(f"Successfully generated agenda for {meeting.get('company_name')}")
 
