@@ -48,10 +48,12 @@ HAIKU_SYNTHESIS_MODEL_ID = (
     or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
 
-# Claude Sonnet 4.6 on Bedrock pricing (used to estimate per-query cost in responses)
-# If AWS pricing changes, update these constants.
-COST_INPUT_PER_1M = 3.0  # USD per 1M input tokens
-COST_OUTPUT_PER_1M = 15.0  # USD per 1M output tokens
+# Claude Sonnet 5 on Bedrock pricing (used to estimate per-query cost in responses)
+# Keep these in step with BEDROCK_MODEL_ID; if AWS pricing changes, update them.
+# Note these cover the outer agent loop only — tool-internal LLM calls, such as
+# the one in agenda_generator, are not added to the counters these multiply.
+COST_INPUT_PER_1M = 2.0  # USD per 1M input tokens
+COST_OUTPUT_PER_1M = 10.0  # USD per 1M output tokens
 
 if not USE_BEDROCK:
     from openai import OpenAI

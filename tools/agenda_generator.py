@@ -52,11 +52,31 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
-# Provider: "openai" (gpt-5-mini, default) or "bedrock" (Claude Haiku on Bedrock)
-AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "openai").lower()
+# Provider: "bedrock" (Sonnet 5, default) or "openai" (gpt-5-mini).
+# Sonnet 5 replaced Sonnet 4.6 after an 8-model comparison on the same event
+# (Bosch, 2026-09-03), one run each, isolating the agenda LLM call:
+#
+#   sonnet-5      30.4s  3083 out  101.5 tok/s  9 sessions
+#   sonnet-4-6    48.2s  3077 out   63.8 tok/s  8 sessions
+#   haiku-4-5     17.3s  1897 out  109.7 tok/s  7 sessions
+#   gpt-5.6-sol   28.1s  2599 out   92.4 tok/s  8 sessions
+#   gpt-5.6-terra 20.0s  1998 out  100.1 tok/s  8 sessions
+#   gpt-5.6-luna  17.8s     — failed schema validation twice
+#   kimi-k2.5     19.6s  1880 out   95.9 tok/s  8 sessions
+#   glm-4.7       54.4s  1462 out   26.9 tok/s  7 sessions
+#
+# Sonnet 5 is 37% faster than 4.6 for the same output token count and $2/$10
+# against $3/$15. Its newer tokenizer does cost ~30% more INPUT tokens (6147 vs
+# 4747), but input is prefilled in parallel and priced lower, so it does not
+# show up in latency. Haiku 4.5 and gpt-5.6-terra are faster still and remain
+# worth revisiting, but both produced a shorter agenda, and the two non-Claude
+# providers reject Anthropic's cachePoint block and report input tokens as 129
+# regardless of prompt size — prompt caching and cost tracking would both need
+# work before either could ship.
+AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "bedrock").lower()
 LLM_MODEL: str = os.getenv("AGENDA_LLM_MODEL", "gpt-5-mini")
 AGENDA_BEDROCK_MODEL_ID: str = os.getenv(
-    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001"
+    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5"
 )
 MAX_DOCUMENT_CHARS: int = int(os.getenv("MAX_DOCUMENT_CHARS", "30000"))
 AGENDA_SESSION_MIN: int = int(os.getenv("AGENDA_SESSION_MIN", "6"))
@@ -114,13 +134,71 @@ class TopicPresenterSuggestion(BaseModel):
     revenue_note: Optional[str] = None
 
 
+class BackupPresenter(BaseModel):
+    """A ranked alternate for a session, verified free at its final time.
+
+    Typed rather than a free dict for the same reason as
+    TopicPresenterSuggestion: AgendaSession is the structured-output schema and
+    strict mode rejects Dict[str, Any].
+    """
+    presenter_name: str
+    title: Optional[str] = None
+    match_tier: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class AgendaSession(BaseModel):
     """A single session in the agenda."""
     day: int = Field(
         default=1,
         description="Day of the briefing this session belongs to (1-based). Always 1 for single-day events.",
     )
-    time_slot: str = Field(description="Time range, e.g., '10:00 AM - 10:45 AM'")
+    time_slot: str = Field(
+        default="",
+        description=(
+            "Leave empty. Clock times are assigned after generation by the "
+            "scheduler, which knows the event's booked hours and who is free "
+            "when. Anything written here is discarded."
+        ),
+    )
+    duration_minutes: int = Field(
+        default=45,
+        description=(
+            "How long this session should run, in minutes. Use realistic "
+            "lengths: 15 for a welcome or close, 30-60 for a content session, "
+            "60 for lunch. The scheduler turns these into clock times."
+        ),
+    )
+    duration_min_minutes: Optional[int] = Field(
+        default=None,
+        description=(
+            "Shortest this session can usefully run. Set it below "
+            "duration_minutes only where the session can genuinely be "
+            "compressed — it is the slack the scheduler uses to fit a busy "
+            "expert or a tight window. Leave null for fixed-length slots."
+        ),
+    )
+    duration_max_minutes: Optional[int] = Field(
+        default=None,
+        description="Longest this session can usefully run. Leave null for fixed-length slots.",
+    )
+    anchor: Literal["open", "morning", "lunch", "afternoon", "close", "any"] = Field(
+        default="any",
+        description=(
+            "Where in the day this belongs. 'open' for the welcome, 'close' for "
+            "the wrap-up/next-steps, 'lunch' for the lunch break, 'morning'/"
+            "'afternoon' when the content genuinely needs that half of the day "
+            "(strategy while executives are fresh; hands-on work later), 'any' otherwise."
+        ),
+    )
+    movable: bool = Field(
+        default=True,
+        description=(
+            "May the scheduler move this session to a different point in the day "
+            "to keep the best-matched presenter? False for the welcome, lunch and "
+            "close, and for anything whose position carries the narrative."
+        ),
+    )
     title: str = Field(description="Action-oriented session title")
     format: Literal["Presentation", "Demo", "Roundtable", "Working Session"] = Field(
         description="Session format type"
@@ -144,6 +222,21 @@ class AgendaSession(BaseModel):
     presenter_before_topic_match: Optional[str] = Field(
         default=None,
         description="The originally generated presenter, kept when topic matching replaced it.",
+    )
+    scheduling_note: Optional[str] = Field(
+        default=None,
+        description=(
+            "Leave null. Filled in by the scheduler when it had to reshape the day "
+            "— e.g. moving a session to keep the best-matched presenter."
+        ),
+    )
+    backup_presenters: List[BackupPresenter] = Field(
+        default_factory=list,
+        description=(
+            "Leave empty. Filled in by the scheduler with the next-ranked people "
+            "who are ALSO free at this session's final time — a briefing team's "
+            "first question when a presenter drops out."
+        ),
     )
     key_metrics: Optional[str] = Field(
         default=None, 
@@ -599,8 +692,13 @@ def _fetch_meeting_context_os(
         "region": visit.get("region"),
         "tier": visit.get("tier"),
         "start_time_ms": hit.get("startTime"),
+        # The booked window's other half. Without it the agenda is laid out
+        # against AGENDA_DAY_START/END rather than the hours actually reserved,
+        # which is how a briefing booked 08:30-16:30 got a 10:00-17:00 agenda.
+        "end_time_ms": hit.get("endTime"),
         "timezone": hit.get("timezone"),
         "duration_days": hit.get("duration"),
+        "location": _event_location(hit),
     }
     actual_event_id = hit.get("eventId")
     actual_company = visit.get("customerName") or company_name
@@ -679,7 +777,10 @@ def _fetch_meeting_context_os(
 
 # Source fields we request from the events index
 _EVENT_SOURCE_FIELDS = [
-    "eventId", "eventName", "startTime", "timezone", "duration",
+    # endTime closes the booked window. Without it the agenda is laid out
+    # against the AGENDA_DAY_START/END defaults no matter what hours the room
+    # is actually reserved for.
+    "eventId", "eventName", "startTime", "endTime", "timezone", "duration",
     "eventFormData.VISIT_INFO",
     "eventFormData.EXTERNAL_ATTENDEES",
     "eventFormData.INTERNAL_ATTENDEES",
@@ -722,6 +823,30 @@ def _form_section_list(hit: Dict[str, Any], section: str) -> List[Dict[str, Any]
     if isinstance(val, dict):
         return [val]
     return []
+
+
+def _event_location(hit: Dict[str, Any]) -> str:
+    """Human-readable venue from `location.data`.
+
+    Requested in _EVENT_SOURCE_FIELDS since forever but never read, so the
+    model was asked for a `location` field with nothing to base it on and
+    filled it with "Hybrid (on-site + virtual)" every time.
+    """
+    loc = hit.get("location")
+    if isinstance(loc, list):
+        loc = loc[0] if loc else None
+    data = (loc or {}).get("data") if isinstance(loc, dict) else None
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if not isinstance(data, dict):
+        return ""
+
+    name = data.get("locationName") or data.get("textField1") or ""
+    street = data.get("addressLine1") or data.get("textField2") or ""
+    city = data.get("city") or data.get("textField4") or ""
+    state = data.get("state") or data.get("textField6") or ""
+    parts = [p for p in (name, street, ", ".join(x for x in (city, state) if x)) if p]
+    return " — ".join(parts)
 
 
 def _fetch_similar_briefings_os(
@@ -966,6 +1091,123 @@ def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
     return ebd_context
 
 
+def _event_timezone(meeting: Dict[str, Any]):
+    """The event's own tzinfo, falling back to UTC rather than a fixed region."""
+    from datetime import timezone as _tz
+
+    event_tz = meeting.get("timezone")
+    if event_tz:
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+
+            return _ZI(str(event_tz))
+        except Exception:
+            logger.debug(f"Unknown event timezone '{event_tz}', using UTC")
+    return _tz.utc
+
+
+def _briefing_window(meeting: Dict[str, Any], day_index: int = 1):
+    """The hours actually booked for day `day_index`, as (start_ms, end_ms, tz).
+
+    This is the canvas the agenda has to fit. Returns (None, None, tz) when the
+    event carries no usable window, in which case the caller falls back to the
+    AGENDA_DAY_START/END defaults.
+
+    A "usable" window excludes the placeholder spans the data is full of — some
+    events are stored as 07:00-20:00 or a flat 24 hours, which is a booking
+    system default rather than a briefing that genuinely runs thirteen hours.
+    Laying an agenda out across one of those is no better than the env default,
+    so we do not pretend otherwise.
+    """
+    tz_obj = _event_timezone(meeting)
+    start_ms = meeting.get("start_time_ms")
+    end_ms = meeting.get("end_time_ms")
+    if not start_ms or not end_ms or end_ms <= start_ms:
+        return None, None, tz_obj
+
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+
+        start_dt = _dt.fromtimestamp(start_ms / 1000, tz=tz_obj)
+        end_dt = _dt.fromtimestamp(end_ms / 1000, tz=tz_obj)
+
+        # Multi-day: each day repeats day 1's clock hours.
+        if day_index > 1:
+            shift = _td(days=day_index - 1)
+            start_dt, end_dt = start_dt + shift, end_dt + shift
+
+        # A single day's worth of hours only. Multi-day events store the whole
+        # span end-to-end, so clamp to day one's close before measuring.
+        if (end_dt - start_dt) > _td(hours=14):
+            end_dt = start_dt.replace(hour=17, minute=0, second=0, microsecond=0)
+            if end_dt <= start_dt:
+                return None, None, tz_obj
+
+        hours = (end_dt - start_dt).total_seconds() / 3600
+        # >= 13, not > 13: the canonical placeholder in this data is 07:00-20:00,
+        # which is exactly 13 hours and slipped through the strict comparison —
+        # so the very span this guard names was the one it let past.
+        if hours < 1 or hours >= 13:
+            logger.info(f"Event window looks like a placeholder ({hours:.1f}h) — using day defaults")
+            return None, None, tz_obj
+
+        return int(start_dt.timestamp() * 1000), int(end_dt.timestamp() * 1000), tz_obj
+    except Exception as exc:
+        logger.warning(f"Could not derive briefing window: {exc}")
+        return None, None, tz_obj
+
+
+def _fallback_window(meeting: Dict[str, Any], day_index: int = 1):
+    """AGENDA_DAY_START/END on the event's own date — used when the event has no
+    usable booked window. Still anchored to the real date and timezone, so the
+    scheduler and the availability lookup are talking about the same day."""
+    from datetime import datetime as _dt, timedelta as _td
+
+    tz_obj = _event_timezone(meeting)
+    start_ms = meeting.get("start_time_ms")
+    day_start_min = _parse_clock(AGENDA_DAY_START) or 600
+    day_end_min = _parse_clock(AGENDA_DAY_END) or 1020
+
+    base = (
+        _dt.fromtimestamp(start_ms / 1000, tz=tz_obj)
+        if start_ms
+        else _dt.now(tz=tz_obj)
+    ) + _td(days=day_index - 1)
+    midnight = base.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = midnight + _td(minutes=day_start_min)
+    end = midnight + _td(minutes=day_end_min)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000), tz_obj
+
+
+def _schedule_summary(meeting: Dict[str, Any], day_index: int = 1) -> Dict[str, Any]:
+    """Human-readable description of the day the agenda has to fit into.
+
+    Used both to tell the model what canvas it is writing for and to give the
+    scheduler its bounds, so the two can never disagree.
+    """
+    from datetime import datetime as _dt
+
+    start_ms, end_ms, tz_obj = _briefing_window(meeting, day_index)
+    booked = start_ms is not None
+    if not booked:
+        start_ms, end_ms, tz_obj = _fallback_window(meeting, day_index)
+
+    start_dt = _dt.fromtimestamp(start_ms / 1000, tz=tz_obj)
+    end_dt = _dt.fromtimestamp(end_ms / 1000, tz=tz_obj)
+    fmt = lambda d: d.strftime("%I:%M %p").lstrip("0")  # noqa: E731
+
+    return {
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "tz": tz_obj,
+        "booked": booked,
+        "date": start_dt.strftime("%A, %d %B %Y"),
+        "label": f"{fmt(start_dt)} - {fmt(end_dt)} {start_dt.tzname() or ''}".strip()
+        + ("" if booked else " (no booked hours on file — using default briefing hours)"),
+        "minutes": int((end_ms - start_ms) / 60000),
+    }
+
+
 def _availability_window(meeting: Dict[str, Any]):
     """Start/end of the event day in the EVENT's own timezone, as epoch ms.
 
@@ -1159,6 +1401,10 @@ def _assign_presenters_by_topic(
         "matched": matched,
         "reassigned": reassigned,
         "rationale": rationale,
+        # The full ranked pool per topic. The scheduler needs it for alternates:
+        # knowing only the winner leaves it nothing to fall back to when that
+        # person turns out to be busy at the hour the session lands on.
+        "by_topic": by_topic,
         "guidance": (
             "ALWAYS end the agenda with a short 'Why these presenters' section — "
             "do not wait to be asked. A staffing choice a reader cannot check is a "
@@ -1331,19 +1577,38 @@ def _parse_time_slot(slot: str) -> Optional[tuple]:
     return start, end
 
 
-def _validate_agenda_sessions(agenda: "GeneratedAgenda", expected_days: int = 1) -> List[str]:
+def _validate_agenda_sessions(
+    agenda: "GeneratedAgenda",
+    expected_days: int = 1,
+    meeting: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """
-    Deterministically check the LLM's session times. Returns a list of
-    human-readable issues (empty list = agenda is well-formed).
+    Deterministically check session times. Returns a list of human-readable
+    issues (empty list = agenda is well-formed).
 
-    Checks (per day): parseable slots, end-after-start, within the configured
-    day window, no overlap with the previous session on the same day, and a
-    lunch break present. For multi-day events, also checks every expected day
-    has sessions.
+    Checks (per day): parseable slots, end-after-start, within the day window,
+    no overlap with the previous session on the same day, and a lunch break
+    present. For multi-day events, also checks every expected day has sessions.
+
+    The window is the event's BOOKED hours when it has them, falling back to
+    AGENDA_DAY_START/END otherwise. Validating against the env defaults while
+    the briefing actually runs 08:30-16:30 checks the agenda against a day that
+    does not exist — it passed agendas that overran the booking and flagged
+    correct ones that started before 10am.
     """
     issues: List[str] = []
+    window_label = f"{AGENDA_DAY_START} - {AGENDA_DAY_END}"
     day_start = _parse_clock(AGENDA_DAY_START)
     day_end = _parse_clock(AGENDA_DAY_END)
+    if meeting:
+        sched = _schedule_summary(meeting)
+        from datetime import datetime as _dt
+
+        w_start = _dt.fromtimestamp(sched["start_ms"] / 1000, tz=sched["tz"])
+        w_end = _dt.fromtimestamp(sched["end_ms"] / 1000, tz=sched["tz"])
+        day_start = w_start.hour * 60 + w_start.minute
+        day_end = w_end.hour * 60 + w_end.minute
+        window_label = sched["label"]
 
     # Group sessions by day, preserving order within each day
     by_day: Dict[int, list] = {}
@@ -1364,16 +1629,16 @@ def _validate_agenda_sessions(agenda: "GeneratedAgenda", expected_days: int = 1)
             if end <= start:
                 issues.append(f"{label} ends at or before it starts ({s.time_slot}).")
             if day_start is not None and start < day_start:
-                issues.append(f"{label} starts before the day window ({AGENDA_DAY_START}).")
+                issues.append(f"{label} starts before the day window ({window_label}).")
             if day_end is not None and end > day_end:
-                issues.append(f"{label} ends after the day window ({AGENDA_DAY_END}).")
+                issues.append(f"{label} ends after the day window ({window_label}).")
             if prev_end is not None and start < prev_end:
                 issues.append(f"{label} overlaps the previous session (it starts before the prior session ends).")
             prev_end = end
 
         if not any("lunch" in (s.title or "").lower() for _, s in by_day[day]):
             issues.append(
-                f"No lunch break is scheduled{day_label or ' '}. Add a lunch session between {AGENDA_DAY_START} and {AGENDA_DAY_END}."
+                f"No lunch break is scheduled{day_label or ' '}. Add a lunch session within {window_label}."
             )
 
     # Multi-day coverage: every expected day must have sessions
@@ -1385,6 +1650,215 @@ def _validate_agenda_sessions(agenda: "GeneratedAgenda", expected_days: int = 1)
             )
 
     return issues
+
+
+def _schedule_agenda_sessions(
+    agenda: "GeneratedAgenda",
+    context: Dict[str, Any],
+    by_topic: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Dict[str, Any]:
+    """Assign real clock times, scheduling around presenter availability.
+
+    This is the step that makes availability an input rather than a footnote.
+    Before it existed the model wrote `time_slot` against env defaults and the
+    availability check ran afterwards, producing a warning nobody acted on — so
+    an agenda could be, and routinely was, staffed with people already booked
+    and laid out across hours the room was not reserved for.
+
+    Sessions are annotated in place. Returns a summary for logging/telemetry.
+    """
+    from tools.agenda_scheduler import SessionSpec, layout
+
+    meeting = context.get("meeting_details") or {}
+    sessions = list(agenda.sessions or [])
+    if not sessions:
+        return {"scheduled": 0}
+
+    by_topic = by_topic or {}
+
+    # Every address of every candidate we might place, so one lookup covers the day.
+    emails: set = set()
+    for people in by_topic.values():
+        for person in people:
+            emails.update(e.lower() for e in (person.get("all_emails") or []) if e)
+            if person.get("email"):
+                emails.add(person["email"].lower())
+
+    busy_map: Dict[str, List[tuple]] = {}
+    if emails:
+        try:
+            from tools.presenter_suggest import _check_presenter_conflicts
+
+            win_start, win_end = _availability_window(meeting)
+            if win_start and win_end:
+                # Exclude this event's own activities: we are laying out THIS
+                # briefing, so its existing sessions are the thing being planned,
+                # not a competing commitment.
+                raw = _check_presenter_conflicts(
+                    sorted(emails), win_start, win_end,
+                    exclude_event_id=meeting.get("event_id"),
+                )
+                for email, entries in raw.items():
+                    spans = [
+                        (e["start_ms"], e["end_ms"])
+                        for e in entries
+                        if e.get("start_ms") and e.get("end_ms")
+                    ]
+                    if spans:
+                        busy_map[email] = spans
+        except Exception as exc:
+            logger.warning(f"Presenter busy-map lookup failed, scheduling without it: {exc}")
+
+    by_day: Dict[int, List[Any]] = {}
+    for sess in sessions:
+        day = sess.day if isinstance(getattr(sess, "day", None), int) and sess.day >= 1 else 1
+        by_day.setdefault(day, []).append(sess)
+
+    total_placed = 0
+    unplaced_titles: List[str] = []
+    notes: List[str] = []
+    conflicts = 0
+    backups = 0
+    windows: List[str] = []
+    # Rebuilt in placement order. The scheduler may reorder a day to keep the
+    # best presenter, and leaving agenda.sessions in the model's original order
+    # would leave the list out of chronological sequence — times jumping
+    # backwards mid-agenda, which every downstream reader treats as an overlap.
+    resequenced: List[Any] = []
+
+    for day in sorted(by_day):
+        sched = _schedule_summary(meeting, day_index=day)
+        windows.append(f"day {day}: {sched['label']}")
+
+        specs = []
+        for sess in by_day[day]:
+            topic = (getattr(sess, "topic", None) or "").strip()
+            specs.append(
+                SessionSpec(
+                    title=sess.title,
+                    duration_target=max(5, int(getattr(sess, "duration_minutes", 45) or 45)),
+                    duration_min=getattr(sess, "duration_min_minutes", None),
+                    duration_max=getattr(sess, "duration_max_minutes", None),
+                    anchor=getattr(sess, "anchor", "any") or "any",
+                    movable=bool(getattr(sess, "movable", True)),
+                    topic=topic or None,
+                    candidates=list(by_topic.get(topic) or []),
+                    payload=sess,
+                )
+            )
+
+        result = layout(
+            specs, sched["start_ms"], sched["end_ms"], sched["tz"], busy_map
+        )
+
+        for placed in result.placed:
+            sess = placed.spec.payload
+            resequenced.append(sess)
+            sess.time_slot = placed.time_slot
+            if placed.presenter:
+                name = placed.presenter.get("presenter_name") or ""
+                title = (placed.presenter.get("title") or "").strip()
+                if name:
+                    new_presenter = f"{name} — {title}" if title else name
+                    if new_presenter != (sess.presenter or "").strip():
+                        sess.presenter_before_topic_match = (
+                            sess.presenter_before_topic_match or sess.presenter
+                        )
+                    sess.presenter = new_presenter
+            if placed.scheduling_note:
+                notes.append(f"{sess.title}: {placed.scheduling_note}")
+                # Carry the reason onto the session so the answer can explain
+                # the shape of the day instead of just asserting it.
+                sess.scheduling_note = placed.scheduling_note
+            # The alternates the scheduler already checked are free at this
+            # exact slot. Computing them and dropping them meant the one
+            # question a briefing team always asks — "who else could do this?"
+            # — had an answer that never left the scheduler.
+            sess.backup_presenters = [
+                BackupPresenter(
+                    presenter_name=alt.get("presenter_name") or "",
+                    title=(alt.get("title") or "").strip() or None,
+                    match_tier=alt.get("match_tier"),
+                    reason=alt.get("reason"),
+                )
+                for alt in placed.alternates
+                if alt.get("presenter_name")
+            ]
+            backups += len(sess.backup_presenters)
+            if placed.has_conflict:
+                conflicts += 1
+            total_placed += 1
+
+        for spec in result.unplaced:
+            unplaced_titles.append(spec.title)
+
+    # Chronological order, days in sequence. Anything the scheduler could not
+    # fit is dropped here rather than left behind with an empty time slot.
+    agenda.sessions = resequenced
+
+    logger.info(
+        f"Scheduled {total_placed} session(s) across {len(by_day)} day(s); "
+        f"{conflicts} unavoidable conflict(s), {len(unplaced_titles)} did not fit"
+    )
+    return {
+        "scheduled": total_placed,
+        "windows": windows,
+        "moved": notes,
+        "unavoidable_conflicts": conflicts,
+        "backups_offered": backups,
+        "did_not_fit": unplaced_titles,
+        "guidance": (
+            "Session times came from the event's booked hours and the presenters' "
+            "real calendars, not from a template — state the date and hours as fact. "
+            "Where a session carries a scheduling note, mention it once: it explains "
+            "why the day is shaped as it is. If anything is listed under did_not_fit, "
+            "say plainly that it was dropped for lack of time rather than omitting it. "
+            "Where a session carries backup_presenters, those people were checked free "
+            "at that exact slot — offer them as the fallback if the primary drops out."
+        ),
+    }
+
+
+# A briefing day has a practical ceiling on distinct sessions regardless of how
+# many hours are booked — past this you are describing a conference timetable,
+# not a briefing, and the structured-output call grows accordingly.
+_MAX_SESSIONS_PER_DAY = 10
+# And a ceiling across the whole briefing: a 12-hour window over three days
+# asked for up to 36 sessions, which stalled generation outright.
+_MAX_SESSIONS_TOTAL = 24
+
+
+def _session_count_range(window_minutes: int, num_days: int = 1) -> tuple:
+    """How many sessions this briefing can carry per day, as (min, max).
+
+    AGENDA_SESSION_MIN/MAX are one fixed range for every briefing, so a
+    four-hour visit was asked for the same 6-10 sessions as a full day and the
+    model met the count by shrinking everything to fit. Deriving the range from
+    the booked window instead means one session per ~75 min at the loose end
+    and per ~45 min at the tight end — which reproduces the old 6-10 for a
+    standard seven-hour day, and scales honestly either side of it.
+
+    Both ends are then capped. Sizing purely off the window is what a long
+    booking exposes: a 12-hour window over three days worked out to 9-12
+    sessions a day, 36 in total, and the generation call simply stalled. Hours
+    booked is evidence of how long the room is held, not of how many distinct
+    sessions anyone wants to sit through.
+
+    Falls back to the configured range when there is no window to measure.
+    """
+    if not window_minutes or window_minutes <= 0:
+        return AGENDA_SESSION_MIN, AGENDA_SESSION_MAX
+
+    low = max(3, window_minutes // 75)
+    high = max(low + 1, window_minutes // 45)
+
+    high = min(high, _MAX_SESSIONS_PER_DAY)
+    if num_days > 1:
+        # Spread the total budget across the days rather than per-day sizing
+        # each one as though it were the only day.
+        high = min(high, max(4, _MAX_SESSIONS_TOTAL // num_days))
+    low = min(low, max(3, high - 1))
+    return low, high
 
 
 def _event_num_days(meeting: Optional[Dict[str, Any]]) -> int:
@@ -1534,6 +2008,7 @@ the title as TBD instead of inventing one.
         correction_note=correction_note,
         num_days=num_days,
         missing_fields=missing_fields,
+        schedule=_schedule_summary(meeting),
     )
 
     logger.info("Generating structured agenda with LLM...")
@@ -1631,6 +2106,7 @@ def _build_agenda_prompt(
     decision_makers, technical_attendees, remote_attendees, external_attendees,
     previous, similar, presenter_section, ebd_section, has_ebd,
     presenter_recommendations, correction_note=None, num_days=1, missing_fields=None,
+    schedule=None,
 ) -> str:
     """Build the user prompt for the LLM."""
     correction_section = f"\n\n## CORRECTIONS REQUIRED\n\n{correction_note}\n" if correction_note else ""
@@ -1643,17 +2119,36 @@ def _build_agenda_prompt(
             "record each assumption as a short bullet in strategic_notes.assumptions so the requester "
             "can confirm or correct it.\n"
         )
+    # The booked hours, when the event has real ones. Sessions are sized to fill
+    # them; the scheduler then turns durations into clock times.
+    window_label = schedule.get("label") if schedule else None
+    window_minutes = (schedule or {}).get("minutes") or 0
+    if window_label:
+        day_span = f"{window_label} ({window_minutes // 60}h{window_minutes % 60 or ''} of booked time)"
+    else:
+        day_span = f"{AGENDA_DAY_START} - {AGENDA_DAY_END}"
+
+    budget = (
+        f" Session durations should add up to roughly {int(window_minutes * 0.85)} minutes "
+        f"so the day is well used without being programmed wall-to-wall."
+        if window_minutes
+        else ""
+    )
+    # Session count scales with the booked day rather than being one fixed
+    # range for a four-hour visit and a full day alike.
+    sess_min, sess_max = _session_count_range(window_minutes, num_days)
+
     if num_days > 1:
         day_requirement = (
             f"1. This is a {num_days}-DAY briefing. Create sessions for EVERY day: set the day field "
-            f"(1..{num_days}) on each session. Each day runs {AGENDA_DAY_START} - {AGENDA_DAY_END} with "
-            f"{AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions AND its own lunch break. Give each day a "
+            f"(1..{num_days}) on each session. Each day runs {day_span} with "
+            f"{sess_min}-{sess_max} sessions AND its own lunch break.{budget} Give each day a "
             "coherent theme (e.g. day 1 = vision/strategy, day 2 = deep-dives/planning) and avoid repeating sessions across days."
         )
     else:
         day_requirement = (
-            f"1. Create {AGENDA_SESSION_MIN}-{AGENDA_SESSION_MAX} sessions covering "
-            f"{AGENDA_DAY_START} - {AGENDA_DAY_END} (single day; day field = 1)."
+            f"1. Create {sess_min}-{sess_max} sessions filling "
+            f"{day_span} (single day; day field = 1).{budget}"
         )
     return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}{gaps_section}
 
@@ -1669,15 +2164,28 @@ Sales Plays: {meeting.get('sales_plays')}
 Strategic Pillars: {meeting.get('pillars')}
 Region: {meeting.get('region')}
 Tier: {meeting.get('tier')}
+Date: {(schedule or {}).get('date') or 'not on file'}
+Booked hours: {(schedule or {}).get('label') or 'not on file'}
+Location: {meeting.get('location') or 'not on file'}
 
 ## ATTENDEE MIX
 
 Total attendees: {total_attendee_count}{f' (showing top {len(attendees)})' if total_attendee_count > len(attendees) else ''}
-C-Level: {len(c_level_attendees)} ({', '.join(f"{a['name']} ({a['c_level']})" for a in c_level_attendees[:3]) or 'None'})
-Decision Makers: {len(decision_makers)}
-Technical: {len(technical_attendees)}
-Remote: {len(remote_attendees)}
-External: {len(external_attendees)}
+C-Level: {len(c_level_attendees)} | Decision Makers: {len(decision_makers)} | Technical: {len(technical_attendees)} | Remote: {len(remote_attendees)} | External: {len(external_attendees)}
+
+Who is actually in the room — design the day for THESE people. Their real job
+titles are what matter; the C-level flag is a data field and often disagrees
+with the title, in which case believe the title:
+
+{chr(10).join(
+    f"- {a.get('name') or 'Unnamed'} — {a.get('title') or 'title unknown'}"
+    f" [{a.get('type', 'Unknown')}"
+    + (", decision maker" if a.get("decision_maker") else "")
+    + (", technical" if a.get("technical") else "")
+    + (", remote" if a.get("remote") else "")
+    + "]"
+    for a in attendees[:15]
+) or '- No attendee records on file'}
 
 ## PREVIOUS MEETINGS (ranked by relevance)
 
@@ -1692,6 +2200,14 @@ External: {len(external_attendees)}
 ## REQUIREMENTS
 
 {day_requirement}
+1b. Do NOT write time_slot — leave it empty. Set duration_minutes on every session,
+    plus anchor ('open' for the welcome, 'lunch', 'close' for the wrap-up, 'morning'/
+    'afternoon' where the content needs that half of the day, else 'any') and movable
+    (False for welcome/lunch/close). Clock times are assigned afterwards by a scheduler
+    that knows the booked hours and each presenter's real calendar — which is why it,
+    and not you, decides when things run. Where a session could reasonably be shorter
+    or longer, set duration_min_minutes / duration_max_minutes: that slack is what lets
+    the scheduler keep the best-matched expert instead of downgrading to someone free.
 2. Include a lunch break{' each day' if num_days > 1 else ''}.
 3. Tailor to {meeting.get('industry')} industry.
 4. Address visit focus: {meeting.get('visit_focus')}.
@@ -1856,6 +2372,12 @@ def _call_llm_with_retry(
                 temperature=1,
                 timeout=LLM_TIMEOUT_SECONDS,
             )
+            _u = getattr(response, "usage", None)
+            if _u:
+                logger.info(
+                    f"Agenda OpenAI call: tokens in={getattr(_u, 'prompt_tokens', 0)}, "
+                    f"out={getattr(_u, 'completion_tokens', 0)}"
+                )
             return response.choices[0].message.parsed
         except Exception as e:
             if attempt == 0:
@@ -1968,6 +2490,14 @@ def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
         lines.append(f"**Format:** {session.format}  ")
         lines.append(f"**Presenter:** {session.presenter}  ")
         lines.append(f"**Description:** {session.description}  ")
+        if session.backup_presenters:
+            names = ", ".join(
+                f"{b.presenter_name}{f' ({b.title})' if b.title else ''}"
+                for b in session.backup_presenters
+            )
+            lines.append(f"**Backup Presenters:** {names}  ")
+        if session.scheduling_note:
+            lines.append(f"**Scheduling Note:** {session.scheduling_note}  ")
         if session.key_metrics:
             lines.append(f"**Key Metrics:** {session.key_metrics}  ")
         if session.customer_reference:
@@ -2185,28 +2715,12 @@ def generate_agenda(
             ebd_file_id=ebd_file_id,
         )
 
-        # Step 3b: Validate session times; attempt one deterministic repair pass.
+        # Times are no longer the model's to get wrong — the scheduler assigns
+        # them below from the booked window, so the old validate-and-regenerate
+        # repair pass has nothing left to repair. Validation still runs, after
+        # scheduling, as a cheap assertion on the result.
         expected_days = _event_num_days(meeting)
-        validation_issues = _validate_agenda_sessions(agenda, expected_days=expected_days)
-        if validation_issues:
-            logger.warning(
-                f"Agenda validation found {len(validation_issues)} issue(s); attempting one repair pass: {validation_issues}"
-            )
-            try:
-                repaired = _generate_agenda_with_llm(
-                    context,
-                    ebd_context=ebd_context,
-                    ebd_file_url=ebd_file_url,
-                    ebd_file_id=ebd_file_id,
-                    correction_note=_format_correction_note(validation_issues),
-                )
-                repaired_issues = _validate_agenda_sessions(repaired, expected_days=expected_days)
-                # Keep the repair only if it's no worse than the original.
-                if len(repaired_issues) <= len(validation_issues):
-                    agenda = repaired
-                    validation_issues = repaired_issues
-            except Exception as e:
-                logger.warning(f"Agenda repair pass failed ({e}); keeping original agenda.")
+        validation_issues: List[str] = []
 
         logger.info(f"Successfully generated agenda for {meeting.get('company_name')}")
 
@@ -2240,6 +2754,9 @@ def generate_agenda(
         for _sess in agenda.sessions:
             _sess.topic_presenter_suggestion = None
             _sess.presenter_before_topic_match = None
+            _sess.scheduling_note = None
+            _sess.backup_presenters = []
+            _sess.time_slot = ""  # the scheduler owns this; discard any model guess
 
         # Phase two: now that sessions exist and carry topics, ask the ranking
         # who is best for each one. The pool gathered before generation could
@@ -2252,7 +2769,29 @@ def generate_agenda(
         except Exception as exc:
             logger.warning(f"Per-session presenter matching failed: {exc}")
             topic_match_summary = {"checked": 0, "matched": 0, "reassigned": 0, "error": str(exc)}
+
+        # Phase three: put the agenda on the clock. Runs after topic matching so
+        # each session already knows who it wants, and the scheduler can reshape
+        # the day to keep that person rather than settling for whoever is free.
+        try:
+            schedule_summary = _schedule_agenda_sessions(
+                agenda, context, by_topic=topic_match_summary.get("by_topic")
+            )
+        except Exception as exc:
+            logger.warning(f"Session scheduling failed: {exc}", exc_info=True)
+            schedule_summary = {"scheduled": 0, "error": str(exc)}
+        result["scheduling"] = schedule_summary
+
+        # by_topic is a working artefact for the scheduler, not an answer: it is
+        # the whole candidate pool and would swamp the model's context.
+        topic_match_summary.pop("by_topic", None)
         result["topic_presenter_matching"] = topic_match_summary
+
+        # Re-validate against the real window now that times are real.
+        result["validation_issues"] = _validate_agenda_sessions(
+            agenda, expected_days=expected_days, meeting=meeting
+        )
+        result["session_count"] = len(agenda.sessions)
 
         if output_format in ("structured", "both"):
             result["agenda_structured"] = agenda
