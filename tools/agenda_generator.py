@@ -1224,15 +1224,25 @@ def _schedule_summary(meeting: Dict[str, Any], day_index: int = 1) -> Dict[str, 
     }
 
 
-def _availability_window(meeting: Dict[str, Any]):
-    """Start/end of the event day in the EVENT's own timezone, as epoch ms.
+# A briefing runs a handful of days; anything past this is a data error, and
+# each extra day is another availability query.
+_MAX_AVAILABILITY_DAYS = 7
+
+
+def _availability_windows(meeting: Dict[str, Any], days: int = 1):
+    """One (start_ms, end_ms) per briefing day, in the EVENT's own timezone.
+
+    Day N is day one's date shifted by N-1, matching how `_briefing_window`
+    lays a multi-day briefing out. Each entry spans that whole calendar day, so
+    an overlap query against it also catches a commitment that starts before
+    the briefing hours and runs into them.
 
     Falls back to UTC rather than a hardcoded region, so non-US briefings get
-    the right day. Returns (None, None) when the event has no start time.
+    the right day. Returns [] when the event has no start time.
     """
     start_time_ms = meeting.get("start_time_ms")
     if not start_time_ms:
-        return None, None
+        return []
     try:
         from datetime import timezone as _tz
         from datetime import datetime as _dt, timedelta as _td, time as _t
@@ -1247,10 +1257,34 @@ def _availability_window(meeting: Dict[str, Any]):
             except Exception:
                 logger.debug(f"Unknown event timezone '{event_tz}', using UTC")
         event_dt = _dt.fromtimestamp(start_time_ms / 1000, tz=tz_obj)
-        sod = _dt.combine(event_dt.date(), _t(0, 0, 0), tzinfo=tz_obj)
-        return int(sod.timestamp() * 1000), int((sod + _td(days=1)).timestamp() * 1000)
+        day_one = event_dt.date()
+        out = []
+        for offset in range(max(1, days)):
+            # Rebuild each boundary from its own calendar date rather than
+            # adding 24h to the previous one: a DST change inside the briefing
+            # makes a day 23 or 25 hours long, and fixed steps drift off it.
+            d_start = _dt.combine(day_one + _td(days=offset), _t(0, 0, 0), tzinfo=tz_obj)
+            d_end = _dt.combine(day_one + _td(days=offset + 1), _t(0, 0, 0), tzinfo=tz_obj)
+            out.append((int(d_start.timestamp() * 1000), int(d_end.timestamp() * 1000)))
+        return out
     except Exception:
-        return None, None
+        return []
+
+
+def _availability_window(meeting: Dict[str, Any]):
+    """Day one's window alone — the window the *ranking* signal is scored over.
+
+    Deliberately not widened to the whole briefing. `get_suggested_presenters`
+    collapses whatever window it is given into one available/unavailable flag
+    and sorts free candidates first; across four days almost every senior
+    presenter has something booked, so a briefing-wide window here would mark
+    the entire pool unavailable and flatten the sort into noise.
+
+    The check that actually places people is `_is_free` in the scheduler, which
+    tests one slot at a time against the full multi-day busy map built below.
+    """
+    windows = _availability_windows(meeting, 1)
+    return windows[0] if windows else (None, None)
 
 
 def _assign_presenters_by_topic(
@@ -1692,7 +1726,8 @@ def _schedule_agenda_sessions(
 
     by_topic = by_topic or {}
 
-    # Every address of every candidate we might place, so one lookup covers the day.
+    # Every address of every candidate we might place, so one lookup per day
+    # covers the whole pool.
     emails: set = set()
     for people in by_topic.values():
         for person in people:
@@ -1700,35 +1735,83 @@ def _schedule_agenda_sessions(
             if person.get("email"):
                 emails.add(person["email"].lower())
 
-    busy_map: Dict[str, List[tuple]] = {}
-    win_start, win_end = _availability_window(meeting)
-    if emails:
-        try:
-            from tools.presenter_suggest import _check_presenter_conflicts
-
-            if win_start and win_end:
-                # Exclude this event's own activities: we are laying out THIS
-                # briefing, so its existing sessions are the thing being planned,
-                # not a competing commitment.
-                raw = _check_presenter_conflicts(
-                    sorted(emails), win_start, win_end,
-                    exclude_event_id=meeting.get("event_id"),
-                )
-                for email, entries in raw.items():
-                    spans = [
-                        (e["start_ms"], e["end_ms"])
-                        for e in entries
-                        if e.get("start_ms") and e.get("end_ms")
-                    ]
-                    if spans:
-                        busy_map[email] = spans
-        except Exception as exc:
-            logger.warning(f"Presenter busy-map lookup failed, scheduling without it: {exc}")
-
     by_day: Dict[int, List[Any]] = {}
     for sess in sessions:
         day = sess.day if isinstance(getattr(sess, "day", None), int) and sess.day >= 1 else 1
         by_day.setdefault(day, []).append(sess)
+
+    # A busy map covering every scheduled day, fetched one day at a time.
+    #
+    # This was a single lookup over day one's midnight-to-midnight window,
+    # reused for the entire briefing. Since `_is_free` compares absolute
+    # timestamps, a day-one booking can never overlap a day-two slot — so on a
+    # four-day agenda only day one was really checked and every presenter read
+    # as free on days two through four, which the finished agenda then stated
+    # as though it had been verified.
+    #
+    # Per day rather than one wide span because the conflict query is capped at
+    # _CONFLICT_SCAN_SIZE rows: widening the window multiplies the hits and
+    # silently drops the ones past the cut, which reports a booked presenter as
+    # free — the exact failure that check exists to prevent.
+    # Capped: `by_day` keys come from model output, so a single stray `day: 40`
+    # would otherwise fan out into forty OpenSearch queries.
+    scheduled_days = [d for d in sorted(by_day) if d <= _MAX_AVAILABILITY_DAYS]
+    all_windows = _availability_windows(meeting, max(scheduled_days) if scheduled_days else 1)
+    day_lookups = [(d, all_windows[d - 1]) for d in scheduled_days if d - 1 < len(all_windows)]
+
+    busy_map: Dict[str, List[tuple]] = {}
+    checked_days: List[int] = []
+    if emails and day_lookups:
+        try:
+            from tools.presenter_suggest import _check_presenter_conflicts
+
+            def _fetch(entry):
+                day, (start_ms, end_ms) = entry
+                if not start_ms or not end_ms:
+                    return day, None
+                try:
+                    # Exclude this event's own activities: we are laying out THIS
+                    # briefing, so its existing sessions are the thing being
+                    # planned, not a competing commitment.
+                    return day, _check_presenter_conflicts(
+                        sorted(emails), start_ms, end_ms,
+                        exclude_event_id=meeting.get("event_id"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Busy-map lookup failed for day {day}, scheduling it without one: {exc}"
+                    )
+                    return day, None
+
+            # Independent, I/O-bound, and at most five: N days cost roughly one
+            # round trip rather than N.
+            with ThreadPoolExecutor(max_workers=min(5, len(day_lookups))) as pool:
+                for day, raw in pool.map(_fetch, day_lookups):
+                    if raw is None:
+                        continue
+                    # Only a day whose lookup actually returned counts as
+                    # checked; one that failed must not inherit its neighbours'
+                    # coverage and read as verified.
+                    checked_days.append(day)
+                    for email, entries in raw.items():
+                        spans = [
+                            (e["start_ms"], e["end_ms"])
+                            for e in entries
+                            if e.get("start_ms") and e.get("end_ms")
+                        ]
+                        if not spans:
+                            continue
+                        known = busy_map.setdefault(email, [])
+                        # A booking straddling midnight comes back from both
+                        # days' queries; keep one copy.
+                        known.extend(s for s in spans if s not in known)
+        except Exception as exc:
+            logger.warning(f"Presenter busy-map lookup failed, scheduling without it: {exc}")
+
+    checked_days.sort()
+    checked_spans = [all_windows[d - 1] for d in checked_days if d - 1 < len(all_windows)]
+    win_start = min((s for s, _ in checked_spans), default=None)
+    win_end = max((e for _, e in checked_spans), default=None)
 
     total_placed = 0
     unplaced_titles: List[str] = []
@@ -1831,12 +1914,13 @@ def _schedule_agenda_sessions(
         "backups_offered": backups,
         "did_not_fit": unplaced_titles,
         # What availability actually got checked, kept so the provenance trail
-        # can state it rather than implying it. A day whose window falls outside
-        # [window_start_ms, window_end_ms] was scheduled against an empty busy
-        # map — every presenter read as free there because nothing was looked up.
+        # can state it rather than implying it. `checked_days` is the honest
+        # list: a day missing from it was scheduled against an empty busy map,
+        # so every presenter read as free there because nothing was looked up.
         "availability": {
             "window_start_ms": win_start,
             "window_end_ms": win_end,
+            "checked_days": checked_days,
             "checked_emails": sorted(emails),
             "busy_spans_by_email": {
                 email: [[int(a), int(b)] for a, b in spans]

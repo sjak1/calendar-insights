@@ -13,11 +13,12 @@ Why this module exists:
   candidate's numbers, who was chosen, and — for the ones who were not — why.
 
   It also records what availability was actually checked, which is the part
-  nobody thinks to ask about. `_availability_window()` returns a single day,
-  so on a multi-day briefing the busy map is empty for every day after the
-  first and everyone reads as free. That is invisible in the finished agenda
-  and obvious here: `availability.covers_session` is False and
-  `busy_spans_consulted` is empty.
+  nobody thinks to ask about. The scheduler now looks up each briefing day
+  separately, so days two onward carry real busy spans instead of an empty map
+  — but a day's lookup can still fail on its own. When that happens the day is
+  absent from `checked_days`, and this trail says so plainly:
+  `availability.covers_session` is False and `busy_spans_consulted` is 0,
+  rather than letting an unchecked day read as verified.
 
   Pure by design — no I/O, no network. Everything arrives as arguments, which
   is what makes it testable and what keeps it off the request path.
@@ -69,17 +70,33 @@ def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
 
-def _day_is_covered(day_window: Dict[str, Any], win_start: int, win_end: int) -> bool:
-    """Did the availability lookup cover the hours this day is scheduled in?
+def _covered_days(availability: Optional[Dict[str, Any]]) -> set:
+    """The day numbers an availability lookup actually ran for.
 
     The single source of truth for that question — the summary the model sees
     and the per-session trail must never disagree about which days were checked.
+
+    `checked_days` is authoritative when the scheduler supplies it, because it
+    records the days whose lookup *returned*. One day's query can fail while its
+    neighbours succeed, and a day that failed must not inherit their coverage
+    and read as verified. Payloads without that key predate it and carry only
+    the overall window, so fall back to overlapping each day against it.
     """
-    d_start, d_end = day_window.get("start_ms") or 0, day_window.get("end_ms") or 0
-    return bool(
-        win_start and win_end and d_start and d_end
-        and _overlaps(d_start, d_end, win_start, win_end)
-    )
+    availability = availability or {}
+    checked = availability.get("checked_days")
+    if checked is not None:
+        return {int(d) for d in checked}
+
+    win_start = availability.get("window_start_ms") or 0
+    win_end = availability.get("window_end_ms") or 0
+    out = set()
+    for day, win in (availability.get("day_windows") or {}).items():
+        d_start, d_end = (win or {}).get("start_ms") or 0, (win or {}).get("end_ms") or 0
+        if win_start and win_end and d_start and d_end and _overlaps(
+            d_start, d_end, win_start, win_end
+        ):
+            out.add(int(day))
+    return out
 
 
 def unchecked_days(availability: Optional[Dict[str, Any]]) -> List[int]:
@@ -90,14 +107,12 @@ def unchecked_days(availability: Optional[Dict[str, Any]]) -> List[int]:
     should say so rather than letting the agenda imply a check that never ran.
     """
     availability = availability or {}
-    win_start = availability.get("window_start_ms") or 0
-    win_end = availability.get("window_end_ms") or 0
-    out = [
+    covered = _covered_days(availability)
+    return sorted(
         int(day)
-        for day, win in (availability.get("day_windows") or {}).items()
-        if not _day_is_covered(win, win_start, win_end)
-    ]
-    return sorted(out)
+        for day in (availability.get("day_windows") or {})
+        if int(day) not in covered
+    )
 
 
 def _rejection_reason(
@@ -144,6 +159,7 @@ def build_provenance(
     win_end = availability.get("window_end_ms") or 0
     busy_by_email: Dict[str, List[List[int]]] = availability.get("busy_spans_by_email") or {}
     day_windows: Dict[Any, Dict[str, Any]] = availability.get("day_windows") or {}
+    covered_days = _covered_days(availability)
 
     entries: List[Dict[str, Any]] = []
     days_without_check: List[int] = []
@@ -157,7 +173,7 @@ def build_provenance(
         dw = day_windows.get(day) or day_windows.get(str(day)) or {}
         d_start, d_end = dw.get("start_ms") or 0, dw.get("end_ms") or 0
 
-        covered = _day_is_covered(dw, win_start, win_end)
+        covered = day in covered_days
         if not covered and day not in days_without_check:
             days_without_check.append(day)
 
