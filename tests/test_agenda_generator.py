@@ -436,3 +436,85 @@ class TestScheduleAgendaSessions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TruncationTests(unittest.TestCase):
+    """The 4096-token ceiling that broke every multi-day briefing in prod.
+
+    Converse applies a 4096 default when no inferenceConfig is sent, so the
+    agenda object was cut off mid-JSON and pydantic blamed the fields that
+    never arrived. These cover the cap going out, the truncation being named
+    for what it is, and the retry asking for less instead of sending less.
+    """
+
+    def _tool_response(self, stop_reason="end_turn", out_tokens=3000):
+        return {
+            "stopReason": stop_reason,
+            "usage": {"inputTokens": 5000, "outputTokens": out_tokens},
+            "output": {"message": {"content": [{"toolUse": {
+                "name": "emit_agenda", "input": {"unused": True},
+            }}]}},
+        }
+
+    def test_max_tokens_is_sent_to_bedrock(self):
+        """Without this the request silently inherits Converse's 4096 default."""
+        seen = {}
+
+        def fake_converse(**kwargs):
+            seen.update(kwargs)
+            return self._tool_response()
+
+        with mock.patch.object(ag, "bedrock_converse", fake_converse), \
+             mock.patch.object(ag.GeneratedAgenda, "model_validate", lambda d: "ok"):
+            ag._call_llm_bedrock("sys", "user", [], [])
+
+        self.assertEqual(seen.get("max_tokens"), ag.AGENDA_MAX_OUTPUT_TOKENS)
+        self.assertGreater(ag.AGENDA_MAX_OUTPUT_TOKENS, 4096)
+
+    def test_truncation_raises_agenda_truncated_not_validation_error(self):
+        """stopReason=max_tokens must be named, not left to pydantic."""
+        with mock.patch.object(
+            ag, "bedrock_converse",
+            lambda **kw: self._tool_response(stop_reason="max_tokens", out_tokens=16000),
+        ):
+            with self.assertRaises(ag.AgendaTruncated) as ctx:
+                ag._call_llm_bedrock("sys", "user", [], [])
+        self.assertIn("cut off", str(ctx.exception))
+
+    def test_retry_after_truncation_asks_for_a_shorter_agenda(self):
+        """Trimming the prompt cannot fix an output ceiling; the ask must shrink."""
+        prompts = []
+
+        def fake_converse(**kwargs):
+            prompts.append(kwargs["messages"][0]["content"])
+            if len(prompts) == 1:
+                return self._tool_response(stop_reason="max_tokens", out_tokens=16000)
+            return self._tool_response()
+
+        with mock.patch.object(ag, "bedrock_converse", fake_converse), \
+             mock.patch.object(ag.GeneratedAgenda, "model_validate", lambda d: "ok"):
+            ag._call_llm_bedrock("sys", "## PREVIOUS MEETINGS\nx\n\n## OTHER\n", [], [])
+
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn("LENGTH CORRECTION", prompts[0])
+        self.assertIn("LENGTH CORRECTION", prompts[1])
+        self.assertIn("SHORTER", prompts[1])
+
+
+class SessionCapEnforcementTests(unittest.TestCase):
+    """Zurich was budgeted 20 sessions and wrote 35 — the prompt is advice."""
+
+    def test_overlong_agenda_is_trimmed_to_the_cap(self):
+        over = ag._MAX_SESSIONS_TOTAL + 11
+        agenda = agenda_of(*[session(title=f"Session {i}") for i in range(over)])
+        ag._enforce_session_cap(agenda)
+        self.assertEqual(len(agenda.sessions), ag._MAX_SESSIONS_TOTAL)
+        self.assertEqual(agenda.sessions[0].title, "Session 0")
+        self.assertEqual(
+            agenda.sessions[-1].title, f"Session {ag._MAX_SESSIONS_TOTAL - 1}"
+        )
+
+    def test_agenda_within_the_cap_is_left_alone(self):
+        agenda = agenda_of(*[session(title=f"S{i}") for i in range(3)])
+        ag._enforce_session_cap(agenda)
+        self.assertEqual(len(agenda.sessions), 3)
