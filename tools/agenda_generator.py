@@ -1701,11 +1701,11 @@ def _schedule_agenda_sessions(
                 emails.add(person["email"].lower())
 
     busy_map: Dict[str, List[tuple]] = {}
+    win_start, win_end = _availability_window(meeting)
     if emails:
         try:
             from tools.presenter_suggest import _check_presenter_conflicts
 
-            win_start, win_end = _availability_window(meeting)
             if win_start and win_end:
                 # Exclude this event's own activities: we are laying out THIS
                 # briefing, so its existing sessions are the thing being planned,
@@ -1742,9 +1742,16 @@ def _schedule_agenda_sessions(
     # backwards mid-agenda, which every downstream reader treats as an overlap.
     resequenced: List[Any] = []
 
+    day_windows: Dict[int, Dict[str, Any]] = {}
+
     for day in sorted(by_day):
         sched = _schedule_summary(meeting, day_index=day)
         windows.append(f"day {day}: {sched['label']}")
+        day_windows[day] = {
+            "start_ms": sched["start_ms"],
+            "end_ms": sched["end_ms"],
+            "label": sched["label"],
+        }
 
         specs = []
         for sess in by_day[day]:
@@ -1823,6 +1830,20 @@ def _schedule_agenda_sessions(
         "unavoidable_conflicts": conflicts,
         "backups_offered": backups,
         "did_not_fit": unplaced_titles,
+        # What availability actually got checked, kept so the provenance trail
+        # can state it rather than implying it. A day whose window falls outside
+        # [window_start_ms, window_end_ms] was scheduled against an empty busy
+        # map — every presenter read as free there because nothing was looked up.
+        "availability": {
+            "window_start_ms": win_start,
+            "window_end_ms": win_end,
+            "checked_emails": sorted(emails),
+            "busy_spans_by_email": {
+                email: [[int(a), int(b)] for a, b in spans]
+                for email, spans in busy_map.items()
+            },
+            "day_windows": day_windows,
+        },
         "guidance": (
             "Session times came from the event's booked hours and the presenters' "
             "real calendars, not from a template — state the date and hours as fact. "
@@ -2668,7 +2689,8 @@ def generate_agenda(
     pass_ebd_directly: bool = False,
     use_default_ebd: bool = False,
     fetch_ebd_from_db: bool = True,
-    output_format: Literal["structured", "markdown", "both"] = "both"
+    output_format: Literal["structured", "markdown", "both"] = "both",
+    include_provenance: bool = False,
 ) -> Dict[str, Any]:
     """
     Main function to generate an EBC agenda.
@@ -2680,6 +2702,13 @@ def generate_agenda(
     4. Get presenter recommendations (cross-validated against attendee list)
     5. Generate structured agenda via LLM (with timeout + retry)
     6. Compute confidence score and return results
+
+    `include_provenance` attaches the evidence trail behind every presenter
+    pick under a "provenance" key. Off by default and deliberately so: the
+    result dict is handed to the model as a tool result, and the trail carries
+    the whole candidate pool with its source rows — the same reason `by_topic`
+    is stripped below. Turn it on for the debug view and the eval harness,
+    where a human or an assertion reads it instead.
     """
     # Keep original UUID for OpenSearch (which stores UUIDs), resolve numeric for SQL fallback
     original_event_id = event_id
@@ -2838,6 +2867,44 @@ def generate_agenda(
             logger.warning(f"Session scheduling failed: {exc}", exc_info=True)
             schedule_summary = {"scheduled": 0, "error": str(exc)}
         result["scheduling"] = schedule_summary
+
+        # Built here rather than later because it needs by_topic, which is
+        # dropped on the next line. Never allowed to break the response: a
+        # missing trail is a worse agenda, a raised exception is no agenda.
+        if include_provenance:
+            try:
+                from tools.agenda_provenance import build_provenance
+
+                result["provenance"] = build_provenance(
+                    agenda.sessions,
+                    topic_match_summary.get("by_topic"),
+                    availability=schedule_summary.get("availability"),
+                )
+            except Exception as exc:
+                logger.warning(f"Provenance build failed: {exc}", exc_info=True)
+                result["provenance"] = {"error": str(exc)}
+
+        # The raw busy spans and the address list are scheduler working state,
+        # sized by how many people were checked — same context problem as
+        # by_topic. Replace them with the one fact the model should actually
+        # say out loud: which days were staffed without an availability check.
+        _avail = schedule_summary.pop("availability", None)
+        if _avail:
+            from tools.agenda_provenance import unchecked_days
+
+            unchecked = unchecked_days(_avail)
+            schedule_summary["availability_checked"] = {
+                "presenters_checked": len(_avail.get("checked_emails") or []),
+                "presenters_with_conflicts": len(_avail.get("busy_spans_by_email") or {}),
+                "days_without_availability_check": unchecked,
+                "note": (
+                    "Presenter availability was only checked for days listed as "
+                    "covered. Do not describe a presenter on an unchecked day as "
+                    "confirmed free — say the assignment is based on topic fit."
+                ) if unchecked else (
+                    "Every scheduled day fell inside the checked window."
+                ),
+            }
 
         # by_topic is a working artefact for the scheduler, not an answer: it is
         # the whole candidate pool and would swamp the model's context.

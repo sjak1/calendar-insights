@@ -71,6 +71,12 @@ _RECENCY_HALF_LIFE_DAYS = 365.0
 # Presenter statuses to exclude (don't suggest people who declined)
 _EXCLUDED_STATUSES = {"declined", "rejected", "cancelled"}
 
+# How many source activities to keep per presenter for the provenance trail.
+# Hits arrive newest-first, so the kept rows are the most recent ones. This is
+# a display budget, not a ranking input: counts and weights are computed over
+# every hit regardless of what is retained here.
+_MAX_SOURCE_ROWS = 8
+
 # How closely a presenter's topic matched what was asked for. Retrieval runs the
 # loosest STRICT tier (all-tokens) and each hit is then classified locally —
 # exact ⊆ phrase ⊆ all-tokens, so one query returns the superset and the tier is
@@ -418,6 +424,14 @@ def _extract_presenters_from_hits(
         ts = _deep_get(src, START_TIME) or 0
         weight = _recency_weight(ts, now_ms)
 
+        # Identifiers for the provenance trail. bookingId is what a briefing
+        # team recognises ("CBR-20260330-3625"); the raw eventId is what the
+        # index is keyed on, so keep both — one is readable, one is lookupable.
+        booking_id = src.get("bookingId") or ""
+        activity_date = (_deep_get(src, "startTime.requested.requestedZoneDate") or "")
+        if activity_date and "T" in activity_date:
+            activity_date = activity_date.split("T")[0]
+
         for p_entry in presenter_entries:
             # Each topic_presenter entry IS the data object (no nested `.data`).
             presenter = p_entry.get("presenter") or {}
@@ -469,6 +483,11 @@ def _extract_presenters_from_hits(
                     "emails": set(),
                     "recent_weight": 0.0,
                     "tier_recent_weight": 0.0,
+                    # The individual activity rows this person's numbers came
+                    # from. Everything else here is an aggregate, and an
+                    # aggregate cannot be checked: "2 sessions on it, accepted"
+                    # is only believable if you can open the two records.
+                    "sources": [],
                 }
 
             entry = presenters[key]
@@ -488,6 +507,15 @@ def _extract_presenters_from_hits(
                 entry["accepted_count"] += 1
             if is_c_level_audience:
                 entry["c_level_session_count"] += 1
+            if len(entry["sources"]) < _MAX_SOURCE_ROWS:
+                entry["sources"].append({
+                    "event_id": eid,
+                    "booking_id": booking_id,
+                    "topic": primary_topic,
+                    "status": status or "unknown",
+                    "date": activity_date,
+                    "match_tier": _TIER_LABELS[activity_tier],
+                })
             if eid:
                 entry["event_ids"].add(eid)
             for tn in topic_names:
@@ -606,6 +634,10 @@ def _rank_presenters(
                 "sample_topic": p["sample_topic"],
                 "sample_event_id": p["sample_event_id"],
                 "sample_event_name": "",
+                # The rows behind the counts above, newest first. This is what
+                # turns "2 session(s) on it | accepted" from a claim into
+                # something the reader can open and check.
+                "source_activities": p.get("sources", []),
                 "reason": " | ".join(reason_parts),
             }
         )
