@@ -21,6 +21,7 @@ from tools.agenda_generator import (  # noqa: E402
     AgendaSession,
     GeneratedAgenda,
     StrategicNotes,
+    _availability_windows,
     _briefing_window,
     _event_location,
     _event_num_days,
@@ -282,6 +283,42 @@ class TestEventNumDays(unittest.TestCase):
         self.assertEqual(_event_num_days(None), 1)
 
 
+class TestAvailabilityWindows(unittest.TestCase):
+    """The per-day windows the busy-map lookup is issued over."""
+
+    def test_one_window_per_day_covering_whole_calendar_days(self):
+        wins = _availability_windows(meeting_ny(), 3)
+        self.assertEqual(len(wins), 3)
+        self.assertEqual(wins[0][0], ms(datetime(2026, 3, 10, tzinfo=NY)))
+        self.assertEqual(wins[-1][1], ms(datetime(2026, 3, 13, tzinfo=NY)))
+
+    def test_days_are_contiguous_and_do_not_overlap(self):
+        wins = _availability_windows(meeting_ny(), 4)
+        for (_, prev_end), (next_start, _) in zip(wins, wins[1:]):
+            self.assertEqual(prev_end, next_start)
+
+    def test_a_dst_boundary_inside_the_briefing_keeps_real_day_bounds(self):
+        # US DST starts 2026-03-08, so a briefing opening 2026-03-07 crosses it:
+        # that day is 23 hours, and stepping a fixed 24h would slide every later
+        # window an hour off the day it is meant to cover.
+        wins = _availability_windows(meeting_ny(day=7), 3)
+        self.assertEqual(wins[1][0], ms(datetime(2026, 3, 8, tzinfo=NY)))
+        self.assertEqual(wins[2][0], ms(datetime(2026, 3, 9, tzinfo=NY)))
+        # 2026-03-08 itself is the short day; a fixed 24h step would end it
+        # at 11pm and drag every later window off its date.
+        self.assertEqual(wins[1][1] - wins[1][0], 23 * 3600 * 1000)
+
+    def test_no_start_time_yields_no_windows(self):
+        self.assertEqual(_availability_windows({}, 3), [])
+        self.assertEqual(ag._availability_window({}), (None, None))
+
+    def test_the_ranking_window_stays_on_day_one(self):
+        # Deliberate: the ranking flattens its window into one available flag,
+        # so a briefing-wide window would mark the whole pool unavailable.
+        self.assertEqual(ag._availability_window(meeting_ny()),
+                         _availability_windows(meeting_ny(), 1)[0])
+
+
 class TestSchedulerProvenanceWiring(unittest.TestCase):
     """The contract between _schedule_agenda_sessions and build_provenance.
 
@@ -316,12 +353,23 @@ class TestSchedulerProvenanceWiring(unittest.TestCase):
         }]}
 
     def test_scheduler_reports_the_window_and_days_it_used(self):
-        a = agenda_of(session("Welcome", duration=15), session("Lunch", duration=60))
-        summary = self._run(a)
+        a = agenda_of(session("Welcome", topic="Cloud Strategy", duration=15),
+                      session("Lunch", duration=60))
+        summary = self._run(a, by_topic=self._pool())
         avail = summary["availability"]
         self.assertTrue(avail["window_start_ms"] and avail["window_end_ms"])
+        self.assertEqual(avail["checked_days"], [1])
         self.assertIn(1, avail["day_windows"])
         self.assertIn("start_ms", avail["day_windows"][1])
+
+    def test_no_candidate_pool_reports_nothing_checked(self):
+        # There is nobody to look up, so no lookup is issued. Reporting a
+        # window here would claim a check that never ran.
+        a = agenda_of(session("Welcome", duration=15), session("Lunch", duration=60))
+        avail = self._run(a)["availability"]
+        self.assertEqual(avail["checked_days"], [])
+        self.assertIsNone(avail["window_start_ms"])
+        self.assertEqual(unchecked_days(avail), [1])
 
     def test_single_day_agenda_round_trips_as_fully_checked(self):
         a = agenda_of(session("Welcome", topic="Cloud Strategy", duration=45),
@@ -331,19 +379,73 @@ class TestSchedulerProvenanceWiring(unittest.TestCase):
         self.assertEqual(prov["summary"]["days_scheduled_without_availability_check"], [])
         self.assertTrue(all(e["availability"]["covers_session"] for e in prov["sessions"]))
 
-    def test_multi_day_agenda_round_trips_with_later_days_unchecked(self):
-        # The live defect this trail exists to expose: _availability_window()
-        # spans one day, so days 2+ are laid out against an empty busy map.
-        a = agenda_of(
-            session("Welcome", topic="Cloud Strategy", duration=45, day=1),
-            session("Lunch", duration=60, day=1),
-            session("Deep Dive", topic="Cloud Strategy", duration=45, day=2),
-            session("Lunch", duration=60, day=2),
+    def _multi_day(self, days=2):
+        built = []
+        for d in range(1, days + 1):
+            built.append(session("Deep Dive" if d > 1 else "Welcome",
+                                 topic="Cloud Strategy", duration=45, day=d))
+            built.append(session("Lunch", duration=60, day=d))
+        return agenda_of(*built)
+
+    def test_every_day_of_a_multi_day_briefing_is_checked(self):
+        # The defect this fixes: one midnight-to-midnight lookup for day one was
+        # reused for the whole briefing, and since conflicts compare absolute
+        # timestamps, days 2+ were laid out against an effectively empty map.
+        a = self._multi_day(4)
+        summary = self._run(a, by_topic=self._pool(),
+                            meeting=meeting_ny(duration_days=4))
+        self.assertEqual(summary["availability"]["checked_days"], [1, 2, 3, 4])
+        self.assertEqual(unchecked_days(summary["availability"]), [])
+        prov = build_provenance(a.sessions, self._pool(), summary["availability"])
+        self.assertEqual(prov["summary"]["days_scheduled_without_availability_check"], [])
+        self.assertTrue(all(e["availability"]["covers_session"] for e in prov["sessions"]))
+        self.assertFalse([c for c in prov["caveats"] if "No availability was checked" in c])
+
+    def test_one_lookup_is_issued_per_scheduled_day(self):
+        a = self._multi_day(3)
+        with mock.patch("tools.presenter_suggest._check_presenter_conflicts",
+                        return_value={}) as spy:
+            _schedule_agenda_sessions(
+                a, {"meeting_details": meeting_ny(duration_days=3)}, by_topic=self._pool()
+            )
+        windows = sorted((c.args[1], c.args[2]) for c in spy.call_args_list)
+        self.assertEqual(len(windows), 3)
+        # Contiguous, non-overlapping calendar days — not three copies of day one.
+        self.assertEqual(len(set(windows)), 3)
+        for (_, prev_end), (next_start, _) in zip(windows, windows[1:]):
+            self.assertEqual(prev_end, next_start)
+
+    def test_a_day_two_booking_reaches_the_busy_map(self):
+        # The regression this guards: a conflict that only exists on day two.
+        day2 = datetime(2026, 3, 11, 10, 0, tzinfo=NY)
+        a = self._multi_day(2)
+        summary = self._run(
+            a, by_topic=self._pool(), meeting=meeting_ny(duration_days=2),
+            conflicts={"ada@x.com": [{
+                "start_ms": ms(day2), "end_ms": ms(day2 + timedelta(hours=1)),
+            }]},
         )
-        summary = self._run(a, by_topic=self._pool(), meeting=meeting_ny(duration_days=2))
-        self.assertEqual(
-            unchecked_days(summary["availability"]), [2]
-        )
+        spans = summary["availability"]["busy_spans_by_email"]["ada@x.com"]
+        self.assertIn([ms(day2), ms(day2 + timedelta(hours=1))], spans)
+        # The same row comes back from both days' queries; it is kept once.
+        self.assertEqual(len(spans), 1)
+
+    def test_a_day_whose_lookup_fails_is_reported_unchecked(self):
+        # One day failing must not inherit its neighbours' coverage: an agenda
+        # that says "checked" for a day it never looked at is the whole bug.
+        def flaky(emails, start_ms, end_ms, **kw):
+            if start_ms >= ms(datetime(2026, 3, 11, tzinfo=NY)):
+                raise RuntimeError("opensearch timeout")
+            return {}
+
+        a = self._multi_day(2)
+        with mock.patch("tools.presenter_suggest._check_presenter_conflicts",
+                        side_effect=flaky):
+            summary = _schedule_agenda_sessions(
+                a, {"meeting_details": meeting_ny(duration_days=2)}, by_topic=self._pool()
+            )
+        self.assertEqual(summary["availability"]["checked_days"], [1])
+        self.assertEqual(unchecked_days(summary["availability"]), [2])
         prov = build_provenance(a.sessions, self._pool(), summary["availability"])
         self.assertEqual(prov["summary"]["days_scheduled_without_availability_check"], [2])
         self.assertTrue(any("day(s) 2" in c for c in prov["caveats"]), prov["caveats"])
