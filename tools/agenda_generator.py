@@ -1765,46 +1765,47 @@ def _schedule_agenda_sessions(
         try:
             from tools.presenter_suggest import _check_presenter_conflicts
 
-            def _fetch(entry):
-                day, (start_ms, end_ms) = entry
+            # Sequential, deliberately. These are size-capped scans over the
+            # activities index, and running the days concurrently measured
+            # consistently slower than running them in order (2.2-2.6s against
+            # 1.2-2.0s for four days) — four large scans contend on the cluster
+            # more than they overlap. Against a ~65s agenda either is noise, so
+            # the simpler and faster of the two wins.
+            for day, (start_ms, end_ms) in day_lookups:
                 if not start_ms or not end_ms:
-                    return day, None
+                    continue
                 try:
                     # Exclude this event's own activities: we are laying out THIS
                     # briefing, so its existing sessions are the thing being
                     # planned, not a competing commitment.
-                    return day, _check_presenter_conflicts(
+                    raw = _check_presenter_conflicts(
                         sorted(emails), start_ms, end_ms,
                         exclude_event_id=meeting.get("event_id"),
                     )
                 except Exception as exc:
+                    # One day failing must not take the rest of the briefing
+                    # with it, nor let that day read as checked.
                     logger.warning(
                         f"Busy-map lookup failed for day {day}, scheduling it without one: {exc}"
                     )
-                    return day, None
+                    continue
 
-            # Independent, I/O-bound, and at most five: N days cost roughly one
-            # round trip rather than N.
-            with ThreadPoolExecutor(max_workers=min(5, len(day_lookups))) as pool:
-                for day, raw in pool.map(_fetch, day_lookups):
-                    if raw is None:
+                # Only a day whose lookup actually returned counts as checked;
+                # one that failed must not inherit its neighbours' coverage and
+                # read as verified.
+                checked_days.append(day)
+                for email, entries in raw.items():
+                    spans = [
+                        (e["start_ms"], e["end_ms"])
+                        for e in entries
+                        if e.get("start_ms") and e.get("end_ms")
+                    ]
+                    if not spans:
                         continue
-                    # Only a day whose lookup actually returned counts as
-                    # checked; one that failed must not inherit its neighbours'
-                    # coverage and read as verified.
-                    checked_days.append(day)
-                    for email, entries in raw.items():
-                        spans = [
-                            (e["start_ms"], e["end_ms"])
-                            for e in entries
-                            if e.get("start_ms") and e.get("end_ms")
-                        ]
-                        if not spans:
-                            continue
-                        known = busy_map.setdefault(email, [])
-                        # A booking straddling midnight comes back from both
-                        # days' queries; keep one copy.
-                        known.extend(s for s in spans if s not in known)
+                    known = busy_map.setdefault(email, [])
+                    # A booking straddling midnight comes back from both days'
+                    # queries; keep one copy.
+                    known.extend(s for s in spans if s not in known)
         except Exception as exc:
             logger.warning(f"Presenter busy-map lookup failed, scheduling without it: {exc}")
 
