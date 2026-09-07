@@ -712,12 +712,72 @@ class SessionCapEnforcementTests(unittest.TestCase):
         agenda = agenda_of(*[session(title=f"Session {i}") for i in range(over)])
         ag._enforce_session_cap(agenda)
         self.assertEqual(len(agenda.sessions), ag._MAX_SESSIONS_TOTAL)
+        # The trim comes out of the middle now, not the end: the opening and
+        # closing sessions are the shape of the day and survive it.
         self.assertEqual(agenda.sessions[0].title, "Session 0")
-        self.assertEqual(
-            agenda.sessions[-1].title, f"Session {ag._MAX_SESSIONS_TOTAL - 1}"
-        )
+        self.assertEqual(agenda.sessions[-1].title, f"Session {over - 1}")
 
     def test_agenda_within_the_cap_is_left_alone(self):
         agenda = agenda_of(*[session(title=f"S{i}") for i in range(3)])
         ag._enforce_session_cap(agenda)
         self.assertEqual(len(agenda.sessions), 3)
+
+    def _agenda(self, per_day, **kw):
+        out = []
+        for day, n in enumerate(per_day, start=1):
+            out.append(session(f"Day {day} Kickoff", day=day, duration=15,
+                               anchor="open", movable=False))
+            for i in range(n - 2):
+                out.append(session(f"D{day} Session {i}", day=day, duration=45, **kw))
+            out.append(session(f"Day {day} Wrap", day=day, duration=15,
+                               anchor="close", movable=False))
+        return agenda_of(*out)
+
+    def _per_day(self, a):
+        c = {}
+        for s in a.sessions:
+            c[s.day] = c.get(s.day, 0) + 1
+        return [c.get(d, 0) for d in sorted(c)]
+
+    def test_the_last_day_survives_a_trim(self):
+        # The live defect: 7/8/8/7 was cut to 7/8/8/1 by sessions[:24].
+        a = self._agenda([7, 8, 8, 7])
+        ag._enforce_session_cap(a)
+        self.assertEqual(len(a.sessions), 24)
+        self.assertEqual(self._per_day(a), [6, 6, 6, 6])
+
+    def test_no_day_is_ever_emptied(self):
+        a = self._agenda([9, 9, 9, 9])
+        ag._enforce_session_cap(a)
+        self.assertEqual(len(a.sessions), 24)
+        self.assertTrue(all(n >= 2 for n in self._per_day(a)), self._per_day(a))
+
+    def test_opens_and_closes_are_kept(self):
+        a = self._agenda([8, 8, 8, 8])
+        ag._enforce_session_cap(a)
+        for day in (1, 2, 3, 4):
+            anchors = {s.anchor for s in a.sessions if s.day == day}
+            self.assertIn("open", anchors, f"day {day} lost its open")
+            self.assertIn("close", anchors, f"day {day} lost its close")
+
+    def test_a_lunch_is_never_the_one_dropped(self):
+        sessions = []
+        for day in (1, 2):
+            sessions.append(session(f"D{day} Kickoff", day=day, duration=15,
+                                    anchor="open", movable=False))
+            for i in range(14):
+                sessions.append(session(f"D{day} S{i}", day=day, duration=45))
+            sessions.append(session(f"D{day} Lunch", day=day, duration=60,
+                                    anchor="lunch", movable=False))
+        a = agenda_of(*sessions)
+        ag._enforce_session_cap(a)
+        self.assertEqual(len(a.sessions), 24)
+        self.assertEqual(sum(1 for s in a.sessions if s.anchor == "lunch"), 2)
+
+    def test_an_all_protected_agenda_is_left_over_cap_rather_than_mangled(self):
+        # Nothing droppable: better to hand the scheduler an over-long day, which
+        # it fits per day, than to delete an open or a close.
+        a = agenda_of(*[session(f"Pinned {i}", day=1 + i // 7, duration=30,
+                                anchor="open", movable=False) for i in range(30)])
+        ag._enforce_session_cap(a)
+        self.assertEqual(len(a.sessions), 30)
