@@ -908,3 +908,53 @@ class DocumentFormatTests(unittest.TestCase):
         import docx
 
         return docx
+
+
+class DocumentSniffingTests(unittest.TestCase):
+    """Extensions in the EBD table lie: 8 of 42 rows carry .doc or .ppt over
+    an OOXML payload. The magic number is what actually decides."""
+
+    def _docx_bytes(self):
+        if not ag.HAS_DOCX:
+            self.skipTest("python-docx not installed")
+        import docx
+        import tempfile
+
+        doc = docx.Document()
+        doc.add_paragraph("Executive Briefing Document - Tyson Foods")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "x.docx")
+            doc.save(path)
+            with open(path, "rb") as fh:
+                return fh.read()
+
+    def test_a_docx_wearing_a_doc_extension_is_read_as_a_docx(self):
+        self.assertEqual(_sniff(self._docx_bytes()), ".docx")
+
+    def test_a_pdf_is_recognised_from_its_header(self):
+        self.assertEqual(_sniff(b"%PDF-1.7\nrest of the file"), ".pdf")
+
+    def test_bytes_that_say_nothing_defer_to_the_filename(self):
+        # An OLE2 legacy .doc really is legacy; the sniffer must not claim it.
+        self.assertEqual(_sniff(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"), "")
+        self.assertEqual(_sniff(b""), "")
+
+    def test_a_corrupt_zip_does_not_raise(self):
+        self.assertEqual(_sniff(b"PK\x03\x04truncated"), "")
+
+    def test_sniffing_works_off_a_path_too(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "briefing.doc")  # the name lies
+            with open(path, "wb") as fh:
+                fh.write(self._docx_bytes())
+            self.assertEqual(_sniff(path), ".docx")
+            # and the full extraction path honours the bytes, not the name
+            ctx = ag._extract_ebd_context(path)
+        self.assertTrue(ctx["has_ebd"])
+        self.assertIn("Tyson Foods", ctx["raw_text"])
+
+
+def _sniff(source):
+    return ag._sniff_document_suffix(source)

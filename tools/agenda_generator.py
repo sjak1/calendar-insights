@@ -13,11 +13,13 @@ Data sources:
 Uses OpenAI Structured Outputs for consistent, typed agenda generation.
 """
 
+import io
 import json
 import os
 import re
 import sys
 import tempfile
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -463,6 +465,40 @@ _CONTENT_TYPE_MARKERS = (
 )
 
 
+def _sniff_document_suffix(source) -> str:
+    """
+    Identify a document from its own bytes. `source` is a blob or a path.
+
+    Filenames lie: 8 of the 42 EBDs in the database carry a legacy .doc or
+    .ppt extension over what is really an OOXML payload, and would otherwise
+    be written off as unreadable. A magic number cannot lie the same way, so
+    it is checked before the name. Returns "" when the bytes say nothing
+    useful, leaving the name and MIME type to answer.
+    """
+    try:
+        if isinstance(source, (bytes, bytearray)):
+            head, archive = bytes(source[:8]), io.BytesIO(bytes(source))
+        else:
+            with open(source, "rb") as fh:
+                head = fh.read(8)
+            archive = source
+
+        if head[:4] == b"%PDF":
+            return ".pdf"
+        if head[:4] != b"PK\x03\x04":
+            return ""
+
+        names = zipfile.ZipFile(archive).namelist()
+        if "word/document.xml" in names:
+            return ".docx"
+        if any(name.startswith("ppt/slides/") for name in names):
+            return ".pptx"
+    except Exception as e:
+        logger.debug(f"Could not sniff document type: {e}")
+
+    return ""
+
+
 def _document_suffix(filename: str = "", content_type: str = "") -> str:
     """
     Decide which extension to parse a document as, from its name or MIME type.
@@ -560,7 +596,14 @@ def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
             # Determine file type and extract text
             extracted_text = ""
 
-            suffix = _document_suffix(filename, content_type)
+            sniffed = _sniff_document_suffix(blob)
+            claimed = _document_suffix(filename, content_type)
+            if sniffed and claimed and sniffed != claimed:
+                logger.info(
+                    f"EBD '{filename}' is really a {sniffed} despite its name; "
+                    f"reading it as one"
+                )
+            suffix = sniffed or claimed
             if not suffix:
                 logger.warning(
                     f"EBD '{filename}' ({content_type}) is in a format we cannot read"
@@ -1196,7 +1239,7 @@ def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
         return ebd_context
     
     try:
-        suffix = _document_suffix(ebd_path)
+        suffix = _sniff_document_suffix(ebd_path) or _document_suffix(ebd_path)
         if not suffix:
             logger.warning(f"EBD is in a format we cannot read: {ebd_path}")
             return ebd_context
