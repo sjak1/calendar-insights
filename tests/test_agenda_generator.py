@@ -781,3 +781,130 @@ class SessionCapEnforcementTests(unittest.TestCase):
                                 anchor="open", movable=False) for i in range(30)])
         ag._enforce_session_cap(a)
         self.assertEqual(len(a.sessions), 30)
+
+
+class DocumentFormatTests(unittest.TestCase):
+    """EBD extraction across the formats the database actually stores.
+
+    Every EBD prod has ever fetched was a .docx, and the old code defaulted
+    anything that wasn't a .pdf to PPTX — so python-pptx rejected the blob and
+    every agenda was generated with no briefing document at all.
+    """
+
+    def test_a_docx_is_recognised_by_filename(self):
+        self.assertEqual(
+            ag._document_suffix("Executive_Briefing_Document_20260901_374.docx", ""),
+            ".docx",
+        )
+
+    def test_a_docx_is_recognised_by_content_type_alone(self):
+        # The blob column carries no name in some rows; the MIME type is all
+        # there is to go on.
+        self.assertEqual(
+            ag._document_suffix(
+                "",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            ".docx",
+        )
+
+    def test_pptx_and_pdf_still_resolve(self):
+        self.assertEqual(ag._document_suffix("deck.pptx", ""), ".pptx")
+        self.assertEqual(ag._document_suffix("brief.pdf", ""), ".pdf")
+        self.assertEqual(
+            ag._document_suffix(
+                "",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+            ".pptx",
+        )
+
+    def test_the_filename_wins_over_a_disagreeing_content_type(self):
+        # Content types arrive in several spellings; the stored name is real.
+        self.assertEqual(
+            ag._document_suffix("brief.docx", "application/octet-stream"), ".docx"
+        )
+
+    def test_an_unreadable_format_resolves_to_nothing(self):
+        # Legacy binary .doc/.ppt and images have no extractor. Returning ""
+        # is what stops the caller guessing PPTX and crashing.
+        for name, ctype in (("legacy.doc", "application/msword"),
+                            ("photo.png", "image/png"),
+                            ("", "application/octet-stream")):
+            with self.subTest(name=name):
+                self.assertEqual(ag._document_suffix(name, ctype), "")
+
+    def test_an_unsupported_suffix_extracts_nothing_without_raising(self):
+        text, extras = ag._extract_document_text("/nonexistent.doc", ".doc")
+        self.assertEqual(text, "")
+        self.assertEqual(extras, {})
+
+    def test_docx_paragraphs_and_tables_come_back_in_document_order(self):
+        docx = self._skip_without_docx()
+        import tempfile
+
+        doc = docx.Document()
+        doc.add_paragraph("Objectives")
+        table = doc.add_table(rows=2, cols=2)
+        for row, values in zip(table.rows, (("Name", "Role"), ("A. Rao", "CTO"))):
+            for cell, value in zip(row.cells, values):
+                cell.text = value
+        doc.add_paragraph("Closing note")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ebd.docx")
+            doc.save(path)
+            text, extras = ag._extract_document_text(path, ".docx")
+
+        self.assertEqual(extras, {})
+        # Order is the point: a table read out of sequence loses the heading
+        # that explains it.
+        self.assertLess(text.index("Objectives"), text.index("A. Rao"))
+        self.assertLess(text.index("A. Rao"), text.index("Closing note"))
+        self.assertIn("Name | Role", text)
+
+    def test_a_docx_reaches_extract_ebd_context(self):
+        docx = self._skip_without_docx()
+        import tempfile
+
+        doc = docx.Document()
+        doc.add_paragraph("Align on the FY27 roadmap.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ebd.docx")
+            doc.save(path)
+            ctx = ag._extract_ebd_context(path)
+
+        self.assertTrue(ctx["has_ebd"])
+        self.assertIn("FY27 roadmap", ctx["raw_text"])
+
+    def test_a_plain_text_ebd_is_read_straight_off_disk(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "brief.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("# Objectives\n\nShip the pilot.\n")
+            ctx = ag._extract_ebd_context(path)
+
+        self.assertTrue(ctx["has_ebd"])
+        self.assertIn("Ship the pilot.", ctx["raw_text"])
+
+    def test_an_unreadable_ebd_reports_no_document_instead_of_raising(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "scan.png")
+            with open(path, "wb") as fh:
+                fh.write(b"\x89PNG\r\n")
+            ctx = ag._extract_ebd_context(path)
+
+        self.assertFalse(ctx["has_ebd"])
+        self.assertEqual(ctx["raw_text"], "")
+
+    def _skip_without_docx(self):
+        if not ag.HAS_DOCX:
+            self.skipTest("python-docx not installed")
+        import docx
+
+        return docx
