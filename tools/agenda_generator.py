@@ -13,11 +13,13 @@ Data sources:
 Uses OpenAI Structured Outputs for consistent, typed agenda generation.
 """
 
+import io
 import json
 import os
 import re
 import sys
 import tempfile
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -46,6 +48,15 @@ try:
     HAS_PDFPLUMBER = True
 except ImportError:
     HAS_PDFPLUMBER = False
+
+# DOCX extraction (optional dependency)
+try:
+    import docx
+    from docx.table import Table as _DocxTable
+    from docx.text.paragraph import Paragraph as _DocxParagraph
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
 
 logger = get_logger(__name__)
 
@@ -390,6 +401,151 @@ def _extract_pdf_text(pdf_path: str) -> str:
         return ""
 
 
+def _extract_docx_text(docx_path: str) -> str:
+    """
+    Extract text from a Word document using python-docx.
+
+    Paragraphs and tables are walked in document order rather than read from
+    `.paragraphs` and `.tables` separately: those two lists lose the
+    interleaving, and an EBD's tables sit under the headings that explain them.
+    """
+    if not HAS_DOCX:
+        logger.warning("python-docx not installed. Run: pip install python-docx")
+        return ""
+
+    parts: list[str] = []
+    try:
+        document = docx.Document(docx_path)
+        for child in document.element.body.iterchildren():
+            tag = child.tag.split("}")[-1]
+            if tag == "p":
+                text = _DocxParagraph(child, document).text.strip()
+                if text:
+                    parts.append(text)
+            elif tag == "tbl":
+                rows = []
+                for row in _DocxTable(child, document).rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append("[Table]\n" + "\n".join(rows))
+
+        return "\n\n".join(parts)
+    except Exception as e:
+        logger.error(f"Error extracting DOCX text: {e}")
+        return ""
+
+
+def _extract_plain_text(path: str) -> str:
+    """Read a text-shaped document (txt, md, csv, json) straight off disk."""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").strip()
+    except Exception as e:
+        logger.error(f"Error reading text document: {e}")
+        return ""
+
+
+# Formats we can turn into text. Anything outside this set is skipped with a
+# warning rather than guessed at — the old code defaulted every unknown type to
+# PPTX, so a Word EBD reached python-pptx and blew up.
+_TEXT_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".rtf"})
+_BINARY_SUFFIXES = frozenset({".pdf", ".pptx", ".docx"})
+
+# Office MIME types are long and near-identical, so match on the part that
+# actually distinguishes them. Order matters: first hit wins.
+_CONTENT_TYPE_MARKERS = (
+    ("wordprocessingml", ".docx"),
+    ("presentationml", ".pptx"),
+    ("pdf", ".pdf"),
+    ("json", ".json"),
+    ("csv", ".csv"),
+    ("markdown", ".md"),
+    ("text/plain", ".txt"),
+)
+
+
+def _sniff_document_suffix(source) -> str:
+    """
+    Identify a document from its own bytes. `source` is a blob or a path.
+
+    Filenames lie: 8 of the 42 EBDs in the database carry a legacy .doc or
+    .ppt extension over what is really an OOXML payload, and would otherwise
+    be written off as unreadable. A magic number cannot lie the same way, so
+    it is checked before the name. Returns "" when the bytes say nothing
+    useful, leaving the name and MIME type to answer.
+    """
+    try:
+        if isinstance(source, (bytes, bytearray)):
+            head, archive = bytes(source[:8]), io.BytesIO(bytes(source))
+        else:
+            with open(source, "rb") as fh:
+                head = fh.read(8)
+            archive = source
+
+        if head[:4] == b"%PDF":
+            return ".pdf"
+        if head[:4] != b"PK\x03\x04":
+            return ""
+
+        names = zipfile.ZipFile(archive).namelist()
+        if "word/document.xml" in names:
+            return ".docx"
+        if any(name.startswith("ppt/slides/") for name in names):
+            return ".pptx"
+    except Exception as e:
+        logger.debug(f"Could not sniff document type: {e}")
+
+    return ""
+
+
+def _document_suffix(filename: str = "", content_type: str = "") -> str:
+    """
+    Decide which extension to parse a document as, from its name or MIME type.
+
+    The filename is trusted first — the database stores a real one, while
+    content types arrive in several spellings for the same format. Returns ""
+    when neither identifies something we can read.
+    """
+    name = (filename or "").lower()
+    for suffix in _BINARY_SUFFIXES | _TEXT_SUFFIXES:
+        if name.endswith(suffix):
+            return suffix
+
+    ct = (content_type or "").lower()
+    for marker, suffix in _CONTENT_TYPE_MARKERS:
+        if marker in ct:
+            return suffix
+
+    return ""
+
+
+def _extract_document_text(path: str, suffix: str) -> tuple:
+    """
+    Pull text out of a document, dispatching on its suffix.
+
+    Returns (text, extras) where extras carries whatever structural counts the
+    format exposes — slides and tables for PPTX, nothing for the rest. An
+    unreadable format returns empty text, which is the caller's cue to carry on
+    without the document instead of failing the whole agenda.
+    """
+    if suffix == ".pdf":
+        return _extract_pdf_text(path), {}
+    if suffix == ".pptx":
+        extracted = extract_pptx_content(path)
+        return format_extracted_content(extracted), {
+            "slide_count": extracted.get("slide_count", 0),
+            "table_count": len(extracted.get("tables", [])),
+        }
+    if suffix == ".docx":
+        return _extract_docx_text(path), {}
+    if suffix in _TEXT_SUFFIXES:
+        return _extract_plain_text(path), {}
+
+    logger.warning(f"Unsupported document type '{suffix or 'unknown'}' — skipping extraction")
+    return "", {}
+
+
 def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetch EBD document from database for a given event.
@@ -439,29 +595,32 @@ def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
             
             # Determine file type and extract text
             extracted_text = ""
-            
+
+            sniffed = _sniff_document_suffix(blob)
+            claimed = _document_suffix(filename, content_type)
+            if sniffed and claimed and sniffed != claimed:
+                logger.info(
+                    f"EBD '{filename}' is really a {sniffed} despite its name; "
+                    f"reading it as one"
+                )
+            suffix = sniffed or claimed
+            if not suffix:
+                logger.warning(
+                    f"EBD '{filename}' ({content_type}) is in a format we cannot read"
+                )
+                return None
+
             # Save blob to temp file
-            suffix = ".pdf" if "pdf" in content_type.lower() else ".pptx"
-            if filename.lower().endswith(".pptx"):
-                suffix = ".pptx"
-            elif filename.lower().endswith(".pdf"):
-                suffix = ".pdf"
-            
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(blob)
                 tmp_path = tmp.name
-            
+
             try:
-                if suffix == ".pdf":
-                    extracted_text = _extract_pdf_text(tmp_path)
-                    logger.info(f"Extracted {len(extracted_text)} chars from PDF")
-                elif suffix == ".pptx":
-                    # Use existing PPTX extractor
-                    extracted = extract_pptx_content(tmp_path)
-                    extracted_text = format_extracted_content(extracted)
-                    logger.info(f"Extracted {len(extracted_text)} chars from PPTX")
-                else:
-                    logger.warning(f"Unsupported file type: {suffix}")
+                extracted_text, _extras = _extract_document_text(tmp_path, suffix)
+                if extracted_text:
+                    logger.info(
+                        f"Extracted {len(extracted_text)} chars from {suffix.lstrip('.').upper()}"
+                    )
             finally:
                 # Cleanup temp file
                 Path(tmp_path).unlink(missing_ok=True)
@@ -1060,10 +1219,10 @@ def _parse_json_field(value: str) -> Any:
 
 def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
     """
-    Extract context from an EBD file (PPTX or PDF).
+    Extract context from an EBD file (PPTX, PDF, DOCX or plain text).
     
     Args:
-        ebd_path: Path to the EBD file (PPTX or PDF)
+        ebd_path: Path to the EBD file
         
     Returns:
         Dict with extracted EBD fields
@@ -1080,25 +1239,24 @@ def _extract_ebd_context(ebd_path: str) -> Dict[str, Any]:
         return ebd_context
     
     try:
-        # Check file extension — treat anything that isn't .pdf as PPTX
-        if ebd_path.lower().endswith('.pdf'):
-            extracted_text = _extract_pdf_text(ebd_path)
-            if extracted_text:
-                ebd_context["raw_text"] = _truncate_document(extracted_text)
-                ebd_context["has_ebd"] = True
-                logger.info(f"Extracted {len(extracted_text)} chars from PDF")
-        else:
-            extracted = extract_pptx_content(ebd_path)
-            formatted_text = format_extracted_content(extracted)
+        suffix = _sniff_document_suffix(ebd_path) or _document_suffix(ebd_path)
+        if not suffix:
+            logger.warning(f"EBD is in a format we cannot read: {ebd_path}")
+            return ebd_context
 
-            ebd_context["raw_text"] = _truncate_document(formatted_text)
+        extracted_text, extras = _extract_document_text(ebd_path, suffix)
+        if extracted_text:
+            ebd_context["raw_text"] = _truncate_document(extracted_text)
             ebd_context["has_ebd"] = True
-            ebd_context["slide_count"] = extracted["slide_count"]
-            ebd_context["table_count"] = len(extracted.get("tables", []))
+            ebd_context.update(extras)
 
+            detail = (
+                f": {extras['slide_count']} slides, {extras['table_count']} tables"
+                if extras else ""
+            )
             logger.info(
-                f"Extracted EBD: {extracted['slide_count']} slides, "
-                f"{len(extracted.get('tables', []))} tables"
+                f"Extracted {len(extracted_text)} chars from "
+                f"{suffix.lstrip('.').upper()}{detail}"
             )
 
     except Exception as e:

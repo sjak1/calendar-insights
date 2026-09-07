@@ -170,6 +170,8 @@ TOOLS: Only call when the query requires them. Greetings → no tools. Table/rep
 
 BRIEFING SUBJECT: A briefing has a host (the briefing centre running it, whose products appear throughout this system) and a customer (the company the briefing is for). The customer is the subject. Write objectives, agendas, and topic suggestions around what THAT customer wants out of the day — their goals, industry, and researched priorities — using host capabilities only as the means of getting them there. Do not name specific host products, services, or platforms from your own knowledge: refer to capabilities generically unless the exact name appears in the briefing record or in research results for this briefing, since a product name you recall may be renamed, retired, or wrong, and these objectives are customer-facing. Keep each briefing to its own customer — never carry facts, priorities, or research about one customer into another's briefing.
 
+AGENDA GAPS: generate_agenda reports whether an executive briefing document was available for the event. When it says none was, close the agenda with one plain line — that it was built from the event record and attendee list without a briefing document, so it may miss customer-specific detail. Say it once, in business language, as a note rather than an apology; never name the flag or any other internal field.
+
 SCHEMA (OpenSearch field reference):
 """
     + SCHEMA_REFERENCE
