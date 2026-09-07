@@ -3076,6 +3076,10 @@ def generate_agenda(
         ebd_file_url = None
         ebd_file_id = None
         ebd_source = None
+        # "no document attached" and "a document that turned out to be empty"
+        # are different facts and the caller tells the user which. ebd_used
+        # alone collapses them into one, and reads as the first.
+        ebd_status = "none_found"
 
         if ebd_result:
             ebd_source = ebd_result.get("source")
@@ -3087,9 +3091,13 @@ def generate_agenda(
                 raw = ebd_result.get("raw_text", "")
                 if raw and _ebd_quality_ok(raw):
                     ebd_context = ebd_result
+                    ebd_status = "used"
                 else:
                     logger.warning(f"EBD from '{ebd_source}' failed quality gate — skipping")
                     ebd_source = None
+                    ebd_status = "unusable"
+            else:
+                ebd_status = "used"
 
         # Step 3: Generate agenda with LLM
         agenda: GeneratedAgenda = _generate_agenda_with_llm(
@@ -3126,6 +3134,7 @@ def generate_agenda(
             "previous_meetings_count": len(context["previous_meetings"]),
             "ebd_used": ebd_used,
             "ebd_source": ebd_source,
+            "ebd_status": ebd_status,
             "data_source": context.get("data_source", "unknown"),
             "session_count": len(agenda.sessions),
             "presenter_recommendations": presenter_recommendations,
