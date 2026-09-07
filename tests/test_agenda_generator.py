@@ -958,3 +958,23 @@ class DocumentSniffingTests(unittest.TestCase):
 
 def _sniff(source):
     return ag._sniff_document_suffix(source)
+
+
+class EbdStatusTests(unittest.TestCase):
+    """`ebd_used: false` covers two different facts and the user is told which.
+
+    Prod said "without an executive briefing document on file" for the Tata
+    Motors event, which HAS one attached — a .docx holding six words. The
+    document is not missing, it is empty, and only one of those is worth
+    raising with the people who upload them.
+    """
+
+    def test_a_title_only_document_fails_the_quality_gate(self):
+        # The real payload: "Executive Briefing Document - Tata Motors".
+        self.assertFalse(ag._ebd_quality_ok("Executive Briefing Document - Tata Motors"))
+
+    def test_a_real_document_passes(self):
+        self.assertTrue(ag._ebd_quality_ok(" ".join(["objective"] * 150)))
+
+    def test_garbled_text_fails_on_noise_rather_than_length(self):
+        self.assertFalse(ag._ebd_quality_ok("%^&*(" * 200))
