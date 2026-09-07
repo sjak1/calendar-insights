@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tools.agenda_generator as ag  # noqa: E402
+from tools.agenda_provenance import build_provenance, unchecked_days  # noqa: E402
 from tools.agenda_generator import (  # noqa: E402
     AgendaSession,
     GeneratedAgenda,
@@ -279,6 +280,106 @@ class TestEventNumDays(unittest.TestCase):
         self.assertEqual(_event_num_days({"duration_days": 0}), 1)
         self.assertEqual(_event_num_days({"duration_days": "junk"}), 1)
         self.assertEqual(_event_num_days(None), 1)
+
+
+class TestSchedulerProvenanceWiring(unittest.TestCase):
+    """The contract between _schedule_agenda_sessions and build_provenance.
+
+    Both sides are unit-tested in isolation; what breaks in practice is the key
+    names between them, which only a round trip exercises.
+    """
+
+    def _run(self, agenda, by_topic=None, conflicts=None, meeting=None):
+        meeting = meeting or meeting_ny()
+        with mock.patch("tools.presenter_suggest._check_presenter_conflicts",
+                        return_value=conflicts or {}):
+            summary = _schedule_agenda_sessions(
+                agenda, {"meeting_details": meeting}, by_topic=by_topic or {}
+            )
+        return summary
+
+    def _pool(self):
+        return {"Cloud Strategy": [{
+            "presenter_name": "Ada Lovelace",
+            "email": "ada@x.com",
+            "all_emails": ["ada@x.com"],
+            "title": "Chief Architect",
+            "match_tier": "exact match",
+            "matched_topic": "Cloud Strategy",
+            "tier_session_count": 2,
+            "session_count": 4,
+            "reason": "exact match: Cloud Strategy",
+            "source_activities": [
+                {"event_id": "e1", "booking_id": "CBR-1", "topic": "Cloud Strategy",
+                 "status": "accepted", "date": "2026-01-05", "match_tier": "exact match"},
+            ],
+        }]}
+
+    def test_scheduler_reports_the_window_and_days_it_used(self):
+        a = agenda_of(session("Welcome", duration=15), session("Lunch", duration=60))
+        summary = self._run(a)
+        avail = summary["availability"]
+        self.assertTrue(avail["window_start_ms"] and avail["window_end_ms"])
+        self.assertIn(1, avail["day_windows"])
+        self.assertIn("start_ms", avail["day_windows"][1])
+
+    def test_single_day_agenda_round_trips_as_fully_checked(self):
+        a = agenda_of(session("Welcome", topic="Cloud Strategy", duration=45),
+                      session("Lunch", duration=60))
+        summary = self._run(a, by_topic=self._pool())
+        prov = build_provenance(a.sessions, self._pool(), summary["availability"])
+        self.assertEqual(prov["summary"]["days_scheduled_without_availability_check"], [])
+        self.assertTrue(all(e["availability"]["covers_session"] for e in prov["sessions"]))
+
+    def test_multi_day_agenda_round_trips_with_later_days_unchecked(self):
+        # The live defect this trail exists to expose: _availability_window()
+        # spans one day, so days 2+ are laid out against an empty busy map.
+        a = agenda_of(
+            session("Welcome", topic="Cloud Strategy", duration=45, day=1),
+            session("Lunch", duration=60, day=1),
+            session("Deep Dive", topic="Cloud Strategy", duration=45, day=2),
+            session("Lunch", duration=60, day=2),
+        )
+        summary = self._run(a, by_topic=self._pool(), meeting=meeting_ny(duration_days=2))
+        self.assertEqual(
+            unchecked_days(summary["availability"]), [2]
+        )
+        prov = build_provenance(a.sessions, self._pool(), summary["availability"])
+        self.assertEqual(prov["summary"]["days_scheduled_without_availability_check"], [2])
+        self.assertTrue(any("day(s) 2" in c for c in prov["caveats"]), prov["caveats"])
+
+    def test_source_rows_reach_the_trail_through_the_scheduler(self):
+        a = agenda_of(session("Welcome", topic="Cloud Strategy", duration=45,
+                              presenter="Ada Lovelace — Chief Architect"),
+                      session("Lunch", duration=60))
+        summary = self._run(a, by_topic=self._pool())
+        prov = build_provenance(a.sessions, self._pool(), summary["availability"])
+        entry = next(e for e in prov["sessions"] if e["session"] == "Welcome")
+        cand = entry["candidates"][0]
+        self.assertTrue(cand["selected"])
+        self.assertEqual(cand["source_activities"][0]["booking_id"], "CBR-1")
+
+    def test_a_presenter_placed_despite_a_conflict_is_flagged(self):
+        busy_start = ms(datetime(2026, 3, 10, 9, 0, tzinfo=NY))
+        busy_end = ms(datetime(2026, 3, 10, 10, 0, tzinfo=NY))
+        a = agenda_of(session("Welcome", topic="Cloud Strategy", duration=45,
+                              presenter="Someone Else"),
+                      session("Lunch", duration=60))
+        summary = self._run(
+            a, by_topic=self._pool(),
+            conflicts={"ada@x.com": [{"start_ms": busy_start, "end_ms": busy_end,
+                                      "event_id": "other", "event_name": "CBR-9",
+                                      "time": "09:00-10:00"}]},
+        )
+        prov = build_provenance(a.sessions, self._pool(), summary["availability"])
+        # By title, not by index: a conflict lets the scheduler reorder the day.
+        entry = next(e for e in prov["sessions"] if e["session"] == "Welcome")
+        cand = entry["candidates"][0]
+        self.assertEqual(cand["busy_spans_in_this_day"], [[busy_start, busy_end]])
+        # Ada is the only candidate, so the scheduler seats her anyway. The
+        # agenda shows just her name; the trail has to show the clash too.
+        self.assertTrue(cand["selected"])
+        self.assertTrue(cand["placed_with_known_conflict"])
 
 
 class TestScheduleAgendaSessions(unittest.TestCase):

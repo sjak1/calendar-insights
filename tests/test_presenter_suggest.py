@@ -36,13 +36,18 @@ DAY_MS = 86400000
 NOW = int(time.time() * 1000)
 
 
-def activity(topics, presenters, event_id="e1", start_ms=None):
+def activity(topics, presenters, event_id="e1", start_ms=None,
+             booking_id="CBR-20260330-3625-031", zone_date="2026-03-30T09:00"):
     """One activities-index hit in the shape the extractor expects."""
     return {
         "id": event_id,
         "source": {
             "eventId": event_id,
-            "startTime": {"utcMs": start_ms if start_ms is not None else NOW},
+            "bookingId": booking_id,
+            "startTime": {
+                "utcMs": start_ms if start_ms is not None else NOW,
+                "requested": {"requestedZoneDate": zone_date},
+            },
             "activityData": {
                 "topic": [{"topic": {"textField1": t}} for t in topics],
                 "topic_presenter": presenters,
@@ -208,6 +213,58 @@ class TestRanking(unittest.TestCase):
         top = _rank_presenters(pool, limit=1)[0]
         self.assertEqual(top["match_tier"], "no topic filter")
         self.assertNotIn("exact match", top["reason"])
+
+
+class TestSourceProvenance(unittest.TestCase):
+    """The rows behind each candidate's counts, kept so the claim is checkable."""
+
+    def _pool(self):
+        return _extract_presenters_from_hits(
+            [activity(["Cloud Migration"], [presenter("Ada", "L", "a@x.com")])],
+            topic_query="Cloud Migration",
+        )
+
+    def test_ranked_output_carries_the_source_rows(self):
+        top = _rank_presenters(self._pool(), limit=1)[0]
+        row = top["source_activities"][0]
+        self.assertEqual(row["booking_id"], "CBR-20260330-3625-031")
+        self.assertEqual(row["event_id"], "e1")
+        self.assertEqual(row["status"], "accepted")
+        self.assertEqual(row["match_tier"], "exact match")
+
+    def test_date_is_the_local_day_not_the_full_timestamp(self):
+        top = _rank_presenters(self._pool(), limit=1)[0]
+        self.assertEqual(top["source_activities"][0]["date"], "2026-03-30")
+
+    def test_row_count_matches_the_session_count_it_explains(self):
+        hits = [activity(["Cloud Migration"], [presenter("Ada", "L", "a@x.com")],
+                         event_id=f"e{i}") for i in range(3)]
+        top = _rank_presenters(
+            _extract_presenters_from_hits(hits, topic_query="Cloud Migration"), limit=1
+        )[0]
+        self.assertEqual(top["session_count"], 3)
+        self.assertEqual(len(top["source_activities"]), 3)
+
+    def test_rows_are_capped_while_counts_stay_complete(self):
+        # The cap is a display budget; it must not distort the numbers above it.
+        hits = [activity(["Cloud Migration"], [presenter("Ada", "L", "a@x.com")],
+                         event_id=f"e{i}") for i in range(20)]
+        top = _rank_presenters(
+            _extract_presenters_from_hits(hits, topic_query="Cloud Migration"), limit=1
+        )[0]
+        self.assertEqual(top["session_count"], 20)
+        self.assertEqual(len(top["source_activities"]), 8)
+
+    def test_declined_activities_never_appear_as_evidence(self):
+        hits = [
+            activity(["Cloud Migration"], [presenter("Ada", "L", "a@x.com")], event_id="kept"),
+            activity(["Cloud Migration"],
+                     [presenter("Ada", "L", "a@x.com", status="declined")], event_id="dropped"),
+        ]
+        top = _rank_presenters(
+            _extract_presenters_from_hits(hits, topic_query="Cloud Migration"), limit=1
+        )[0]
+        self.assertEqual([r["event_id"] for r in top["source_activities"]], ["kept"])
 
 
 class TestConflictScan(unittest.TestCase):
