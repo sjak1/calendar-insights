@@ -1984,20 +1984,77 @@ def _session_count_range(window_minutes: int, num_days: int = 1) -> tuple:
 
 
 def _enforce_session_cap(agenda: "GeneratedAgenda") -> "GeneratedAgenda":
-    """Hold the agenda to _MAX_SESSIONS_TOTAL, in place.
+    """Hold the agenda to _MAX_SESSIONS_TOTAL, in place, without losing a day.
 
     The budget is stated in the prompt but the model treats it as advice: a
-    five-day Zurich briefing was asked for 20 sessions and wrote 35, which is
-    how the response ran past its output ceiling in the first place. Trimming
+    five-day Zurich briefing was asked for 20 sessions and wrote 35. Trimming
     here means length stops depending on the model complying.
+
+    What it must NOT do is trim the flat list. Sessions arrive in day order, so
+    `sessions[:24]` takes every dropped session off the end of the briefing: a
+    four-day Subaru agenda came back 7/8/8/7 and was cut to 7/8/8/1, leaving day
+    four with nothing but its own kickoff — and the model's closing note then
+    pointed out that day four had no lunch, having been given no chance to keep
+    one. The overshoot is spread across the days, so the trim should be too.
+
+    Sessions are taken from whichever day currently has the most, skipping the
+    ones that carry a day's shape: its open, its close, its lunch, and anything
+    the model pinned. Within a day the middle goes before the edges, matching
+    how the scheduler's own `_fit_to_window` drops from the movable middle.
     """
     extra = len(agenda.sessions) - _MAX_SESSIONS_TOTAL
-    if extra > 0:
-        logger.warning(
-            f"Agenda came back with {len(agenda.sessions)} sessions, over the "
-            f"{_MAX_SESSIONS_TOTAL} cap; dropping the last {extra}"
+    if extra <= 0:
+        return agenda
+
+    sessions = list(agenda.sessions)
+
+    def _day_of(sess) -> int:
+        day = getattr(sess, "day", None)
+        return day if isinstance(day, int) and day >= 1 else 1
+
+    def _protected(sess) -> bool:
+        return (getattr(sess, "anchor", "any") or "any") in ("open", "lunch", "close") \
+            or not bool(getattr(sess, "movable", True))
+
+    by_day: Dict[int, List[int]] = {}
+    for i, sess in enumerate(sessions):
+        by_day.setdefault(_day_of(sess), []).append(i)
+
+    dropped: set = set()
+    for _ in range(extra):
+        # Fullest day first, counting only what is still standing. Ties break on
+        # the later day so an early day is not repeatedly raided.
+        candidates = sorted(
+            by_day.items(),
+            key=lambda kv: (-len([i for i in kv[1] if i not in dropped]), -kv[0]),
         )
-        agenda.sessions = agenda.sessions[:_MAX_SESSIONS_TOTAL]
+        victim = None
+        for _day, idxs in candidates:
+            live = [i for i in idxs if i not in dropped and not _protected(sessions[i])]
+            if live:
+                victim = live[len(live) // 2]  # middle of the day, not its edges
+                break
+        if victim is None:
+            # Every remaining session is an open, a close, a lunch or pinned.
+            # Nothing can go without damaging a day's shape, so stop early and
+            # let the scheduler's per-day fit handle the overflow.
+            logger.warning(
+                f"Session cap: only protected sessions remain, keeping "
+                f"{len(sessions) - len(dropped)} over the {_MAX_SESSIONS_TOTAL} cap"
+            )
+            break
+        dropped.add(victim)
+
+    if dropped:
+        kept_by_day = {
+            d: len([i for i in idxs if i not in dropped]) for d, idxs in sorted(by_day.items())
+        }
+        logger.warning(
+            f"Agenda came back with {len(sessions)} sessions, over the "
+            f"{_MAX_SESSIONS_TOTAL} cap; dropped {len(dropped)} from the fullest "
+            f"days, leaving {kept_by_day}"
+        )
+        agenda.sessions = [s for i, s in enumerate(sessions) if i not in dropped]
     return agenda
 
 
