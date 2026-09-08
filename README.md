@@ -209,4 +209,4 @@ build_*.sh, setup_ecr.sh, Dockerfile         packaging + deploy
 
 - [TODO.md](TODO.md) — outstanding work
 - [PROJECT_CHANGES.md](PROJECT_CHANGES.md) — historical change log
-- [client_req_todo.md](client_req_todo.md) — client requirement tracker
+- [client_req_todo.md](docs/client_req_todo.md) — client requirement tracker

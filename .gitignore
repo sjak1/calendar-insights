@@ -1,32 +1,45 @@
-/venv
-/__pycache__
-.env
-./venv
-./__pycache__
-venv
-/package
-./package
-package
-# Log files
-logs/
-*.log
-__pycache__/
+# Python
+venv/
+package/
 __pycache__/
 *.pyc
-.DS_Store
-node_modules
+
+# Node
+node_modules/
 .pnpm-store/
+
+# Secrets and local credentials
+.env
+auth.txt
+.biq_refresh_token
+config/moltbook_credentials.json
+.mcp.json
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+
+# Generated documents and images dropped in the working tree
 *.docx
 *.png
 *.jpg
 *.jpeg
+
+# Local notes and scratch output, not part of the project
+TODO.md
 FRONTEND_RESPONSE.md
 PROJECT_CHANGES.md
-config/moltbook_credentials.json
-auth.txt
 test_briefingiq_write.py
-TODO.md
-agenda_push_flow.html
+emails.json
+snap-*.txt
+nyla-process-deck*
+vishnu-corp-demo/
+access/
+slides/
+docs/flows/agenda_push_flow.html
 
 # local revert data for scripts/seed_opp_revenue.py
 scripts/.opp_revenue_backup.json
