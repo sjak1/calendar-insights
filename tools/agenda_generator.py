@@ -11,22 +11,32 @@ Data sources:
 - Local PPTX / PDF files as EBD fallback.
 
 Uses OpenAI Structured Outputs for consistent, typed agenda generation.
+
+This module is the orchestrator. The parts that stand on their own live beside
+it and are re-exported below, so tools.agenda_generator remains the one import
+path:
+
+    agenda_config     env-driven tunables, and the session-count arithmetic
+    agenda_models     the pydantic schema the model is asked to fill in
+    agenda_documents  reading the EBD, whatever format it arrived in
+    agenda_prompts    building the prompt from the gathered context
+    agenda_markdown   rendering the finished agenda for the chat reply
+
+What stays here is the work that needs all of them at once: fetching meeting
+context, assigning and scheduling presenters, calling the model, and the
+generate_agenda entry point.
 """
 
-import io
 import json
 import os
 import re
 import sys
-import tempfile
-import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 load_dotenv()
@@ -34,7 +44,6 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import engine  # noqa: E402 — shared engine from database.py
 from logging_config import get_logger  # noqa: E402
-from tools.extract_ebd import extract_pptx_content, format_extracted_content  # noqa: E402
 from bedrock_llm import converse as bedrock_converse  # noqa: E402
 try:
     from opensearch_client import search as os_search, get_suggested_presenters  # noqa: E402
@@ -42,72 +51,63 @@ except ImportError:
     os_search = None
     get_suggested_presenters = None
 
-# PDF extraction (optional dependency)
-try:
-    import pdfplumber
-    HAS_PDFPLUMBER = True
-except ImportError:
-    HAS_PDFPLUMBER = False
+# ---------------------------------------------------------------------------
+# The rest of the agenda lives in sibling modules. Everything they define is
+# re-exported here: tools.agenda_generator is the import path the handlers and
+# the tests already use, so this file stays the one door in.
+# ---------------------------------------------------------------------------
+from tools.agenda_config import (  # noqa: E402,F401
+    AGENDA_BEDROCK_MODEL_ID,
+    AGENDA_DAY_END,
+    AGENDA_DAY_START,
+    AGENDA_MAX_ATTENDEES,
+    AGENDA_MAX_OUTPUT_TOKENS,
+    AGENDA_PROVIDER,
+    AGENDA_SESSION_MAX,
+    AGENDA_SESSION_MIN,
+    DEFAULT_EBD_PATH,
+    EBD_MAX_NOISE_RATIO,
+    EBD_MIN_WORDS,
+    LLM_MODEL,
+    LLM_TIMEOUT_SECONDS,
+    MAX_DOCUMENT_CHARS,
+    _MAX_SESSIONS_PER_DAY,
+    _MAX_SESSIONS_TOTAL,
+    _session_count_range,
+)
+from tools.agenda_models import (  # noqa: E402,F401
+    AgendaSession,
+    AgendaTruncated,
+    BackupPresenter,
+    GeneratedAgenda,
+    OraclePresenter,
+    StrategicNotes,
+    TopicPresenterSuggestion,
+)
+from tools.agenda_documents import (  # noqa: E402,F401
+    HAS_DOCX,
+    HAS_PDFPLUMBER,
+    _document_suffix,
+    _ebd_quality_ok,
+    _extract_docx_text,
+    _extract_document_text,
+    _extract_pdf_text,
+    _extract_plain_text,
+    _fetch_ebd_from_db,
+    _sniff_document_suffix,
+    _truncate_document,
+)
+from tools.agenda_prompts import (  # noqa: E402,F401
+    _build_agenda_prompt,
+    _format_correction_note,
+    _rank_previous_meetings,
+    _strip_prompt_sections,
+)
+from tools.agenda_markdown import agenda_to_markdown  # noqa: E402,F401
 
-# DOCX extraction (optional dependency)
-try:
-    import docx
-    from docx.table import Table as _DocxTable
-    from docx.text.paragraph import Paragraph as _DocxParagraph
-    HAS_DOCX = True
-except ImportError:
-    HAS_DOCX = False
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration (all overridable via env vars)
-# ---------------------------------------------------------------------------
-# Provider: "bedrock" (Sonnet 5, default) or "openai" (gpt-5-mini).
-# Sonnet 5 replaced Sonnet 4.6 after an 8-model comparison on the same event
-# (Bosch, 2026-09-03), one run each, isolating the agenda LLM call:
-#
-#   sonnet-5      30.4s  3083 out  101.5 tok/s  9 sessions
-#   sonnet-4-6    48.2s  3077 out   63.8 tok/s  8 sessions
-#   haiku-4-5     17.3s  1897 out  109.7 tok/s  7 sessions
-#   gpt-5.6-sol   28.1s  2599 out   92.4 tok/s  8 sessions
-#   gpt-5.6-terra 20.0s  1998 out  100.1 tok/s  8 sessions
-#   gpt-5.6-luna  17.8s     — failed schema validation twice
-#   kimi-k2.5     19.6s  1880 out   95.9 tok/s  8 sessions
-#   glm-4.7       54.4s  1462 out   26.9 tok/s  7 sessions
-#
-# Sonnet 5 is 37% faster than 4.6 for the same output token count and $2/$10
-# against $3/$15. Its newer tokenizer does cost ~30% more INPUT tokens (6147 vs
-# 4747), but input is prefilled in parallel and priced lower, so it does not
-# show up in latency. Haiku 4.5 and gpt-5.6-terra are faster still and remain
-# worth revisiting, but both produced a shorter agenda, and the two non-Claude
-# providers reject Anthropic's cachePoint block and report input tokens as 129
-# regardless of prompt size — prompt caching and cost tracking would both need
-# work before either could ship.
-AGENDA_PROVIDER: str = os.getenv("AGENDA_PROVIDER", "bedrock").lower()
-LLM_MODEL: str = os.getenv("AGENDA_LLM_MODEL", "gpt-5-mini")
-AGENDA_BEDROCK_MODEL_ID: str = os.getenv(
-    "AGENDA_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5"
-)
-MAX_DOCUMENT_CHARS: int = int(os.getenv("MAX_DOCUMENT_CHARS", "30000"))
-AGENDA_SESSION_MIN: int = int(os.getenv("AGENDA_SESSION_MIN", "6"))
-AGENDA_SESSION_MAX: int = int(os.getenv("AGENDA_SESSION_MAX", "10"))
-AGENDA_DAY_START: str = os.getenv("AGENDA_DAY_START", "10:00 AM")
-AGENDA_DAY_END: str = os.getenv("AGENDA_DAY_END", "5:00 PM")
-AGENDA_MAX_ATTENDEES: int = int(os.getenv("AGENDA_MAX_ATTENDEES", "20"))
-LLM_TIMEOUT_SECONDS: int = int(os.getenv("AGENDA_LLM_TIMEOUT", "120"))
-
-# Ceiling on the agenda tool-use response. Converse defaults to 4096 when no
-# inferenceConfig is sent, which is under what a multi-day briefing needs: a
-# five-day Zurich agenda measured 7253 output tokens, and every event with
-# duration > 1 failed in production because the JSON was cut off partway. This
-# is a cap and not a target — billing is on tokens actually generated, so the
-# headroom is free. _MAX_SESSIONS_TOTAL is what keeps the length sane.
-AGENDA_MAX_OUTPUT_TOKENS: int = int(os.getenv("AGENDA_MAX_OUTPUT_TOKENS", "16000"))
-
-# EBD quality gate: skip extracted text that is too short or mostly non-alpha
-EBD_MIN_WORDS: int = 100
-EBD_MAX_NOISE_RATIO: float = 0.5  # if >50% of chars are non-alphanumeric, skip
 
 # Module-level OpenAI client (reused across calls)
 _openai_client: Optional[OpenAI] = None
@@ -121,224 +121,9 @@ def _get_openai_client() -> OpenAI:
     return _openai_client
 
 
-class AgendaTruncated(RuntimeError):
-    """The model ran out of output budget partway through the agenda object.
-
-    Distinct from a schema error: the agenda we got back is not wrong, it is
-    unfinished, and the retry has to ask for less rather than send less.
-    """
 
 
-# ============================================================================
-# STRUCTURED OUTPUT MODELS
-# ============================================================================
 
-class OraclePresenter(BaseModel):
-    """Presenter information."""
-    name: str = Field(description="Full name of the presenter")
-    title: str = Field(description="Job title of the presenter")
-
-
-class TopicPresenterSuggestion(BaseModel):
-    """Best-ranked presenter for a session's topic, attached after generation.
-
-    A typed model rather than a free dict on purpose: AgendaSession is the
-    OpenAI structured-output schema, and strict mode rejects free-form objects
-    — to_strict_json_schema() raises on Dict[str, Any], which would fail every
-    agenda request on the default provider path before the model was called.
-    """
-    presenter_name: Optional[str] = None
-    title: Optional[str] = None
-    match_tier: Optional[str] = None
-    matched_topic: Optional[str] = None
-    available: Optional[bool] = None
-    reason: Optional[str] = None
-    # Deal movement at the briefings this person presented at. Context only —
-    # never a ranking input, and always carried WITH its caveat, because a
-    # briefing has several presenters and one revenue figure.
-    revenue_delta: Optional[float] = None
-    revenue_events: Optional[int] = None
-    revenue_note: Optional[str] = None
-
-
-class BackupPresenter(BaseModel):
-    """A ranked alternate for a session, verified free at its final time.
-
-    Typed rather than a free dict for the same reason as
-    TopicPresenterSuggestion: AgendaSession is the structured-output schema and
-    strict mode rejects Dict[str, Any].
-    """
-    presenter_name: str
-    title: Optional[str] = None
-    match_tier: Optional[str] = None
-    reason: Optional[str] = None
-
-
-class AgendaSession(BaseModel):
-    """A single session in the agenda."""
-    day: int = Field(
-        default=1,
-        description="Day of the briefing this session belongs to (1-based). Always 1 for single-day events.",
-    )
-    time_slot: str = Field(
-        default="",
-        description=(
-            "Leave empty. Clock times are assigned after generation by the "
-            "scheduler, which knows the event's booked hours and who is free "
-            "when. Anything written here is discarded."
-        ),
-    )
-    duration_minutes: int = Field(
-        default=45,
-        description=(
-            "How long this session should run, in minutes. Use realistic "
-            "lengths: 15 for a welcome or close, 30-60 for a content session, "
-            "60 for lunch. The scheduler turns these into clock times."
-        ),
-    )
-    duration_min_minutes: Optional[int] = Field(
-        default=None,
-        description=(
-            "Shortest this session can usefully run. Set it below "
-            "duration_minutes only where the session can genuinely be "
-            "compressed — it is the slack the scheduler uses to fit a busy "
-            "expert or a tight window. Leave null for fixed-length slots."
-        ),
-    )
-    duration_max_minutes: Optional[int] = Field(
-        default=None,
-        description="Longest this session can usefully run. Leave null for fixed-length slots.",
-    )
-    anchor: Literal["open", "morning", "lunch", "afternoon", "close", "any"] = Field(
-        default="any",
-        description=(
-            "Where in the day this belongs. 'open' for the welcome, 'close' for "
-            "the wrap-up/next-steps, 'lunch' for the lunch break, 'morning'/"
-            "'afternoon' when the content genuinely needs that half of the day "
-            "(strategy while executives are fresh; hands-on work later), 'any' otherwise."
-        ),
-    )
-    movable: bool = Field(
-        default=True,
-        description=(
-            "May the scheduler move this session to a different point in the day "
-            "to keep the best-matched presenter? False for the welcome, lunch and "
-            "close, and for anything whose position carries the narrative."
-        ),
-    )
-    title: str = Field(description="Action-oriented session title")
-    format: Literal["Presentation", "Demo", "Roundtable", "Working Session"] = Field(
-        description="Session format type"
-    )
-    presenter: str = Field(description="Presenter name and title")
-    topic: Optional[str] = Field(
-        default=None,
-        description=(
-            "The briefing topic this session covers, copied EXACTLY from the "
-            "AVAILABLE TOPICS list. This is what the presenter must be an "
-            "expert in — it drives per-session presenter matching. Leave null "
-            "for non-content slots (welcome, breaks, close) and whenever no "
-            "listed topic genuinely fits; never invent one."
-        ),
-    )
-    description: str = Field(description="What will be covered in this session")
-    topic_presenter_suggestion: Optional[TopicPresenterSuggestion] = Field(
-        default=None,
-        description="Leave null. Filled in after generation by ranked topic matching, never by you.",
-    )
-    presenter_before_topic_match: Optional[str] = Field(
-        default=None,
-        description="The originally generated presenter, kept when topic matching replaced it.",
-    )
-    scheduling_note: Optional[str] = Field(
-        default=None,
-        description=(
-            "Leave null. Filled in by the scheduler when it had to reshape the day "
-            "— e.g. moving a session to keep the best-matched presenter."
-        ),
-    )
-    backup_presenters: List[BackupPresenter] = Field(
-        default_factory=list,
-        description=(
-            "Leave empty. Filled in by the scheduler with the next-ranked people "
-            "who are ALSO free at this session's final time — a briefing team's "
-            "first question when a presenter drops out."
-        ),
-    )
-    key_metrics: Optional[str] = Field(
-        default=None, 
-        description="Any $ figures or KPIs being addressed (e.g., '$50M inefficient spend')"
-    )
-    customer_reference: Optional[str] = Field(
-        default=None,
-        description="Customer success reference (e.g., 'Nike achieved 40% improvement')"
-    )
-    attendee_consideration: Optional[str] = Field(
-        default=None,
-        description="How this session addresses specific attendee concerns"
-    )
-
-
-class StrategicNotes(BaseModel):
-    """Strategic notes and recommendations."""
-    derailer_handling: Optional[str] = Field(
-        default=None,
-        description="How the agenda addresses account derailers"
-    )
-    attendee_considerations: List[str] = Field(
-        default_factory=list,
-        description="Attendee-specific considerations"
-    )
-    follow_up_actions: List[str] = Field(
-        default_factory=list,
-        description="Recommended follow-up actions"
-    )
-    assumptions: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Assumptions made because source data was missing (e.g. 'No meeting "
-            "objective on file — assumed evaluation-stage briefing'). Empty when "
-            "all key data was available."
-        ),
-    )
-
-
-class GeneratedAgenda(BaseModel):
-    """Complete structured agenda output."""
-    # Header info
-    company: str = Field(description="Company name")
-    industry: str = Field(description="Company industry")
-    date_time: str = Field(description="Proposed date and time range")
-    location: str = Field(description="Location (physical and/or virtual)")
-    
-    # Presenters
-    oracle_presenters: List[OraclePresenter] = Field(
-        description="List of presenters for the briefing"
-    )
-    
-    # Attendee summary
-    total_attendees: int = Field(description="Total number of attendees")
-    c_level_count: int = Field(description="Number of C-level executives")
-    decision_maker_count: int = Field(description="Number of decision makers")
-    technical_count: int = Field(description="Number of technical attendees")
-    remote_count: int = Field(description="Number of remote participants")
-    
-    # Content
-    executive_summary: str = Field(
-        description="2-3 sentence strategic summary of the briefing goals"
-    )
-    sessions: List[AgendaSession] = Field(
-        description="List of agenda sessions in chronological order"
-    )
-    strategic_notes: StrategicNotes = Field(
-        description="Strategic notes and recommendations"
-    )
-
-# Default EBD path for testing only — set DEFAULT_EBD_PATH env var to override
-DEFAULT_EBD_PATH: Optional[str] = os.getenv(
-    "DEFAULT_EBD_PATH",
-    str(Path(__file__).parent.parent / "documents" / "ebd" / "EBD_Apple_FILLED.pptx"),
-)
 
 
 # ============================================================================
@@ -349,328 +134,6 @@ def _resolve_event_id(event_id: Optional[str]) -> Optional[str]:
     """Delegates to the shared resolver. Kept here for backward compat."""
     from tools.event_resolver import resolve_event_id
     return resolve_event_id(event_id)
-
-
-# ============================================================================
-# EBD EXTRACTION FROM DATABASE
-# ============================================================================
-
-def _extract_pdf_text(pdf_path: str) -> str:
-    """
-    Extract text from a PDF file using pdfplumber.
-
-    Handles arbitrary PDF layouts — extracts both free-form text and tables,
-    and concatenates them page-by-page so the LLM gets a coherent view.
-    """
-    if not HAS_PDFPLUMBER:
-        logger.warning("pdfplumber not installed. Run: pip install pdfplumber")
-        return ""
-
-    parts: list[str] = []
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
-                page_parts: list[str] = []
-
-                # --- free-form text ---
-                page_text = page.extract_text()
-                if page_text and page_text.strip():
-                    page_parts.append(page_text.strip())
-
-                # --- tables (if any) ---
-                tables = page.extract_tables()
-                for table in tables:
-                    rows = []
-                    for row in table:
-                        cells = [
-                            (cell or "").strip() for cell in row
-                        ]
-                        if any(cells):
-                            rows.append(" | ".join(cells))
-                    if rows:
-                        page_parts.append("[Table]\n" + "\n".join(rows))
-
-                if page_parts:
-                    parts.append(
-                        f"--- Page {page_num} ---\n" + "\n\n".join(page_parts)
-                    )
-
-        return "\n\n".join(parts)
-    except Exception as e:
-        logger.error(f"Error extracting PDF text: {e}")
-        return ""
-
-
-def _extract_docx_text(docx_path: str) -> str:
-    """
-    Extract text from a Word document using python-docx.
-
-    Paragraphs and tables are walked in document order rather than read from
-    `.paragraphs` and `.tables` separately: those two lists lose the
-    interleaving, and an EBD's tables sit under the headings that explain them.
-    """
-    if not HAS_DOCX:
-        logger.warning("python-docx not installed. Run: pip install python-docx")
-        return ""
-
-    parts: list[str] = []
-    try:
-        document = docx.Document(docx_path)
-        for child in document.element.body.iterchildren():
-            tag = child.tag.split("}")[-1]
-            if tag == "p":
-                text = _DocxParagraph(child, document).text.strip()
-                if text:
-                    parts.append(text)
-            elif tag == "tbl":
-                rows = []
-                for row in _DocxTable(child, document).rows:
-                    cells = [cell.text.strip() for cell in row.cells]
-                    if any(cells):
-                        rows.append(" | ".join(cells))
-                if rows:
-                    parts.append("[Table]\n" + "\n".join(rows))
-
-        return "\n\n".join(parts)
-    except Exception as e:
-        logger.error(f"Error extracting DOCX text: {e}")
-        return ""
-
-
-def _extract_plain_text(path: str) -> str:
-    """Read a text-shaped document (txt, md, csv, json) straight off disk."""
-    try:
-        return Path(path).read_text(encoding="utf-8", errors="replace").strip()
-    except Exception as e:
-        logger.error(f"Error reading text document: {e}")
-        return ""
-
-
-# Formats we can turn into text. Anything outside this set is skipped with a
-# warning rather than guessed at — the old code defaulted every unknown type to
-# PPTX, so a Word EBD reached python-pptx and blew up.
-_TEXT_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".rtf"})
-_BINARY_SUFFIXES = frozenset({".pdf", ".pptx", ".docx"})
-
-# Office MIME types are long and near-identical, so match on the part that
-# actually distinguishes them. Order matters: first hit wins.
-_CONTENT_TYPE_MARKERS = (
-    ("wordprocessingml", ".docx"),
-    ("presentationml", ".pptx"),
-    ("pdf", ".pdf"),
-    ("json", ".json"),
-    ("csv", ".csv"),
-    ("markdown", ".md"),
-    ("text/plain", ".txt"),
-)
-
-
-def _sniff_document_suffix(source) -> str:
-    """
-    Identify a document from its own bytes. `source` is a blob or a path.
-
-    Filenames lie: 8 of the 42 EBDs in the database carry a legacy .doc or
-    .ppt extension over what is really an OOXML payload, and would otherwise
-    be written off as unreadable. A magic number cannot lie the same way, so
-    it is checked before the name. Returns "" when the bytes say nothing
-    useful, leaving the name and MIME type to answer.
-    """
-    try:
-        if isinstance(source, (bytes, bytearray)):
-            head, archive = bytes(source[:8]), io.BytesIO(bytes(source))
-        else:
-            with open(source, "rb") as fh:
-                head = fh.read(8)
-            archive = source
-
-        if head[:4] == b"%PDF":
-            return ".pdf"
-        if head[:4] != b"PK\x03\x04":
-            return ""
-
-        names = zipfile.ZipFile(archive).namelist()
-        if "word/document.xml" in names:
-            return ".docx"
-        if any(name.startswith("ppt/slides/") for name in names):
-            return ".pptx"
-    except Exception as e:
-        logger.debug(f"Could not sniff document type: {e}")
-
-    return ""
-
-
-def _document_suffix(filename: str = "", content_type: str = "") -> str:
-    """
-    Decide which extension to parse a document as, from its name or MIME type.
-
-    The filename is trusted first — the database stores a real one, while
-    content types arrive in several spellings for the same format. Returns ""
-    when neither identifies something we can read.
-    """
-    name = (filename or "").lower()
-    for suffix in _BINARY_SUFFIXES | _TEXT_SUFFIXES:
-        if name.endswith(suffix):
-            return suffix
-
-    ct = (content_type or "").lower()
-    for marker, suffix in _CONTENT_TYPE_MARKERS:
-        if marker in ct:
-            return suffix
-
-    return ""
-
-
-def _extract_document_text(path: str, suffix: str) -> tuple:
-    """
-    Pull text out of a document, dispatching on its suffix.
-
-    Returns (text, extras) where extras carries whatever structural counts the
-    format exposes — slides and tables for PPTX, nothing for the rest. An
-    unreadable format returns empty text, which is the caller's cue to carry on
-    without the document instead of failing the whole agenda.
-    """
-    if suffix == ".pdf":
-        return _extract_pdf_text(path), {}
-    if suffix == ".pptx":
-        extracted = extract_pptx_content(path)
-        return format_extracted_content(extracted), {
-            "slide_count": extracted.get("slide_count", 0),
-            "table_count": len(extracted.get("tables", [])),
-        }
-    if suffix == ".docx":
-        return _extract_docx_text(path), {}
-    if suffix in _TEXT_SUFFIXES:
-        return _extract_plain_text(path), {}
-
-    logger.warning(f"Unsupported document type '{suffix or 'unknown'}' — skipping extraction")
-    return "", {}
-
-
-def _fetch_ebd_from_db(event_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Fetch EBD document from database for a given event.
-    
-    Args:
-        event_id: The event ID to fetch EBD for
-        
-    Returns:
-        Dict with 'raw_text' and 'has_ebd' if found, None otherwise
-    """
-    # VW_EVENT_DOCUMENT_REPORT.eventid holds the NUMERIC id, while callers pass
-    # the UUID from x-cloud-eventid. Comparing those never matches, so every EBD
-    # lookup returned "not found" regardless of whether a document was attached.
-    from tools.event_resolver import resolve_numeric_event_id
-
-    numeric_id = resolve_numeric_event_id(event_id)
-    if not numeric_id:
-        logger.info(f"Could not resolve a numeric id for event {event_id}; skipping EBD lookup")
-        return None
-    if numeric_id != event_id:
-        logger.info(f"EBD lookup: {event_id} → numeric id {numeric_id}")
-
-    try:
-        with engine.connect() as conn:
-            # Query for EBD document blob
-            query = text("""
-                SELECT document, file_name, content_type, file_size
-                FROM VW_EVENT_DOCUMENT_REPORT 
-                WHERE eventid = :event_id 
-                AND document_category = 'Executive Briefing Document'
-                AND document IS NOT NULL
-                FETCH FIRST 1 ROW ONLY
-            """)
-            result = conn.execute(query, {"event_id": numeric_id})
-            row = result.fetchone()
-            
-            if not row:
-                logger.info(f"No EBD found in database for event: {event_id}")
-                return None
-            
-            blob = row[0]
-            filename = row[1] or "document"
-            content_type = row[2] or ""
-            file_size = row[3] or 0
-            
-            logger.info(f"Found EBD in DB: {filename} ({content_type}, {file_size} bytes)")
-            
-            # Determine file type and extract text
-            extracted_text = ""
-
-            sniffed = _sniff_document_suffix(blob)
-            claimed = _document_suffix(filename, content_type)
-            if sniffed and claimed and sniffed != claimed:
-                logger.info(
-                    f"EBD '{filename}' is really a {sniffed} despite its name; "
-                    f"reading it as one"
-                )
-            suffix = sniffed or claimed
-            if not suffix:
-                logger.warning(
-                    f"EBD '{filename}' ({content_type}) is in a format we cannot read"
-                )
-                return None
-
-            # Save blob to temp file
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                tmp.write(blob)
-                tmp_path = tmp.name
-
-            try:
-                extracted_text, _extras = _extract_document_text(tmp_path, suffix)
-                if extracted_text:
-                    logger.info(
-                        f"Extracted {len(extracted_text)} chars from {suffix.lstrip('.').upper()}"
-                    )
-            finally:
-                # Cleanup temp file
-                Path(tmp_path).unlink(missing_ok=True)
-            
-            if extracted_text:
-                return {
-                    "raw_text": _truncate_document(extracted_text),
-                    "has_ebd": True,
-                    "source": "database",
-                    "filename": filename,
-                }
-
-            return None
-
-    except Exception as e:
-        logger.error(f"Error fetching EBD from database: {e}", exc_info=True)
-        return None
-
-
-def _truncate_document(doc_text: str, max_chars: Optional[int] = None) -> str:
-    """
-    Truncate document text to stay within token-safe limits.
-
-    If the text exceeds *max_chars* it is trimmed and a notice is appended
-    so the LLM knows content was cut.
-    """
-    limit = max_chars or MAX_DOCUMENT_CHARS
-    if len(doc_text) <= limit:
-        return doc_text
-
-    logger.warning(
-        f"Document text truncated from {len(doc_text)} to {limit} chars"
-    )
-    return doc_text[:limit] + "\n\n[... document truncated due to length ...]"
-
-
-def _ebd_quality_ok(extracted_text: str) -> bool:
-    """Return True if extracted EBD text is usable (not garbled / too short)."""
-    words = extracted_text.split()
-    if len(words) < EBD_MIN_WORDS:
-        logger.warning(f"EBD text too short ({len(words)} words < {EBD_MIN_WORDS}). Skipping.")
-        return False
-    alpha_chars = sum(1 for c in extracted_text if c.isalnum() or c.isspace())
-    total_chars = len(extracted_text)
-    if total_chars > 0 and (1 - alpha_chars / total_chars) > EBD_MAX_NOISE_RATIO:
-        logger.warning(
-            f"EBD text appears garbled (noise ratio {1 - alpha_chars / total_chars:.0%}). Skipping."
-        )
-        return False
-    return True
 
 
 # ============================================================================
@@ -2099,46 +1562,6 @@ def _schedule_agenda_sessions(
     }
 
 
-# A briefing day has a practical ceiling on distinct sessions regardless of how
-# many hours are booked — past this you are describing a conference timetable,
-# not a briefing, and the structured-output call grows accordingly.
-_MAX_SESSIONS_PER_DAY = 10
-# And a ceiling across the whole briefing: a 12-hour window over three days
-# asked for up to 36 sessions, which stalled generation outright.
-_MAX_SESSIONS_TOTAL = 24
-
-
-def _session_count_range(window_minutes: int, num_days: int = 1) -> tuple:
-    """How many sessions this briefing can carry per day, as (min, max).
-
-    AGENDA_SESSION_MIN/MAX are one fixed range for every briefing, so a
-    four-hour visit was asked for the same 6-10 sessions as a full day and the
-    model met the count by shrinking everything to fit. Deriving the range from
-    the booked window instead means one session per ~75 min at the loose end
-    and per ~45 min at the tight end — which reproduces the old 6-10 for a
-    standard seven-hour day, and scales honestly either side of it.
-
-    Both ends are then capped. Sizing purely off the window is what a long
-    booking exposes: a 12-hour window over three days worked out to 9-12
-    sessions a day, 36 in total, and the generation call simply stalled. Hours
-    booked is evidence of how long the room is held, not of how many distinct
-    sessions anyone wants to sit through.
-
-    Falls back to the configured range when there is no window to measure.
-    """
-    if not window_minutes or window_minutes <= 0:
-        return AGENDA_SESSION_MIN, AGENDA_SESSION_MAX
-
-    low = max(3, window_minutes // 75)
-    high = max(low + 1, window_minutes // 45)
-
-    high = min(high, _MAX_SESSIONS_PER_DAY)
-    if num_days > 1:
-        # Spread the total budget across the days rather than per-day sizing
-        # each one as though it were the only day.
-        high = min(high, max(4, _MAX_SESSIONS_TOTAL // num_days))
-    low = min(low, max(3, high - 1))
-    return low, high
 
 
 def _enforce_session_cap(agenda: "GeneratedAgenda") -> "GeneratedAgenda":
@@ -2226,16 +1649,6 @@ def _event_num_days(meeting: Optional[Dict[str, Any]]) -> int:
     return max(1, min(days, 5))
 
 
-def _format_correction_note(issues: List[str]) -> str:
-    """Build a correction section instructing the LLM to fix specific time issues."""
-    bullets = "\n".join(f"- {issue}" for issue in issues)
-    return (
-        "The previous draft of this agenda had scheduling problems. "
-        "Regenerate the full agenda fixing ALL of the following, while keeping the "
-        "same topics and presenters where possible. Sessions must be in chronological "
-        "order, non-overlapping, contiguous within the day window, and include a lunch break:\n"
-        f"{bullets}"
-    )
 
 
 def _generate_agenda_with_llm(
@@ -2397,191 +1810,8 @@ the title as TBD instead of inventing one.
     return _call_llm_with_retry(messages, previous, similar)
 
 
-def _rank_previous_meetings(
-    meetings: List[Dict[str, Any]], current_meeting: Dict[str, Any]
-) -> List[Dict[str, Any]]:
-    """
-    Rank and annotate previous meetings by relevance to the current one.
-
-    Scoring: recency + visit-focus overlap + same pillars.
-    Only the top 3 most relevant are kept to save prompt space.
-    """
-    if not meetings:
-        return []
-
-    current_focus = (current_meeting.get("visit_focus") or "").lower()
-    current_pillars = set()
-    cp = current_meeting.get("pillars")
-    if isinstance(cp, list):
-        current_pillars = {str(p).lower() for p in cp}
-    elif isinstance(cp, str):
-        current_pillars = {cp.lower()}
-
-    scored = []
-    for i, m in enumerate(meetings):
-        score = 0.0
-        # Recency: first items are most recent (already sorted desc)
-        score += max(0, 5 - i)  # 5, 4, 3, 2, 1
-
-        # Visit focus overlap
-        m_focus = (m.get("visit_focus") or "").lower()
-        if m_focus and current_focus:
-            # Simple word overlap ratio
-            cur_words = set(current_focus.split())
-            m_words = set(m_focus.split())
-            if cur_words & m_words:
-                overlap = len(cur_words & m_words) / max(len(cur_words | m_words), 1)
-                score += overlap * 5
-
-        # Pillar overlap
-        m_pillars = set()
-        mp = m.get("pillars")
-        if isinstance(mp, list):
-            m_pillars = {str(p).lower() for p in mp}
-        elif isinstance(mp, str):
-            m_pillars = {mp.lower()}
-        if m_pillars & current_pillars:
-            score += 2
-
-        m_copy = dict(m)
-        m_copy["_relevance_score"] = round(score, 1)
-        scored.append(m_copy)
-
-    scored.sort(key=lambda x: -x["_relevance_score"])
-    # Keep top 3; annotate relevance label for the LLM
-    top = scored[:3]
-    for m in top:
-        s = m.pop("_relevance_score")
-        m["relevance"] = "high" if s >= 7 else ("medium" if s >= 4 else "low")
-    return top
 
 
-def _build_agenda_prompt(
-    *, meeting, total_attendee_count, attendees, c_level_attendees,
-    decision_makers, technical_attendees, remote_attendees, external_attendees,
-    previous, similar, presenter_section, ebd_section, has_ebd,
-    presenter_recommendations, correction_note=None, num_days=1, missing_fields=None,
-    schedule=None,
-) -> str:
-    """Build the user prompt for the LLM."""
-    correction_section = f"\n\n## CORRECTIONS REQUIRED\n\n{correction_note}\n" if correction_note else ""
-    gaps_section = ""
-    if missing_fields:
-        gaps_section = (
-            "\n\n## DATA GAPS\n\n"
-            f"The following fields are missing from the meeting record: {', '.join(missing_fields)}. "
-            "Do NOT invent values for them. Where you have to assume something to build the agenda, "
-            "record each assumption as a short bullet in strategic_notes.assumptions so the requester "
-            "can confirm or correct it.\n"
-        )
-    # The booked hours, when the event has real ones. Sessions are sized to fill
-    # them; the scheduler then turns durations into clock times.
-    window_label = schedule.get("label") if schedule else None
-    window_minutes = (schedule or {}).get("minutes") or 0
-    if window_label:
-        day_span = f"{window_label} ({window_minutes // 60}h{window_minutes % 60 or ''} of booked time)"
-    else:
-        day_span = f"{AGENDA_DAY_START} - {AGENDA_DAY_END}"
-
-    budget = (
-        f" Session durations should add up to roughly {int(window_minutes * 0.85)} minutes "
-        f"so the day is well used without being programmed wall-to-wall."
-        if window_minutes
-        else ""
-    )
-    # Session count scales with the booked day rather than being one fixed
-    # range for a four-hour visit and a full day alike.
-    sess_min, sess_max = _session_count_range(window_minutes, num_days)
-
-    if num_days > 1:
-        day_requirement = (
-            f"1. This is a {num_days}-DAY briefing. Create sessions for EVERY day: set the day field "
-            f"(1..{num_days}) on each session. Each day runs {day_span} with "
-            f"{sess_min}-{sess_max} sessions AND its own lunch break.{budget} Give each day a "
-            "coherent theme (e.g. day 1 = vision/strategy, day 2 = deep-dives/planning) and avoid repeating sessions across days."
-        )
-    else:
-        day_requirement = (
-            f"1. Create {sess_min}-{sess_max} sessions filling "
-            f"{day_span} (single day; day field = 1).{budget}"
-        )
-    return f"""Generate a professional executive briefing agenda based on the data below.{correction_section}{gaps_section}
-
-## MEETING CONTEXT
-
-Company: {meeting.get('company_name')}
-Industry: {meeting.get('industry')}
-Account Type: {meeting.get('account_type')}
-Line of Business: {meeting.get('line_of_business')}
-Visit Focus: {meeting.get('visit_focus')}
-Meeting Objective: {meeting.get('meeting_objective')}
-Sales Plays: {meeting.get('sales_plays')}
-Strategic Pillars: {meeting.get('pillars')}
-Region: {meeting.get('region')}
-Tier: {meeting.get('tier')}
-Date: {(schedule or {}).get('date') or 'not on file'}
-Booked hours: {(schedule or {}).get('label') or 'not on file'}
-Location: {meeting.get('location') or 'not on file'}
-
-## ATTENDEE MIX
-
-Total attendees: {total_attendee_count}{f' (showing top {len(attendees)})' if total_attendee_count > len(attendees) else ''}
-C-Level: {len(c_level_attendees)} | Decision Makers: {len(decision_makers)} | Technical: {len(technical_attendees)} | Remote: {len(remote_attendees)} | External: {len(external_attendees)}
-
-Who is actually in the room — design the day for THESE people. Their real job
-titles are what matter; the C-level flag is a data field and often disagrees
-with the title, in which case believe the title:
-
-{chr(10).join(
-    f"- {a.get('name') or 'Unnamed'} — {a.get('title') or 'title unknown'}"
-    f" [{a.get('type', 'Unknown')}"
-    + (", decision maker" if a.get("decision_maker") else "")
-    + (", technical" if a.get("technical") else "")
-    + (", remote" if a.get("remote") else "")
-    + "]"
-    for a in attendees[:15]
-) or '- No attendee records on file'}
-
-## PREVIOUS MEETINGS (ranked by relevance)
-
-{json.dumps(previous, indent=2) if previous else 'None'}
-
-## SIMILAR BRIEFINGS
-
-{json.dumps(similar, indent=2) if similar else 'None'}
-{presenter_section}
-{ebd_section}
-
-## REQUIREMENTS
-
-{day_requirement}
-1b. Do NOT write time_slot — leave it empty. Set duration_minutes on every session,
-    plus anchor ('open' for the welcome, 'lunch', 'close' for the wrap-up, 'morning'/
-    'afternoon' where the content needs that half of the day, else 'any') and movable
-    (False for welcome/lunch/close). Clock times are assigned afterwards by a scheduler
-    that knows the booked hours and each presenter's real calendar — which is why it,
-    and not you, decides when things run. Where a session could reasonably be shorter
-    or longer, set duration_min_minutes / duration_max_minutes: that slack is what lets
-    the scheduler keep the best-matched expert instead of downgrading to someone free.
-2. Include a lunch break{' each day' if num_days > 1 else ''}.
-3. Tailor to {meeting.get('industry')} industry.
-4. Address visit focus: {meeting.get('visit_focus')}.
-5. Incorporate sales plays: {meeting.get('sales_plays')}.
-6. Use hybrid format if remote attendees ({len(remote_attendees)} remote).
-7. Vary session formats (Presentation, Demo, Roundtable, Working Session).
-8. {'ATTENDEES ARE NOT PRESENTERS. The document lists who will be in the room — account team, points of contact, executives attending. Never put those names in a presenter field. Only use a name from the document if it explicitly says that person is presenting or speaking on a topic.' if has_ebd else 'Use presenter recommendations below when relevant.'}
-9. {'Presenters come from the PRESENTER RECOMMENDATIONS below, chosen per session by topic fit. Use TBD when none fits — TBD is correct and expected; inventing a presenter, or promoting an attendee into the role, is not.' if presenter_recommendations else 'If no strong presenter match is available, use TBD.'}
-9b. Put the presenter's name ONLY in the `presenter` field. Never name them in `description` — write "this session covers X", not "Deepa will cover X". Assignments are re-checked against topic expertise and availability after you generate, so a name written into prose can end up contradicting the presenter actually assigned.
-10. {'Extract any dollar figures / KPIs from the document into key_metrics fields.' if has_ebd else ''}
-11. {'Use any customer references found in the document.' if has_ebd else ''}
-12. Prioritise high-relevance previous meetings when designing the flow; avoid repeating topics from recent meetings.
-
-Hard-code the following attendee counts (do NOT make them up):
-- total_attendees: {total_attendee_count}
-- c_level_count: {len(c_level_attendees)}
-- decision_maker_count: {len(decision_makers)}
-- technical_count: {len(technical_attendees)}
-- remote_count: {len(remote_attendees)}"""
 
 
 def _inline_json_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -2768,149 +1998,8 @@ def _call_llm_with_retry(
     raise RuntimeError("LLM call failed after 2 attempts")
 
 
-def _strip_prompt_sections(messages: list) -> list:
-    """Remove PREVIOUS MEETINGS and SIMILAR BRIEFINGS sections from the prompt for retry."""
-    new_messages = []
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            # Remove sections between headers
-            content = re.sub(
-                r"## PREVIOUS MEETINGS.*?(?=## )", "## PREVIOUS MEETINGS (ranked by relevance)\n\nOmitted for brevity.\n\n",
-                content, flags=re.DOTALL,
-            )
-            content = re.sub(
-                r"## SIMILAR BRIEFINGS.*?(?=## )", "## SIMILAR BRIEFINGS\n\nOmitted for brevity.\n\n",
-                content, flags=re.DOTALL,
-            )
-            new_messages.append({**msg, "content": content})
-        else:
-            # multipart content (file + text) — strip from the text part
-            new_parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    t = part["text"]
-                    t = re.sub(
-                        r"## PREVIOUS MEETINGS.*?(?=## )", "## PREVIOUS MEETINGS\n\nOmitted.\n\n",
-                        t, flags=re.DOTALL,
-                    )
-                    t = re.sub(
-                        r"## SIMILAR BRIEFINGS.*?(?=## )", "## SIMILAR BRIEFINGS\n\nOmitted.\n\n",
-                        t, flags=re.DOTALL,
-                    )
-                    new_parts.append({**part, "text": t})
-                else:
-                    new_parts.append(part)
-            new_messages.append({**msg, "content": new_parts})
-    return new_messages
 
 
-def agenda_to_markdown(agenda: GeneratedAgenda) -> str:
-    """
-    Convert a structured GeneratedAgenda to formatted markdown.
-    
-    Args:
-        agenda: The structured agenda object
-        
-    Returns:
-        Formatted markdown string
-    """
-    lines = []
-    
-    # Header
-    lines.append(f"# Executive Briefing Agenda for {agenda.company}")
-    lines.append("")
-    lines.append(f"**Company:** {agenda.company}  ")
-    lines.append(f"**Industry:** {agenda.industry}  ")
-    lines.append(f"**Date/Time:** {agenda.date_time}  ")
-    lines.append(f"**Location:** {agenda.location}  ")
-    lines.append("")
-    
-    # Presenters
-    lines.append("## Presenters")
-    for presenter in agenda.oracle_presenters:
-        lines.append(f"- {presenter.name}, {presenter.title}")
-    lines.append("")
-    
-    # Attendee Summary
-    lines.append("## Attendee Summary")
-    lines.append(f"- **Total Attendees:** {agenda.total_attendees}")
-    lines.append(f"- **C-Level Executives:** {agenda.c_level_count}")
-    lines.append(f"- **Decision Makers:** {agenda.decision_maker_count}")
-    lines.append(f"- **Technical Attendees:** {agenda.technical_count}")
-    lines.append(f"- **Remote Participants:** {agenda.remote_count}")
-    lines.append("")
-    
-    # Executive Summary
-    lines.append("## Executive Summary")
-    lines.append(agenda.executive_summary)
-    lines.append("")
-    
-    # Sessions (grouped by day when the briefing spans multiple days)
-    lines.append("---")
-    lines.append("")
-    lines.append("## Agenda Sessions")
-    lines.append("")
-
-    multi_day = len({getattr(s, "day", 1) or 1 for s in agenda.sessions}) > 1
-    current_day = None
-    for session in agenda.sessions:
-        if multi_day:
-            day = getattr(session, "day", 1) or 1
-            if day != current_day:
-                current_day = day
-                lines.append(f"## Day {day}")
-                lines.append("")
-        lines.append(f"### {session.time_slot}")
-        lines.append(f"**Title:** {session.title}  ")
-        lines.append(f"**Format:** {session.format}  ")
-        lines.append(f"**Presenter:** {session.presenter}  ")
-        lines.append(f"**Description:** {session.description}  ")
-        if session.backup_presenters:
-            names = ", ".join(
-                f"{b.presenter_name}{f' ({b.title})' if b.title else ''}"
-                for b in session.backup_presenters
-            )
-            lines.append(f"**Backup Presenters:** {names}  ")
-        if session.scheduling_note:
-            lines.append(f"**Scheduling Note:** {session.scheduling_note}  ")
-        if session.key_metrics:
-            lines.append(f"**Key Metrics:** {session.key_metrics}  ")
-        if session.customer_reference:
-            lines.append(f"**Customer Reference:** {session.customer_reference}  ")
-        if session.attendee_consideration:
-            lines.append(f"**Attendee Consideration:** {session.attendee_consideration}")
-        lines.append("")
-    
-    # Strategic Notes
-    lines.append("---")
-    lines.append("")
-    lines.append("## Strategic Notes")
-    lines.append("")
-    
-    if agenda.strategic_notes.derailer_handling:
-        lines.append(f"**Derailer Handling:** {agenda.strategic_notes.derailer_handling}")
-        lines.append("")
-    
-    if agenda.strategic_notes.attendee_considerations:
-        lines.append("**Attendee Considerations:**")
-        for consideration in agenda.strategic_notes.attendee_considerations:
-            lines.append(f"- {consideration}")
-        lines.append("")
-    
-    if agenda.strategic_notes.follow_up_actions:
-        lines.append("**Recommended Follow-up Actions:**")
-        for action in agenda.strategic_notes.follow_up_actions:
-            lines.append(f"- {action}")
-        lines.append("")
-
-    if agenda.strategic_notes.assumptions:
-        lines.append("**Assumptions Made (missing data — please confirm):**")
-        for assumption in agenda.strategic_notes.assumptions:
-            lines.append(f"- {assumption}")
-        lines.append("")
-
-    return "\n".join(lines)
 
 
 def _compute_confidence(
