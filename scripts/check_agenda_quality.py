@@ -75,6 +75,8 @@ class Run:
         self.result = result
         self.context = context
         self.elapsed = elapsed
+        self._pool_cache = None
+        self._wider_cache = None
         self.meeting = (context or {}).get("meeting_details") or {}
         self.attendees = (context or {}).get("attendees") or []
         self.topics = [t for t in ((context or {}).get("available_topics") or []) if t]
@@ -113,7 +115,16 @@ class Run:
                 int((midnight + timedelta(minutes=e)).timestamp() * 1000))
 
     def emails(self):
-        """presenter name (lowered) -> email, from the provenance candidate pool."""
+        """presenter name (lowered) -> email.
+
+        Three sources, because none is reliable alone: the provenance
+        candidates carry an address but come back empty whenever no pool was
+        gathered for a session, and presenter_recommendations identifies people
+        by presenter_id and drops the address entirely. The ranked pool is
+        therefore queried directly as the fallback — the same source the agenda
+        drew from, so the lookup stays independent of the scheduler's own
+        bookkeeping without inventing a new notion of who these people are.
+        """
         out = {}
         for entry in (self.result.get("provenance") or {}).get("sessions", []):
             for cand in entry.get("candidates") or []:
@@ -124,7 +135,37 @@ class Run:
             name, email = rec.get("presenter_name"), rec.get("email")
             if name and email:
                 out.setdefault(name.strip().lower(), email.lower())
+        for person in self._pool():
+            name = (person.get("presenter_name") or "").strip().lower()
+            email = person.get("email") or next(iter(person.get("all_emails") or []), "")
+            if name and email:
+                out.setdefault(name, email.lower())
         return out
+
+    def wider_topics(self):
+        """Every topic in the index, well past what the prompt is shown.
+
+        Only used to tell an invented tag from a reworded real one; never to
+        widen what counts as copied.
+        """
+        if getattr(self, "_wider_cache", None) is None:
+            try:
+                from tools.presenter_suggest import _available_topics, ACTIVITIES_INDEX
+                self._wider_cache = _available_topics(ACTIVITIES_INDEX, limit=2000)
+            except Exception:
+                self._wider_cache = []
+        return self._wider_cache
+
+    def _pool(self):
+        """The ranked presenter pool for this event, fetched once and cached."""
+        if getattr(self, "_pool_cache", None) is None:
+            try:
+                from tools.presenter_suggest import get_suggested_presenters
+                res = get_suggested_presenters(event_id=str(self.event_id), limit=100)
+                self._pool_cache = res.get("suggested_presenters") or []
+            except Exception:
+                self._pool_cache = []
+        return self._pool_cache
 
     def known_people(self):
         """Every presenter name the source data offered, lowered."""
@@ -143,18 +184,56 @@ class Run:
         for att in self.attendees:
             if att.get("name"):
                 names.add(att["name"].strip().lower())
+        for person in self._pool():
+            if person.get("presenter_name"):
+                names.add(person["presenter_name"].strip().lower())
+        # Per-session topic matching queries the index topic by topic, which
+        # reaches people the event-scoped pool never contained. Those names come
+        # from the ranking engine reading real activity records, not from the
+        # model, so they are evidence rather than the claim under test.
+        for entry in (self.result.get("topic_presenter_matching") or {}).get("rationale", []):
+            if entry.get("chosen"):
+                names.add(entry["chosen"].strip().lower())
+            for runner in entry.get("runners_up") or []:
+                if runner.get("presenter_name"):
+                    names.add(runner["presenter_name"].strip().lower())
         return names
+
+    def unverified_sessions(self):
+        """Sessions whose presenter the ranking never got to check.
+
+        provenance records these as "model choice, no topic to check against":
+        the session carried no topic, so nothing looked the person up and the
+        name is whatever the model wrote.
+        """
+        out = []
+        for entry in (self.result.get("provenance") or {}).get("sessions", []):
+            if "model choice" in (entry.get("presenter_source") or ""):
+                out.append(entry)
+        return out
+
+
+# The presenter field is free text and the model varies the separator between
+# name and title run to run: a comma, an em or en dash, a spaced hyphen, or a
+# parenthesis. Splitting on only one of them leaves the title attached to the
+# name, and every comparison against a list of names then fails — which reads
+# exactly like a hallucination and is not one.
+_TITLE_SEPARATORS = ("\u2014", "\u2013", " - ", ",", "(", "|")
 
 
 def presenter_names(session):
-    """The people a session names, split out of the 'Name, Title' convention."""
+    """The people a session names, with any job title stripped off."""
     raw = (session.get("presenter") or "").strip()
     if not raw:
         return []
     out = []
-    for part in raw.split(" and "):
-        name = part.split(",")[0].split("(")[0].strip()
-        if name and name.lower() not in {"tbd", "n/a", "team", "oracle team"}:
+    for part in raw.replace(" & ", " and ").split(" and "):
+        name = part
+        for sep in _TITLE_SEPARATORS:
+            name = name.split(sep)[0]
+        name = name.strip(" .-\u2014\u2013")
+        if name and name.lower() not in {"tbd", "n/a", "team", "oracle team",
+                                         "oracle", "presenter", "host"}:
             out.append(name)
     return out
 
@@ -294,15 +373,34 @@ def _attendee_count(r):
         f"agenda {r.result.get('attendee_count')} vs {len(r.attendees)} on record"
 
 
-@case("accuracy", "every topic tag is one the tenant actually has")
+@case("accuracy", "every topic tag is copied from the list the model was shown")
 def _topics_real(r):
+    """The vocabulary is the list the prompt carried, not everything indexed.
+
+    The generator shows the model a capped slice of the tenant's topics, so
+    judging against the whole index would pass tags the model could not have
+    seen. Off-list tags are then split: a tag that exists nowhere is invented,
+    while one that matches a real topic apart from its wording is a copy
+    failure — a weaker fault, and worth naming separately so the count is not
+    misread.
+    """
     if not r.topics:
-        return None, "no topic vocabulary for this tenant"
-    allowed = {t.strip().lower() for t in r.topics}
-    invented = sorted({(s.get("topic") or "").strip() for s in r.sessions
-                       if s.get("topic") and s["topic"].strip().lower() not in allowed})
-    return not invented, f"invented: {invented[:4]}" if invented else \
-        f"{len({s.get('topic') for s in r.sessions if s.get('topic')})} tags, all real"
+        return None, "no topic vocabulary reached the prompt"
+    shown = {t.strip().lower() for t in r.topics}
+    used = sorted({(s.get("topic") or "").strip() for s in r.sessions if s.get("topic")})
+    off = [t for t in used if t.lower() not in shown]
+    if not off:
+        return True, f"{len(used)} distinct tags, all copied from the {len(shown)} shown"
+
+    wider = {t.strip().lower() for t in r.wider_topics()}
+    variants = [t for t in off if any(t.lower() in w or w in t.lower() for w in wider)]
+    invented = [t for t in off if t not in variants]
+    detail = []
+    if invented:
+        detail.append(f"invented: {invented[:3]}")
+    if variants:
+        detail.append(f"reworded from a real topic: {variants[:3]}")
+    return False, "; ".join(detail)
 
 
 @case("accuracy", "every presenter is a real person from the source data")
@@ -317,6 +415,31 @@ def _presenters_real(r):
                 invented.append(f"{name} ({s.get('title')})")
     return not invented, f"not in source data: {invented[:4]}" if invented else \
         f"{len(known)} known people, none invented"
+
+
+@case("accuracy", "no presenter was invented for a session nothing verified")
+def _unverified_presenters(r):
+    """The narrow version of the hallucination check.
+
+    Sessions the ranking did check are safe by construction. The exposure is
+    the sessions it could not — no topic, so no lookup — where the name stands
+    on the model's word alone. Those names still have to belong to somebody the
+    source data knows.
+    """
+    unverified = r.unverified_sessions()
+    if not unverified:
+        return None, "every session went through topic ranking"
+    known = r.known_people()
+    if not known:
+        return None, "no source data to check against"
+    invented = []
+    for entry in unverified:
+        for name in presenter_names({"presenter": entry.get("presenter") or ""}):
+            if name.lower() not in known:
+                invented.append(f"{name} ({entry.get('session')})")
+    return not invented, (f"{len(invented)} of {len(unverified)} unverified sessions "
+                          f"name someone unknown: {invented[:3]}" if invented else
+                          f"{len(unverified)} unverified sessions, all names known")
 
 
 @case("accuracy", "the header presenter list is drawn from the same pool")
@@ -352,11 +475,14 @@ def _assumptions(r):
 
 @case("availability", "no day was scheduled without an availability check")
 def _all_days_checked(r):
-    avail = r.result.get("availability") or {}
+    # The scheduler folds this into result["scheduling"], not the top level.
+    avail = ((r.result.get("scheduling") or {}).get("availability_checked")
+             or r.result.get("availability") or {})
     unchecked = avail.get("days_without_availability_check")
     if unchecked is None:
         return None, "no availability summary on the result"
-    return not unchecked, f"unchecked days: {unchecked or 'none'}"
+    return not unchecked, (f"unchecked days: {unchecked}" if unchecked else
+                           f"{avail.get('presenters_checked', 0)} presenters checked, all days covered")
 
 
 @case("availability", "every assigned presenter is genuinely free at their slot")
@@ -434,6 +560,9 @@ def do_run(event_id):
     try:
         context = _fetch_meeting_context(event_id=str(event_id))
         try:
+            # Mirror the generator's own call exactly: the cap decides which
+            # topics reach the prompt, and judging against a different slice
+            # would flag tags the model was never offered.
             from tools.presenter_suggest import _available_topics, ACTIVITIES_INDEX
             context["available_topics"] = _available_topics(ACTIVITIES_INDEX, limit=150)
         except Exception:
