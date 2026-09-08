@@ -1,0 +1,16 @@
+{
+  "_readme": "Descriptions for static/repo_map.html. The map falls back to each module's own docstring, so an entry is only needed where that is missing or where the docstring says less than the map should. Keys are dotted module names; unknown keys are ignored.",
+
+  "api": {
+    "desc": "FastAPI app. Holds every HTTP endpoint, including /process_query and the SSE stream at /process_query_stream."
+  },
+  "lambda_handler": {
+    "desc": "AWS Lambda entry point — wraps the FastAPI app with Mangum for the serverless deploy."
+  },
+  "run_q": {
+    "desc": "Ad-hoc CLI for sending a raw OpenSearch DSL query through opensearch_client."
+  },
+  "scripts.sqlite_qa": {
+    "desc": "Question-and-answer harness over the local SQLite mirror of the Oracle views."
+  }
+}

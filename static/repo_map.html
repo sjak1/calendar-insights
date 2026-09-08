@@ -1,434 +1,1591 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Repo Map — calender-insights</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo Map — calendar-insights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0d1117; color: #e6edf3; font-family: 'SF Mono', 'Fira Code', monospace; overflow: hidden; }
-
-  #canvas { width: 100vw; height: 100vh; display: block; }
-
-  #tooltip {
-    position: fixed;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 12px;
-    pointer-events: none;
-    display: none;
-    z-index: 100;
-    max-width: 280px;
-    line-height: 1.6;
-  }
-  #tooltip .name { font-weight: bold; color: #58a6ff; margin-bottom: 4px; }
-  #tooltip .desc { color: #8b949e; }
-  #tooltip .role { color: #3fb950; font-size: 11px; margin-top: 4px; }
-
-  #legend {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 12px 16px;
-    font-size: 11px;
-    z-index: 100;
-  }
-  #legend h4 { color: #8b949e; margin-bottom: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
-  .leg { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-  #title {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    font-size: 13px;
-    color: #8b949e;
-    z-index: 100;
-  }
-  #title span { color: #58a6ff; font-size: 16px; font-weight: bold; }
-
-  #hint {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    font-size: 11px;
-    color: #484f58;
-    z-index: 100;
-    text-align: right;
-    line-height: 1.8;
-  }
+:root{
+  --ground:#0B0E14; --panel:#141922; --panel-2:#1B2230; --rule:#232B39;
+  --ink:#C6CEDA; --ink-dim:#7C8798; --ink-bright:#EDF1F6;
+  --entry:#5AC8FA; --core:#FFB454; --llm:#BC8CFF; --tools:#4ED8A0;
+  --data:#F778BA; --support:#8B98AC; --dev:#5A6474;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 20px;
+       padding:20px 24px 16px;border-bottom:1px solid var(--rule)}
+h1{margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em;color:var(--ink-bright)}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);display:flex;gap:16px;flex-wrap:wrap}
+.meta b{color:var(--ink);font-weight:500}
+.warn{color:var(--core)}
+nav{display:flex;gap:2px;padding:12px 24px 0;border-bottom:1px solid var(--rule)}
+nav button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+  color:var(--ink-dim);font-family:var(--sans);font-size:13px;font-weight:500;
+  padding:8px 14px;cursor:pointer}
+nav button:hover{color:var(--ink)}
+nav button[aria-selected="true"]{color:var(--ink-bright);border-bottom-color:var(--entry)}
+nav button:focus-visible{outline:2px solid var(--entry);outline-offset:2px;border-radius:3px}
+.bar{display:flex;gap:10px;align-items:center;padding:12px 24px;flex-wrap:wrap}
+input[type=search]{background:var(--panel);border:1px solid var(--rule);border-radius:6px;
+  color:var(--ink);font-family:var(--mono);font-size:12px;padding:6px 10px;min-width:240px}
+input[type=search]:focus{outline:none;border-color:var(--entry)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+main{padding:0 24px 40px}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+@media(max-width:1000px){.wrap{grid-template-columns:minmax(0,1fr)}}
+.canvas{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+svg{display:block}
+.lane text{font-family:var(--mono);font-size:10px;fill:var(--ink-dim);
+  letter-spacing:.09em;text-transform:uppercase}
+.lane line{stroke:var(--rule)}
+.edge{fill:none;stroke:var(--rule);stroke-width:1}
+.edge.back{stroke-dasharray:3 3}
+.edge.on{stroke:var(--entry);stroke-width:1.6}
+.edge.out{stroke:var(--tools)}
+.node rect{stroke-width:1;rx:5}
+.node text{font-family:var(--mono);font-size:11px;dominant-baseline:middle}
+.node .n{fill:var(--ink-bright)}
+.node .l{fill:var(--ink-dim);font-size:9.5px}
+.node{cursor:pointer}
+.dim{opacity:.16}
+aside{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px;
+  position:sticky;top:16px}
+aside h2{margin:0 0 2px;font-size:14px;font-family:var(--mono);color:var(--ink-bright);word-break:break-all}
+aside .path{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-bottom:12px;word-break:break-all}
+aside p{margin:0 0 14px;font-size:12.5px;color:var(--ink)}
+aside .none{color:var(--ink-dim);font-style:italic}
+.stat{display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);
+  padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--rule)}
+.stat b{color:var(--ink);font-weight:500}
+h3{margin:14px 0 6px;font-family:var(--mono);font-size:10px;letter-spacing:.09em;
+   text-transform:uppercase;color:var(--ink-dim);font-weight:500}
+ul{margin:0;padding:0;list-style:none}
+li{font-family:var(--mono);font-size:11.5px;padding:2px 0;color:var(--ink)}
+li button{appearance:none;background:none;border:0;padding:0;color:inherit;font:inherit;
+  cursor:pointer;text-align:left}
+li button:hover{color:var(--entry);text-decoration:underline}
+table{width:100%;border-collapse:collapse}
+.tools td{border-top:1px solid var(--rule);padding:11px 12px;vertical-align:top}
+.tools tr:first-child td{border-top:0}
+.tools .nm{font-family:var(--mono);font-size:12px;color:var(--tools);white-space:nowrap;font-weight:500}
+.tools .ds{font-size:12.5px;color:var(--ink);max-width:640px}
+.tools .im{font-family:var(--mono);font-size:11px;color:var(--ink-dim);white-space:nowrap}
+.tools .im b{color:var(--core);font-weight:500}
+.tools .pm{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:5px}
+.tools .pm span{color:var(--ink)}
+.panelbox{border:1px solid var(--rule);border-radius:10px;background:var(--panel);overflow:hidden}
+.hidden{display:none}
+.note{font-size:12px;color:var(--ink-dim);padding:10px 24px 0}
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
-<div id="tooltip"><div class="name"></div><div class="desc"></div><div class="role"></div></div>
-<div id="title"><span>calender-insights</span><br>repo architecture map</div>
-<div id="hint">hover nodes · drag to explore<br>scroll to zoom</div>
+<header>
+  <h1>calendar-insights · repo map</h1>
+  <div class="meta">
+    <span><b id="m-mod"></b> modules</span>
+    <span><b id="m-dep"></b> dependencies</span>
+    <span><b id="m-tool"></b> tools</span>
+    <span><b id="m-loc"></b> lines</span>
+    <span>@<b id="m-sha"></b></span>
+    <span id="m-gen"></span>
+  </div>
+</header>
 
-<div id="legend">
-  <h4>Layers</h4>
-  <div class="leg"><div class="dot" style="background:#58a6ff"></div> Entry / API</div>
-  <div class="leg"><div class="dot" style="background:#3fb950"></div> Core Logic</div>
-  <div class="leg"><div class="dot" style="background:#d29922"></div> Tools</div>
-  <div class="leg"><div class="dot" style="background:#f78166"></div> Data / Storage</div>
-  <div class="leg"><div class="dot" style="background:#bc8cff"></div> LLM / AI</div>
-  <div class="leg"><div class="dot" style="background:#39d353"></div> UI / Static</div>
-  <div class="leg"><div class="dot" style="background:#8b949e"></div> Config / Utils</div>
+<nav role="tablist">
+  <button role="tab" id="tab-modules" aria-selected="true" aria-controls="view-modules">Modules</button>
+  <button role="tab" id="tab-tools" aria-selected="false" aria-controls="view-tools">Tool catalog</button>
+</nav>
+
+<div class="bar">
+  <input type="search" id="q" placeholder="filter by name…" autocomplete="off">
+  <div class="legend" id="legend"></div>
 </div>
 
+<p class="note">Generated from the source by <code>scripts/build_repo_map.py</code> — do not edit by hand. Solid edges import forward; dashed edges point back up the stack.</p>
+
+<main>
+  <section id="view-modules" role="tabpanel" aria-labelledby="tab-modules">
+    <div class="wrap">
+      <div class="canvas"><svg id="graph"></svg></div>
+      <aside id="detail"></aside>
+    </div>
+  </section>
+
+  <section id="view-tools" role="tabpanel" aria-labelledby="tab-tools" class="hidden">
+    <div class="panelbox"><table class="tools"><tbody id="toolrows"></tbody></table></div>
+  </section>
+</main>
+
+<script id="data" type="application/json">{
+ "nodes": [
+  {
+   "id": "api",
+   "file": "api.py",
+   "layer": "entry",
+   "lines": 279,
+   "defs": 5,
+   "desc": "FastAPI app. Holds every HTTP endpoint, including /process_query and the SSE stream at /process_query_stream.",
+   "from_note": true
+  },
+  {
+   "id": "bedrock_llm",
+   "file": "bedrock_llm.py",
+   "layer": "llm",
+   "lines": 205,
+   "defs": 4,
+   "desc": "Bedrock LLM client for Converse API with tool calling support. Replaces OpenAI for the main query processor.",
+   "from_note": false
+  },
+  {
+   "id": "bench_bedrock",
+   "file": "bench_bedrock.py",
+   "layer": "dev",
+   "lines": 148,
+   "defs": 3,
+   "desc": "Standalone Bedrock latency bench. No FastAPI, no app code \u2014 just boto3.",
+   "from_note": false
+  },
+  {
+   "id": "database",
+   "file": "database.py",
+   "layer": "data",
+   "lines": 16,
+   "defs": 0,
+   "desc": "Shared database configuration and connection management.",
+   "from_note": false
+  },
+  {
+   "id": "lambda_handler",
+   "file": "lambda_handler.py",
+   "layer": "entry",
+   "lines": 19,
+   "defs": 0,
+   "desc": "AWS Lambda entry point \u2014 wraps the FastAPI app with Mangum for the serverless deploy.",
+   "from_note": true
+  },
+  {
+   "id": "logging_config",
+   "file": "logging_config.py",
+   "layer": "support",
+   "lines": 85,
+   "defs": 2,
+   "desc": "Logging config for both local and Lambda environments.",
+   "from_note": false
+  },
+  {
+   "id": "opensearch_client",
+   "file": "opensearch_client.py",
+   "layer": "data",
+   "lines": 353,
+   "defs": 14,
+   "desc": "Thin OpenSearch client \u2014 MCP-style wrappers. Env: OPENSEARCH_URL, OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD, OPENSEARCH_VERIFY_CERTS, OPENSEARCH_TIMEOUT_SECONDS, OPENSEARCH_DEFAULT_INDICES.",
+   "from_note": false
+  },
+  {
+   "id": "query_processor",
+   "file": "query_processor.py",
+   "layer": "core",
+   "lines": 676,
+   "defs": 6,
+   "desc": "Main query processing module for AI assistant. Uses AWS Bedrock Converse API (with optional OpenAI fallback).",
+   "from_note": false
+  },
+  {
+   "id": "run_q",
+   "file": "run_q.py",
+   "layer": "dev",
+   "lines": 52,
+   "defs": 1,
+   "desc": "Ad-hoc CLI for sending a raw OpenSearch DSL query through opensearch_client.",
+   "from_note": true
+  },
+  {
+   "id": "schema_reference",
+   "file": "schema_reference.py",
+   "layer": "support",
+   "lines": 267,
+   "defs": 0,
+   "desc": "Compact OpenSearch schema reference for the LLM system prompt.",
+   "from_note": false
+  },
+  {
+   "id": "scripts",
+   "file": "scripts/__init__.py",
+   "layer": "support",
+   "lines": 2,
+   "defs": 0,
+   "desc": "",
+   "from_note": false
+  },
+  {
+   "id": "scripts.build_api_catalog",
+   "file": "scripts/build_api_catalog.py",
+   "layer": "dev",
+   "lines": 157,
+   "defs": 7,
+   "desc": "Build a compact, agent-friendly catalog of BriefingIQ read-only (GET) endpoints from the public OpenAPI specs served by the Swagger UI at https://api.briefingiq.com.",
+   "from_note": false
+  },
+  {
+   "id": "scripts.build_repo_map",
+   "file": "scripts/build_repo_map.py",
+   "layer": "dev",
+   "lines": 711,
+   "defs": 13,
+   "desc": "Regenerate static/repo_map.html from the code itself.",
+   "from_note": false
+  },
+  {
+   "id": "scripts.check_presenter_ranking",
+   "file": "scripts/check_presenter_ranking.py",
+   "layer": "dev",
+   "lines": 428,
+   "defs": 32,
+   "desc": "Assertions about what suggest_presenters should return, and a runner for them.",
+   "from_note": false
+  },
+  {
+   "id": "scripts.seed_opp_revenue",
+   "file": "scripts/seed_opp_revenue.py",
+   "layer": "dev",
+   "lines": 145,
+   "defs": 3,
+   "desc": "Put opportunity-revenue figures on existing events so ranking work has data.",
+   "from_note": false
+  },
+  {
+   "id": "scripts.seed_presenters",
+   "file": "scripts/seed_presenters.py",
+   "layer": "dev",
+   "lines": 289,
+   "defs": 5,
+   "desc": "Seed a small, deliberately-shaped presenter/topic set into the activities index.",
+   "from_note": false
+  },
+  {
+   "id": "scripts.sqlite_qa",
+   "file": "scripts/sqlite_qa.py",
+   "layer": "dev",
+   "lines": 270,
+   "defs": 5,
+   "desc": "Question-and-answer harness over the local SQLite mirror of the Oracle views.",
+   "from_note": true
+  },
+  {
+   "id": "session_manager",
+   "file": "session_manager.py",
+   "layer": "data",
+   "lines": 44,
+   "defs": 3,
+   "desc": "Session management for chat conversations.",
+   "from_note": false
+  },
+  {
+   "id": "tools",
+   "file": "tools/__init__.py",
+   "layer": "support",
+   "lines": 37,
+   "defs": 0,
+   "desc": "Tools module - exports all tool functions and definitions.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_config",
+   "file": "tools/agenda_config.py",
+   "layer": "tools",
+   "lines": 111,
+   "defs": 1,
+   "desc": "Tunables for the agenda generator, and the one piece of arithmetic that reads them.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_documents",
+   "file": "tools/agenda_documents.py",
+   "layer": "tools",
+   "lines": 371,
+   "defs": 9,
+   "desc": "Getting readable text out of an executive briefing document.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_generator",
+   "file": "tools/agenda_generator.py",
+   "layer": "tools",
+   "lines": 2402,
+   "defs": 38,
+   "desc": "EBC AI Agenda Generator Tool",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_markdown",
+   "file": "tools/agenda_markdown.py",
+   "layer": "tools",
+   "lines": 115,
+   "defs": 1,
+   "desc": "Render a GeneratedAgenda as markdown for the chat reply.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_models",
+   "file": "tools/agenda_models.py",
+   "layer": "tools",
+   "lines": 222,
+   "defs": 7,
+   "desc": "The typed shape of a generated agenda.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_prompts",
+   "file": "tools/agenda_prompts.py",
+   "layer": "tools",
+   "lines": 246,
+   "defs": 4,
+   "desc": "Assembling the prompt the agenda model is given.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_provenance",
+   "file": "tools/agenda_provenance.py",
+   "layer": "tools",
+   "lines": 274,
+   "defs": 9,
+   "desc": "Provenance for a generated agenda \u2014 the receipts behind every presenter pick.",
+   "from_note": false
+  },
+  {
+   "id": "tools.agenda_scheduler",
+   "file": "tools/agenda_scheduler.py",
+   "layer": "tools",
+   "lines": 463,
+   "defs": 14,
+   "desc": "Deterministic agenda layout \u2014 assigns clock times and presenters to sessions.",
+   "from_note": false
+  },
+  {
+   "id": "tools.api_catalog",
+   "file": "tools/api_catalog.py",
+   "layer": "tools",
+   "lines": 229,
+   "defs": 6,
+   "desc": "Generic, catalog-driven access to BriefingIQ read-only APIs.",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefing_builder",
+   "file": "tools/briefing_builder.py",
+   "layer": "tools",
+   "lines": 846,
+   "defs": 20,
+   "desc": "Briefing builder \u2014 the write half of the agentic briefing flow.",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefing_editor",
+   "file": "tools/briefing_editor.py",
+   "layer": "tools",
+   "lines": 334,
+   "defs": 10,
+   "desc": "Briefing editor \u2014 surgical, confirmation-gated edits to EXISTING briefings, whether created by the agent (push_briefing) or by hand in the app.",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefing_field_options",
+   "file": "tools/briefing_field_options.py",
+   "layer": "tools",
+   "lines": 76,
+   "defs": 1,
+   "desc": "Allowed values for the controlled-vocabulary fields on a briefing's VISIT_INFO form (Visit Type, Visit Focus, Program, Pillars, Sales Play).",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefingiq_api",
+   "file": "tools/briefingiq_api.py",
+   "layer": "tools",
+   "lines": 46,
+   "defs": 1,
+   "desc": "BriefingIQ API integrations \u2014 admin reports only.",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefingiq_api_client",
+   "file": "tools/briefingiq_api_client.py",
+   "layer": "tools",
+   "lines": 455,
+   "defs": 5,
+   "desc": "BriefingIQ API Client - Fetch events directly from API instead of database. This provides consistent data with the frontend and includes attendee information.",
+   "from_note": false
+  },
+  {
+   "id": "tools.briefingiq_writer",
+   "file": "tools/briefingiq_writer.py",
+   "layer": "tools",
+   "lines": 964,
+   "defs": 17,
+   "desc": "BriefingIQ Write Client \u2014 push AI-generated agenda sessions and manage room scheduling against the BriefingIQ REST API.",
+   "from_note": false
+  },
+  {
+   "id": "tools.chart",
+   "file": "tools/chart.py",
+   "layer": "tools",
+   "lines": 220,
+   "defs": 3,
+   "desc": "Chart formatting utilities for Highcharts.",
+   "from_note": false
+  },
+  {
+   "id": "tools.definitions",
+   "file": "tools/definitions.py",
+   "layer": "core",
+   "lines": 891,
+   "defs": 0,
+   "desc": "Tool definitions for OpenAI function calling.",
+   "from_note": false
+  },
+  {
+   "id": "tools.drafts",
+   "file": "tools/drafts.py",
+   "layer": "tools",
+   "lines": 427,
+   "defs": 13,
+   "desc": "Draft generation tools \u2014 confirmation emails and catering/setup sheets.",
+   "from_note": false
+  },
+  {
+   "id": "tools.event_resolver",
+   "file": "tools/event_resolver.py",
+   "layer": "tools",
+   "lines": 270,
+   "defs": 4,
+   "desc": "Shared event-id resolution + event data fetching.",
+   "from_note": false
+  },
+  {
+   "id": "tools.external_apis",
+   "file": "tools/external_apis.py",
+   "layer": "tools",
+   "lines": 20,
+   "defs": 1,
+   "desc": "External API integrations.",
+   "from_note": false
+  },
+  {
+   "id": "tools.extract_ebd",
+   "file": "tools/extract_ebd.py",
+   "layer": "tools",
+   "lines": 162,
+   "defs": 3,
+   "desc": "EBD (Executive Briefing Document) PPTX Extractor",
+   "from_note": false
+  },
+  {
+   "id": "tools.handlers",
+   "file": "tools/handlers.py",
+   "layer": "core",
+   "lines": 938,
+   "defs": 10,
+   "desc": "Tool execution handlers for function calls.",
+   "from_note": false
+  },
+  {
+   "id": "tools.pdf",
+   "file": "tools/pdf.py",
+   "layer": "tools",
+   "lines": 119,
+   "defs": 4,
+   "desc": "PDF generation tool. Creates a PDF from text content for download. Helvetica supports latin-1 only; we sanitize Unicode to avoid FPDF errors.",
+   "from_note": false
+  },
+  {
+   "id": "tools.presenter_suggest",
+   "file": "tools/presenter_suggest.py",
+   "layer": "tools",
+   "lines": 1277,
+   "defs": 17,
+   "desc": "Presenter suggestion engine \u2014 queries OpenSearch activities index to find presenters who have presented on matching topics or at matching events.",
+   "from_note": false
+  },
+  {
+   "id": "tools.report",
+   "file": "tools/report.py",
+   "layer": "tools",
+   "lines": 431,
+   "defs": 13,
+   "desc": "Report formatting for Wijmo-style grid (reportUiConfig + reportData). Builds table definition and row data from OpenSearch hits for frontend rendering.",
+   "from_note": false
+  },
+  {
+   "id": "tools.utils",
+   "file": "tools/utils.py",
+   "layer": "tools",
+   "lines": 4,
+   "defs": 0,
+   "desc": "Utility tool functions.",
+   "from_note": false
+  },
+  {
+   "id": "tools.web_research",
+   "file": "tools/web_research.py",
+   "layer": "tools",
+   "lines": 213,
+   "defs": 9,
+   "desc": "Web research for briefing preparation.",
+   "from_note": false
+  },
+  {
+   "id": "utils",
+   "file": "utils/__init__.py",
+   "layer": "support",
+   "lines": 10,
+   "defs": 0,
+   "desc": "Utils module - exports utility functions.",
+   "from_note": false
+  },
+  {
+   "id": "utils.json_utils",
+   "file": "utils/json_utils.py",
+   "layer": "support",
+   "lines": 29,
+   "defs": 1,
+   "desc": "JSON utility functions.",
+   "from_note": false
+  },
+  {
+   "id": "utils.markdown",
+   "file": "utils/markdown.py",
+   "layer": "support",
+   "lines": 67,
+   "defs": 1,
+   "desc": "Markdown formatting utilities.",
+   "from_note": false
+  }
+ ],
+ "edges": [
+  {
+   "from": "api",
+   "to": "logging_config"
+  },
+  {
+   "from": "api",
+   "to": "query_processor"
+  },
+  {
+   "from": "lambda_handler",
+   "to": "api"
+  },
+  {
+   "from": "lambda_handler",
+   "to": "logging_config"
+  },
+  {
+   "from": "opensearch_client",
+   "to": "tools.presenter_suggest"
+  },
+  {
+   "from": "query_processor",
+   "to": "bedrock_llm"
+  },
+  {
+   "from": "query_processor",
+   "to": "database"
+  },
+  {
+   "from": "query_processor",
+   "to": "logging_config"
+  },
+  {
+   "from": "query_processor",
+   "to": "schema_reference"
+  },
+  {
+   "from": "query_processor",
+   "to": "session_manager"
+  },
+  {
+   "from": "query_processor",
+   "to": "tools"
+  },
+  {
+   "from": "query_processor",
+   "to": "tools.handlers"
+  },
+  {
+   "from": "query_processor",
+   "to": "utils.json_utils"
+  },
+  {
+   "from": "run_q",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "scripts.check_presenter_ranking",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "scripts.check_presenter_ranking",
+   "to": "tools.presenter_suggest"
+  },
+  {
+   "from": "scripts.sqlite_qa",
+   "to": "database"
+  },
+  {
+   "from": "scripts.sqlite_qa",
+   "to": "logging_config"
+  },
+  {
+   "from": "session_manager",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools",
+   "to": "tools.agenda_generator"
+  },
+  {
+   "from": "tools",
+   "to": "tools.briefingiq_api"
+  },
+  {
+   "from": "tools",
+   "to": "tools.briefingiq_writer"
+  },
+  {
+   "from": "tools",
+   "to": "tools.chart"
+  },
+  {
+   "from": "tools",
+   "to": "tools.definitions"
+  },
+  {
+   "from": "tools",
+   "to": "tools.external_apis"
+  },
+  {
+   "from": "tools",
+   "to": "tools.pdf"
+  },
+  {
+   "from": "tools",
+   "to": "tools.report"
+  },
+  {
+   "from": "tools.agenda_documents",
+   "to": "database"
+  },
+  {
+   "from": "tools.agenda_documents",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.agenda_documents",
+   "to": "tools.agenda_config"
+  },
+  {
+   "from": "tools.agenda_documents",
+   "to": "tools.event_resolver"
+  },
+  {
+   "from": "tools.agenda_documents",
+   "to": "tools.extract_ebd"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "bedrock_llm"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "database"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_config"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_documents"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_markdown"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_models"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_prompts"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_provenance"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.agenda_scheduler"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.event_resolver"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.handlers"
+  },
+  {
+   "from": "tools.agenda_generator",
+   "to": "tools.presenter_suggest"
+  },
+  {
+   "from": "tools.agenda_markdown",
+   "to": "tools.agenda_models"
+  },
+  {
+   "from": "tools.agenda_prompts",
+   "to": "tools.agenda_config"
+  },
+  {
+   "from": "tools.api_catalog",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.briefing_builder",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.briefing_builder",
+   "to": "tools.briefingiq_writer"
+  },
+  {
+   "from": "tools.briefing_editor",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.briefing_editor",
+   "to": "tools.briefing_builder"
+  },
+  {
+   "from": "tools.briefing_editor",
+   "to": "tools.briefingiq_writer"
+  },
+  {
+   "from": "tools.briefing_field_options",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.briefing_field_options",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.briefingiq_api_client",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.briefingiq_writer",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.drafts",
+   "to": "bedrock_llm"
+  },
+  {
+   "from": "tools.drafts",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.drafts",
+   "to": "tools"
+  },
+  {
+   "from": "tools.drafts",
+   "to": "tools.event_resolver"
+  },
+  {
+   "from": "tools.drafts",
+   "to": "tools.handlers"
+  },
+  {
+   "from": "tools.event_resolver",
+   "to": "database"
+  },
+  {
+   "from": "tools.event_resolver",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.event_resolver",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "scripts.sqlite_qa"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.api_catalog"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.briefing_builder"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.briefing_editor"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.briefing_field_options"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.briefingiq_writer"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.drafts"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "tools.web_research"
+  },
+  {
+   "from": "tools.handlers",
+   "to": "utils.json_utils"
+  },
+  {
+   "from": "tools.presenter_suggest",
+   "to": "logging_config"
+  },
+  {
+   "from": "tools.presenter_suggest",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.presenter_suggest",
+   "to": "tools.briefingiq_writer"
+  },
+  {
+   "from": "tools.report",
+   "to": "opensearch_client"
+  },
+  {
+   "from": "tools.web_research",
+   "to": "logging_config"
+  },
+  {
+   "from": "utils",
+   "to": "utils.json_utils"
+  },
+  {
+   "from": "utils",
+   "to": "utils.markdown"
+  }
+ ],
+ "tools": [
+  {
+   "name": "list_rooms",
+   "desc": "List bookable rooms. If an event_id is available (from context header or arg), returns event-level rooms (e.g. Horizon Chamber, Panorama Suite) \u2014 these are the rooms on that event's calendar. If no event context, returns tenant-wide rooms (Outlook 1-6, Executive Lounge). Call this FIRST when the user asks about rooms, availability, or wants to book. Returns: [{resource_id, name, source, dates?}].",
+   "params": [
+    "event_id"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "list_rooms",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "list_event_activities",
+   "desc": "List every scheduled activity on an event \u2014 sessions, catering, topics \u2014 across all rooms. Use when the user asks 'what activities do I have today?', 'what's on the agenda?', or similar. Pass a date (YYYY-MM-DD) to narrow to one day; omit for the whole event. event_id defaults to the one in the request header context if not passed. Returns: [{activity_id, title, activity_type, start_iso, end_iso, date, room_name, room_id, status}].",
+   "params": [
+    "date",
+    "event_id"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "list_event_activities",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "get_resource_schedule",
+   "desc": "Fetch existing calendar entries (bookings/blocks) for a specific room. Use to show the user what's already booked on a room, or to decide when to schedule.",
+   "params": [
+    "resource_id"
+   ],
+   "required": [
+    "resource_id"
+   ],
+   "impl": [
+    {
+     "fn": "get_resource_schedule",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "find_vacant_slots",
+   "desc": "Find free time windows of a given minimum duration on a specific date for a room. Use this for natural-language booking requests like 'find a 1-hour slot tomorrow' or 'when is Outlook3 free on Friday'. Respects working hours (default 9am\u20136pm in the request timezone).",
+   "params": [
+    "date",
+    "day_end_hour",
+    "day_start_hour",
+    "duration_minutes",
+    "resource_id"
+   ],
+   "required": [
+    "resource_id",
+    "date",
+    "duration_minutes"
+   ],
+   "impl": [
+    {
+     "fn": "find_vacant_slots",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "block_calendar",
+   "desc": "Reserve a time window on a room by creating a calendar entry (default type BLOCKED). Runs a conflict check first \u2014 if the window overlaps any existing entry, returns status='conflict' with the conflicting entries instead of writing. Call list_rooms (and optionally find_vacant_slots) before this.",
+   "params": [
+    "calendar_type",
+    "comments",
+    "end_iso",
+    "resource_id",
+    "start_iso"
+   ],
+   "required": [
+    "resource_id",
+    "start_iso",
+    "end_iso"
+   ],
+   "impl": [
+    {
+     "fn": "block_calendar",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "format_chart",
+   "desc": "Format data as a Highcharts configuration for visualization. Call AFTER search_opensearch returns aggs or _source data. Chart types: bar/column=categories (stacking for stacked), line/spline=trends, pie=parts of whole, area/areaspline=cumulative, heatmap=events by day\u00d7hour (use heatmap_data, x_axis_data, y_axis_data), xrange=event timeline/schedule (use xrange_data with [{x, x2, name}] Unix ms). Frontend renders the chart.",
+   "params": [
+    "chart_type",
+    "heatmap_data",
+    "series_data",
+    "stacking",
+    "subtitle",
+    "title",
+    "x_axis_data",
+    "xrange_categories",
+    "xrange_data",
+    "y_axis_data",
+    "y_axis_title"
+   ],
+   "required": [
+    "chart_type",
+    "title"
+   ],
+   "impl": [
+    {
+     "fn": "format_chart",
+     "module": "tools.chart"
+    }
+   ]
+  },
+  {
+   "name": "generate_agenda",
+   "desc": "Generate an EBC agenda. Use ONLY when user explicitly asks to generate/create an agenda. If event_id in context, use it. If only company name (e.g. 'agenda for Jaguar'), use company_name. Do not invent event_id.",
+   "params": [
+    "company_name",
+    "event_id"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "generate_agenda",
+     "module": "tools.agenda_generator"
+    },
+    {
+     "fn": "json_dumps_safe",
+     "module": "utils.json_utils"
+    }
+   ]
+  },
+  {
+   "name": "suggest_presenters",
+   "desc": "Suggest the best presenters for a topic, event, industry, or customer. Use when the user asks who should present, who is the best presenter for X, or to recommend presenters for an agenda/session. Also call it PROACTIVELY when preparing a briefing \u2014 after research_company, for the topics that research surfaced \u2014 so the draft carries presenter suggestions instead of leaving them for later. Returns presenters ranked by matched activities, based on real activity-level topic/presenter matches. Provide at least one scope filter: event_id, topic, industry, or customer_name. Topic matching is lexical, so a topic the tenant has no wording for returns no one. When that happens the response carries available_topics \u2014 the topics that DO exist. Pick the closest genuinely related one and tell the user which you substituted and why, or report that nobody has presented on what they asked for. Never retry with vaguer wording until something returns and then present those people as experts in the original topic \u2014 describe presenters by the topic they actually matched. audience_level is accepted but currently has NO effect on ranking \u2014 the title and audience-seniority data behind it is unusable, so don't tell the user results are matched to their audience's seniority. Set check_start_utc_ms + check_end_utc_ms (epoch ms) to get availability \u2014 each result will include available:true/false and any conflict details. Use time placeholder tokens (TODAY_START etc.) or ISO date strings \u2014 the server converts to epoch_ms. Without a window each result instead carries upcoming_bookings / upcoming_dates / availability_note \u2014 the briefing days that presenter already has booked in the next 30 days. So if the user has no particular date in mind, just call it without a window and report the load; only ask them for a date when they need a specific day checked. Both cover briefing commitments only, not the presenter's actual calendar \u2014 never describe someone as simply 'free'. Results also carry revenue_delta / revenue_note (with revenue_events = how many briefings the figure spans): how the opportunities at that presenter's briefings moved. Volunteer it as a brief aside when it meaningfully differentiates the candidates or the user is deciding between them \u2014 and always when they ask about deals, revenue, pipeline or account impact. Skip it when it adds nothing. Frame it as an observation about the BRIEFINGS, never as the presenter's effectiveness: the figure is shared across everyone who presented there, and large accounts draw senior presenters regardless. State the sample size \u2014 a delta spanning 1-2 briefings is an anecdote, not a track record \u2014 and never rank, recommend, or say 'proven/effective' on the strength of it. Good shape: 'the deal at X's one briefing grew +180k \u2014 single data point, credit shared'. Bad: 'X is more effective, his briefings drive revenue'.",
+   "params": [
+    "audience_level",
+    "check_end_utc_ms",
+    "check_start_utc_ms",
+    "customer_name",
+    "event_id",
+    "industry",
+    "limit",
+    "topic"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "get_suggested_presenters",
+     "module": "opensearch_client"
+    }
+   ]
+  },
+  {
+   "name": "search_opensearch",
+   "desc": "Use for lookups, lists, charts (aggs or _source), attendee questions. NOT for 'how many' \u2014 use count_opensearch. INDEX SELECTION: For event-level questions (attendees, opportunities, status, location, category) use default events index. For activity-level questions (topics, presenters, rooms, catering per session, per-activity scheduling) use index: 'activities'. For charts: call search_opensearch with aggs (terms on status/category/region) or size+_source, then format_chart. Filters/sort: use .keyword. _source: paths WITHOUT .keyword. startTime is epoch ms (events) or startTime.utcMs (activities). IMPORTANT: For keyword fields use field.keyword, for text fields with keyword subfield use field.keyword for exact match. For date range queries on epoch_millis fields, write placeholder TOKENS (TODAY_START, THIS_MONTH_END, etc.) or ISO date strings ('YYYY-MM-DD'). The server substitutes them for real epoch_ms before executing \u2014 see [Time Context] in the system prompt for the full token list. ALWAYS include format: 'epoch_millis'.",
+   "params": [
+    "dsl_query",
+    "index"
+   ],
+   "required": [
+    "dsl_query"
+   ],
+   "impl": [
+    {
+     "fn": "run_raw_dsl",
+     "module": "opensearch_client"
+    }
+   ]
+  },
+  {
+   "name": "count_opensearch",
+   "desc": "Count documents matching a query in OpenSearch. Use when the user asks 'how many', 'count', 'number of', etc. Provide a query body (same as search query) and optional index. For activity-level counts (sessions, topics, presenters), use index: 'activities'.",
+   "params": [
+    "index",
+    "query"
+   ],
+   "required": [
+    "query"
+   ],
+   "impl": [
+    {
+     "fn": "count_opensearch_fn",
+     "module": "opensearch_client"
+    }
+   ]
+  },
+  {
+   "name": "generate_pdf",
+   "desc": "Generate a PDF document from text content for the user to download. Use when the user explicitly asks for PDF, export as PDF, download PDF, or save as PDF. Pass the full formatted text (report summary, agenda, analysis) as content. Title appears at top.",
+   "params": [
+    "content",
+    "title"
+   ],
+   "required": [
+    "content"
+   ],
+   "impl": [
+    {
+     "fn": "generate_pdf",
+     "module": "tools.pdf"
+    }
+   ]
+  },
+  {
+   "name": "generate_report",
+   "desc": "Generate a table report from OpenSearch. Use ONLY for explicit table/report/grid requests or specific columns. For 'list them' / 'show them' use search_opensearch. COLUMNS: default to the FULL relevant set for the entity (typically 8-12), not a minimal one \u2014 users expect complete grids and can hide columns in the UI. Event reports: event_name, customer_name, status, category_name, location_name, event_start_time, region, customer_industry, line_of_business, opportunity_revenue. Attendee reports (expand set): attendee_type, attendee_name, attendee_title, attendee_email, attendee_company, chief_officer_title, is_remote, decision_maker, is_technical. Only narrow the columns when the user explicitly names the fields they want. _source: use paths WITHOUT .keyword (e.g. eventName, eventFormData.VISIT_INFO.customerName) and include every path the columns need. Filters/sort: use .keyword. Frontend renders the table.",
+   "params": [
+    "columns",
+    "dsl_query",
+    "expand",
+    "group_by",
+    "index",
+    "sort_by",
+    "subtitle",
+    "title"
+   ],
+   "required": [
+    "dsl_query",
+    "columns",
+    "title"
+   ],
+   "impl": [
+    {
+     "fn": "generate_report",
+     "module": "tools.report"
+    }
+   ]
+  },
+  {
+   "name": "draft_confirmation_email",
+   "desc": "Draft a professional event confirmation email to send to the customer. Fetches live event details (date, location, agenda, host) and returns a ready-to-send subject + body. Use when the user asks to 'draft a confirmation', 'send a confirmation email', or 'confirm the event with the customer'. event_id defaults to the one in the request header context if not passed.",
+   "params": [
+    "additional_notes",
+    "event_id",
+    "host_email",
+    "host_name"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "_draft_email",
+     "module": "tools.drafts"
+    }
+   ]
+  },
+  {
+   "name": "draft_catering_sheet",
+   "desc": "Draft an internal ops/catering and room-setup sheet for the EBC team. Groups sessions by room and lists catering and AV requirements inferred from activity types. Use when the user asks for a 'catering sheet', 'setup sheet', 'ops sheet', or 'room requirements'. event_id defaults to the one in the request header context if not passed.",
+   "params": [
+    "event_id",
+    "include_av"
+   ],
+   "required": [],
+   "impl": [
+    {
+     "fn": "_draft_catering",
+     "module": "tools.drafts"
+    }
+   ]
+  },
+  {
+   "name": "push_agenda_to_briefingiq",
+   "desc": "Push AI-generated agenda sessions into BriefingIQ as calendar activities. Use ONLY after generate_agenda has produced sessions AND the user explicitly confirms they want to add it to the event. Call list_rooms first to get available rooms. If multiple rooms exist, ask the user which one to use.",
+   "params": [
+    "event_date",
+    "event_id",
+    "presenter_emails",
+    "resource_id",
+    "sessions"
+   ],
+   "required": [
+    "event_id",
+    "event_date",
+    "sessions"
+   ],
+   "impl": [
+    {
+     "fn": "push_agenda_to_app",
+     "module": "tools.briefingiq_writer"
+    }
+   ]
+  },
+  {
+   "name": "list_briefing_field_values",
+   "desc": "Return the allowed values for a controlled briefing field so you can fill it with a value the UI will resolve. Call before setting visit_type, visit_focus, program, pillars, or sales_play on draft_briefing \u2014 passing a value not in this list stores something the form can't resolve. Pick the best fit from the customer's research/industry and confirm with the user. Fields: visit_type, visit_focus, program, pillars, sales_play.",
+   "params": [
+    "field"
+   ],
+   "required": [
+    "field"
+   ],
+   "impl": [
+    {
+     "fn": "list_field_values",
+     "module": "tools.briefing_field_options"
+    }
+   ]
+  },
+  {
+   "name": "research_company",
+   "desc": "Gather public background on a customer ahead of a briefing \u2014 profile, recent news, and strategic priorities \u2014 to inform the objective, agenda topics, and presenter choices. CALL THIS PROACTIVELY, without being asked, BEFORE draft_briefing whenever you are preparing a briefing for a customer you have not already researched in this conversation \u2014 the findings are what make the objective and agenda specific to that customer rather than generic. Also use it when advising on an existing briefing. Do NOT call it as a general web search: if the user asks about a company with no briefing in view, or wants a definition or unrelated lookup, answer from your own knowledge instead. READ-ONLY: writes nothing to BriefingIQ. Present the findings WITH their source links and let the user confirm before any of it informs a briefing record. If the company name is ambiguous (a common word, or several companies share it), ask the user which entity they mean first.",
+   "params": [
+    "company_name",
+    "focus"
+   ],
+   "required": [
+    "company_name"
+   ],
+   "impl": [
+    {
+     "fn": "research_company",
+     "module": "tools.web_research"
+    }
+   ]
+  },
+  {
+   "name": "search_briefingiq_endpoints",
+   "desc": "Search the catalog of 200+ read-only BriefingIQ API endpoints (locations, location hours, presenters, presenter calendars, meetings, meeting history, attendees, topics, resources, vacant time slots, roles, reports, forms, notes, ...). Use this when no dedicated tool covers the user's question but live BriefingIQ data might \u2014 then pass the chosen endpoint id to call_briefingiq_endpoint. Returns: [{id, path, tag, summary, params}].",
+   "params": [
+    "query"
+   ],
+   "required": [
+    "query"
+   ],
+   "impl": [
+    {
+     "fn": "search_endpoints",
+     "module": "tools.api_catalog"
+    }
+   ]
+  },
+  {
+   "name": "call_briefingiq_endpoint",
+   "desc": "Execute a read-only (GET) BriefingIQ API endpoint found via search_briefingiq_endpoints. Fill every {placeholder} in the endpoint path via path_params (event ids default to the current event from context). Auth is forwarded from the user's session, so results respect their permissions. Returns the endpoint's JSON response (large lists are truncated).",
+   "params": [
+    "endpoint_id",
+    "path_params",
+    "query_params"
+   ],
+   "required": [
+    "endpoint_id"
+   ],
+   "impl": [
+    {
+     "fn": "call_endpoint",
+     "module": "tools.api_catalog"
+    }
+   ]
+  },
+  {
+   "name": "draft_briefing",
+   "desc": "Assemble a complete NEW briefing request draft for user review \u2014 NO writes happen. Use after interviewing the user. Unless you have already done so in this conversation, call research_company FIRST and fold what you learn into the objective and agenda, then call suggest_presenters for the topics that research surfaced \u2014 research tells you which topics matter, and those topics are what presenter matching needs. Show the user the research and the suggested presenters alongside the draft. Do not repeat research you have already run this conversation. Required: customer name, primary opportunity id, date, start/end time. Optional: objective, duration in days (1-5), presenters and agenda sessions (pushed after creation), attendees (recorded, not yet auto-pushed). Returns a draft_id + a markdown summary. ALWAYS show the summary (and any assumptions) to the user and wait for their explicit confirmation before calling push_briefing.",
+   "params": [
+    "agenda_sessions",
+    "briefing_date",
+    "company_country",
+    "company_industry",
+    "company_website",
+    "customer_name",
+    "duration_days",
+    "end_time",
+    "external_attendees",
+    "internal_attendees",
+    "objective",
+    "opportunity_id",
+    "pillars",
+    "presenter_emails",
+    "program",
+    "region",
+    "room_name",
+    "sales_play",
+    "start_time",
+    "visit_focus",
+    "visit_type"
+   ],
+   "required": [
+    "customer_name",
+    "opportunity_id",
+    "briefing_date",
+    "start_time",
+    "end_time"
+   ],
+   "impl": [
+    {
+     "fn": "draft_briefing",
+     "module": "tools.briefing_builder"
+    }
+   ]
+  },
+  {
+   "name": "get_briefing",
+   "desc": "Read an EXISTING briefing's current field values, status, and the state actions available from that status. Call this BEFORE any edit so you can show the user current vs proposed values, and to discover valid actions for change_briefing_state. Find the request_id first (e.g. call_briefingiq_endpoint get_events, or the id returned by push_briefing). Returns: {event_number, status, fields, available_actions, editable_fields}.",
+   "params": [
+    "request_id"
+   ],
+   "required": [
+    "request_id"
+   ],
+   "impl": [
+    {
+     "fn": "get_briefing",
+     "module": "tools.briefing_editor"
+    }
+   ]
+  },
+  {
+   "name": "reschedule_briefing",
+   "desc": "Move an EXISTING briefing to a new date/time. Works on any briefing \u2014 AI-created or made by hand in the app. Call get_briefing first, show the user current vs proposed schedule, and call this ONLY after they explicitly confirm. Room changes are NOT applied here.",
+   "params": [
+    "duration_days",
+    "end_time",
+    "new_date",
+    "request_id",
+    "start_time"
+   ],
+   "required": [
+    "request_id",
+    "new_date",
+    "start_time",
+    "end_time"
+   ],
+   "impl": [
+    {
+     "fn": "reschedule_briefing",
+     "module": "tools.briefing_editor"
+    }
+   ]
+  },
+  {
+   "name": "update_briefing_details",
+   "desc": "Update fields on an EXISTING briefing. Read-modify-write: only the keys you pass change, everything else is preserved. Field names come from get_briefing's editable_fields \u2014 typically customerName, primaryOpportunity, secondaryOpportunity, region, tier, briefingManager, accountId, duration. Show the user current -> proposed values and get explicit confirmation before calling.",
+   "params": [
+    "changes",
+    "request_id"
+   ],
+   "required": [
+    "request_id",
+    "changes"
+   ],
+   "impl": [
+    {
+     "fn": "update_briefing_details",
+     "module": "tools.briefing_editor"
+    }
+   ]
+  },
+  {
+   "name": "change_briefing_state",
+   "desc": "Move an EXISTING briefing through its workflow: SUBMIT, CONFIRM, HOLD, WAITLIST, CANCEL, DECLINE, etc. Valid actions depend on current status \u2014 call get_briefing first and use its available_actions. Get explicit user confirmation before calling, and warn them when the action is terminal (CANCEL/DECLINE). Notification emails are OFF unless send_notification is true \u2014 only set it if the user explicitly asks to notify people, since it emails real customers.",
+   "params": [
+    "action",
+    "request_id",
+    "send_notification"
+   ],
+   "required": [
+    "request_id",
+    "action"
+   ],
+   "impl": [
+    {
+     "fn": "change_briefing_state",
+     "module": "tools.briefing_editor"
+    },
+    {
+     "fn": "get_briefing",
+     "module": "tools.briefing_editor"
+    },
+    {
+     "fn": "reschedule_briefing",
+     "module": "tools.briefing_editor"
+    },
+    {
+     "fn": "update_briefing_details",
+     "module": "tools.briefing_editor"
+    }
+   ]
+  },
+  {
+   "name": "push_briefing",
+   "desc": "Execute the writes for a confirmed briefing draft: creates the briefing request via the forms engine (a new CBR event), SUBMITs it (no notification emails), and optionally pushes agenda sessions. Call ONLY after the user explicitly confirmed the draft summary from draft_briefing \u2014 never on your own initiative. A draft can be pushed at most once. Returns the new request_id + CBR event number and per-step success/failure.",
+   "params": [
+    "draft_id"
+   ],
+   "required": [
+    "draft_id"
+   ],
+   "impl": [
+    {
+     "fn": "push_briefing",
+     "module": "tools.briefing_builder"
+    }
+   ]
+  }
+ ],
+ "undeclared": [
+  "get_event_rooms",
+  "get_gdp",
+  "get_index_mapping",
+  "get_report_data",
+  "get_time_context",
+  "query_database"
+ ],
+ "meta": {
+  "sha": "29b8820",
+  "generated": "2026-09-08 06:36 UTC",
+  "modules": 49,
+  "deps": 85,
+  "loc": 16415
+ }
+}</script>
 <script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const tooltip = document.getElementById('tooltip');
+const D = JSON.parse(document.getElementById('data').textContent);
+const LAYERS = ["entry", "core", "llm", "tools", "data", "support", "dev"];
+const LABELS = {"entry": "Entry", "core": "Orchestration", "llm": "Model transport", "tools": "Tools", "data": "Data access", "support": "Support", "dev": "Dev only"};
+const COLOR  = l => getComputedStyle(document.documentElement).getPropertyValue('--'+l).trim() || '#8B98AC';
+/* Descriptions come from docstrings and tool schemas — text, not markup. */
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+document.getElementById('m-mod').textContent  = D.meta.modules;
+document.getElementById('m-dep').textContent  = D.meta.deps;
+document.getElementById('m-tool').textContent = D.tools.length;
+document.getElementById('m-loc').textContent  = D.meta.loc.toLocaleString();
+document.getElementById('m-sha').textContent  = D.meta.sha;
+document.getElementById('m-gen').textContent  = D.meta.generated;
 
-const CX = canvas.width / 2;
-const CY = canvas.height / 2;
+document.getElementById('legend').innerHTML = LAYERS
+  .filter(l => D.nodes.some(n => n.layer === l))
+  .map(l => '<span><i style="background:'+COLOR(l)+'"></i>'+LABELS[l]+'</span>').join('');
 
-// Categories with colors
-const CAT = {
-  entry:   '#58a6ff',
-  core:    '#3fb950',
-  tools:   '#d29922',
-  data:    '#f78166',
-  llm:     '#bc8cff',
-  ui:      '#39d353',
-  config:  '#8b949e',
-};
+/* ---- layout: one column per layer, nodes stacked ------------------------ */
+const COLW = 214, NODEH = 34, GAP = 11, PADX = 26, PADY = 54;
+const byLayer = {};
+LAYERS.forEach(l => byLayer[l] = D.nodes.filter(n => n.layer === l));
+const cols = LAYERS.filter(l => byLayer[l].length);
+const tallest = Math.max(...cols.map(l => byLayer[l].length));
+const W = PADX*2 + cols.length*COLW, H = PADY + tallest*(NODEH+GAP) + 30;
 
-// Nodes: id, label, file, desc, role (what it does), cat, size
-const nodes = [
-  // Hub
-  { id: 'api',            label: 'api.py',                  file: 'api.py',
-    desc: 'FastAPI app — all HTTP endpoints incl. /process_query and /process_query_stream (SSE)',
-    role: 'Entry point · routes requests · spawns SSE worker thread',
-    cat: 'entry', size: 28 },
-
-  { id: 'lambda',         label: 'lambda_handler.py',       file: 'lambda_handler.py',
-    desc: 'AWS Lambda entry point — wraps api.py for serverless deploy',
-    role: 'Prod entry point on Lambda',
-    cat: 'entry', size: 18 },
-
-  // Core
-  { id: 'qp',             label: 'query_processor.py',      file: 'query_processor.py',
-    desc: 'Main agentic loop — Bedrock Converse, caching, tool dispatch, SSE events',
-    role: 'Orchestrator · drives the plan→tool→synthesize loop',
-    cat: 'core', size: 30 },
-
-  { id: 'bedrock',        label: 'bedrock_llm.py',          file: 'bedrock_llm.py',
-    desc: 'Thin Bedrock Converse wrapper — handles cachePoint, model_id override, tool format conversion',
-    role: 'LLM transport layer',
-    cat: 'llm', size: 22 },
-
-  { id: 'handlers',       label: 'tools/handlers.py',       file: 'tools/handlers.py',
-    desc: 'Tool executor — time-token substitution, ThreadPoolExecutor parallel dispatch, SSE callbacks',
-    role: 'Routes LLM tool calls → real functions',
-    cat: 'core', size: 26 },
-
-  // Tools
-  { id: 'definitions',    label: 'tools/definitions.py',    file: 'tools/definitions.py',
-    desc: 'OpenAI-format tool schemas sent to Bedrock — what the LLM can call',
-    role: 'Tool contract definitions',
-    cat: 'tools', size: 20 },
-
-  { id: 'agenda_gen',     label: 'tools/agenda_generator.py', file: 'tools/agenda_generator.py',
-    desc: 'Builds full meeting agenda from event data, similar briefings, presenter suggestions + availability',
-    role: 'generate_agenda tool impl',
-    cat: 'tools', size: 22 },
-
-  { id: 'presenter',      label: 'tools/presenter_suggest.py', file: 'tools/presenter_suggest.py',
-    desc: 'Ranks presenters from activities index, checks double-booking via _check_presenter_conflicts',
-    role: 'suggest_presenters tool impl',
-    cat: 'tools', size: 22 },
-
-  { id: 'briefingiq_api', label: 'tools/briefingiq_api.py', file: 'tools/briefingiq_api.py',
-    desc: 'HTTP client for BriefingIQ REST API — rooms, events, activities, calendar ops',
-    role: 'External API adapter',
-    cat: 'tools', size: 20 },
-
-  { id: 'briefingiq_w',   label: 'tools/briefingiq_writer.py', file: 'tools/briefingiq_writer.py',
-    desc: 'Writes agenda sessions back to BriefingIQ (push_agenda_to_briefingiq)',
-    role: 'Write path for agenda push',
-    cat: 'tools', size: 18 },
-
-  // Data
-  { id: 'opensearch',     label: 'opensearch_client.py',    file: 'opensearch_client.py',
-    desc: 'Thin OpenSearch wrapper — search, count, list_indices, get_mapping, banned-field guard',
-    role: 'Read from events + activities indices',
-    cat: 'data', size: 22 },
-
-  { id: 'database',       label: 'database.py',             file: 'database.py',
-    desc: 'SQLAlchemy engine — connects to BriefingIQ SQL DB for category/event lookups',
-    role: 'SQL data access',
-    cat: 'data', size: 18 },
-
-  { id: 'session_mgr',    label: 'session_manager.py',      file: 'session_manager.py',
-    desc: 'In-memory conversation history per session_id (last 6 turns)',
-    role: 'Chat session state',
-    cat: 'data', size: 16 },
-
-  { id: 'schema',         label: 'schema_reference.py',     file: 'schema_reference.py',
-    desc: 'Static OpenSearch field path reference injected into every system prompt',
-    role: 'LLM field path cheat-sheet',
-    cat: 'config', size: 16 },
-
-  // UI
-  { id: 'timings',        label: 'static/timings.html',     file: 'static/timings.html',
-    desc: 'Live waterfall UI — SSE client, animated bars for planning/tools/synthesis phases',
-    role: 'Dev perf dashboard',
-    cat: 'ui', size: 18 },
-
-  { id: 'repomap',        label: 'static/repo_map.html',    file: 'static/repo_map.html',
-    desc: 'This file — interactive repo architecture map',
-    role: 'Dev docs',
-    cat: 'ui', size: 14 },
-
-  // Config / Utils
-  { id: 'logging',        label: 'logging_config.py',       file: 'logging_config.py',
-    desc: 'Structured logger setup used across all modules',
-    role: 'Logging',
-    cat: 'config', size: 14 },
-
-  { id: 'bench',          label: 'bench_bedrock.py',        file: 'bench_bedrock.py',
-    desc: 'Standalone Bedrock latency benchmark — Sonnet vs Haiku, ms/token measurements',
-    role: 'Dev tooling',
-    cat: 'config', size: 14 },
-];
-
-// Edges: [from, to, label?]
-const edges = [
-  ['api',         'qp',            'calls'],
-  ['lambda',      'api',           'wraps'],
-  ['qp',          'bedrock',       'converse()'],
-  ['qp',          'handlers',      'process_function_calls()'],
-  ['qp',          'session_mgr',   'history'],
-  ['qp',          'schema',        'system prompt'],
-  ['handlers',    'definitions',   'tool schema'],
-  ['handlers',    'opensearch',    'search/count'],
-  ['handlers',    'presenter',     'suggest_presenters'],
-  ['handlers',    'agenda_gen',    'generate_agenda'],
-  ['handlers',    'briefingiq_api','list_rooms / block_cal'],
-  ['handlers',    'briefingiq_w',  'push_agenda'],
-  ['agenda_gen',  'opensearch',    'similar briefings'],
-  ['agenda_gen',  'presenter',     'presenter recs'],
-  ['agenda_gen',  'briefingiq_api','event data'],
-  ['presenter',   'opensearch',    'activities query'],
-  ['briefingiq_w','briefingiq_api','API calls'],
-  ['qp',          'database',      'category lookup'],
-];
-
-// Layout — place nodes in rings
-const rings = [
-  { ids: ['api'],                                                            r: 0 },
-  { ids: ['qp', 'lambda'],                                                   r: 120 },
-  { ids: ['bedrock', 'handlers', 'session_mgr', 'schema', 'database'],      r: 240 },
-  { ids: ['definitions', 'opensearch', 'agenda_gen', 'presenter', 'briefingiq_api', 'briefingiq_w'], r: 370 },
-  { ids: ['timings', 'repomap', 'logging', 'bench'],                        r: 480 },
-];
-
-const nodeMap = {};
-nodes.forEach(n => { nodeMap[n.id] = n; });
-
-rings.forEach(ring => {
-  const count = ring.ids.length;
-  ring.ids.forEach((id, i) => {
-    const angle = (2 * Math.PI * i / count) - Math.PI / 2;
-    const n = nodeMap[id];
-    n.x = CX + ring.r * Math.cos(angle);
-    n.y = CY + ring.r * Math.sin(angle);
-    n.vx = 0; n.vy = 0;
-    n.angle = angle;
-    n.baseX = n.x; n.baseY = n.y;
-    n.pulse = Math.random() * Math.PI * 2;
+const pos = {};
+cols.forEach((l, ci) => {
+  const list = byLayer[l];
+  const top = PADY + (tallest - list.length) * (NODEH+GAP) / 2;
+  list.forEach((n, i) => {
+    pos[n.id] = { x: PADX + ci*COLW, y: top + i*(NODEH+GAP), w: COLW-34, h: NODEH, layer: l, ci };
   });
 });
 
-// Pan + zoom state
-let pan = { x: 0, y: 0 };
-let zoom = 1;
-let dragging = false;
-let dragStart = { x: 0, y: 0 };
-let panStart = { x: 0, y: 0 };
-let hoveredNode = null;
-let time = 0;
+const svg = document.getElementById('graph');
+svg.setAttribute('viewBox', '0 0 '+W+' '+H);
+svg.setAttribute('width', W); svg.setAttribute('height', H);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (t, a) => { const e = document.createElementNS(NS, t);
+  for (const k in a) e.setAttribute(k, a[k]); return e; };
 
-function worldToScreen(wx, wy) {
-  return { x: wx * zoom + pan.x, y: wy * zoom + pan.y };
-}
+/* lane headers */
+cols.forEach((l, ci) => {
+  const g = el('g', {class:'lane'});
+  const t = el('text', {x: PADX + ci*COLW, y: 24});
+  t.textContent = LABELS[l];
+  g.appendChild(t);
+  g.appendChild(el('line', {x1: PADX + ci*COLW, y1: 34, x2: PADX + ci*COLW + COLW-34, y2: 34}));
+  svg.appendChild(g);
+});
 
-function screenToWorld(sx, sy) {
-  return { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom };
-}
-
-function drawEdge(a, b, label) {
-  const sa = worldToScreen(a.x, a.y);
-  const sb = worldToScreen(b.x, b.y);
-  const isHovered = hoveredNode && (hoveredNode.id === a.id || hoveredNode.id === b.id);
-
-  ctx.beginPath();
-  ctx.moveTo(sa.x, sa.y);
-  ctx.lineTo(sb.x, sb.y);
-  ctx.strokeStyle = isHovered ? 'rgba(88,166,255,0.6)' : 'rgba(48,54,61,0.7)';
-  ctx.lineWidth = isHovered ? 1.5 : 0.8;
-  ctx.stroke();
-
-  if (isHovered && label && zoom > 0.7) {
-    const mx = (sa.x + sb.x) / 2;
-    const my = (sa.y + sb.y) / 2;
-    ctx.font = `${Math.round(9 * zoom)}px SF Mono, monospace`;
-    ctx.fillStyle = 'rgba(139,148,158,0.9)';
-    ctx.textAlign = 'center';
-    ctx.fillText(label, mx, my - 4);
-  }
-}
-
-function drawNode(n) {
-  const s = worldToScreen(n.x, n.y);
-  const r = n.size * zoom;
-  const isHovered = hoveredNode && hoveredNode.id === n.id;
-  const pulse = Math.sin(time * 0.02 + n.pulse) * 0.15 + 1;
-  const color = CAT[n.cat];
-
-  // Glow
-  if (isHovered) {
-    const grd = ctx.createRadialGradient(s.x, s.y, r * 0.5, s.x, s.y, r * 2.5);
-    grd.addColorStop(0, color + '55');
-    grd.addColorStop(1, 'transparent');
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r * 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = grd;
-    ctx.fill();
-  }
-
-  // Ring pulse for entry nodes
-  if (n.cat === 'entry') {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r * pulse * 1.6, 0, Math.PI * 2);
-    ctx.strokeStyle = color + '33';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  // Node circle
-  const grd2 = ctx.createRadialGradient(s.x - r * 0.3, s.y - r * 0.3, r * 0.1, s.x, s.y, r);
-  grd2.addColorStop(0, color + 'dd');
-  grd2.addColorStop(1, color + '88');
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-  ctx.fillStyle = grd2;
-  ctx.fill();
-  ctx.strokeStyle = isHovered ? color : color + '66';
-  ctx.lineWidth = isHovered ? 2 : 1;
-  ctx.stroke();
-
-  // Label
-  if (zoom > 0.5) {
-    const fontSize = Math.max(9, Math.round(11 * zoom));
-    ctx.font = `${fontSize}px SF Mono, monospace`;
-    ctx.fillStyle = isHovered ? '#e6edf3' : '#c9d1d9';
-    ctx.textAlign = 'center';
-    const label = n.label.replace('tools/', '').replace('static/', '');
-    ctx.fillText(label, s.x, s.y + r + fontSize + 2);
-  }
-}
-
-function getNodeAt(sx, sy) {
-  const w = screenToWorld(sx, sy);
-  for (const n of nodes) {
-    const dx = n.x - w.x, dy = n.y - w.y;
-    if (Math.sqrt(dx * dx + dy * dy) < n.size + 4) return n;
-  }
-  return null;
-}
-
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Background grid
-  ctx.strokeStyle = 'rgba(48,54,61,0.15)';
-  ctx.lineWidth = 0.5;
-  const gridSize = 60 * zoom;
-  const offX = pan.x % gridSize;
-  const offY = pan.y % gridSize;
-  for (let x = offX; x < canvas.width; x += gridSize) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-  }
-  for (let y = offY; y < canvas.height; y += gridSize) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
-  }
-
-  // Edges
-  edges.forEach(([aid, bid, label]) => {
-    const a = nodeMap[aid], b = nodeMap[bid];
-    if (a && b) drawEdge(a, b, label);
+/* edges behind nodes */
+const edgeEls = [];
+const gEdges = el('g', {}); svg.appendChild(gEdges);
+D.edges.forEach(e => {
+  const a = pos[e.from], b = pos[e.to];
+  if (!a || !b) return;
+  const forward = b.ci > a.ci;
+  const x1 = forward ? a.x + a.w : a.x, y1 = a.y + a.h/2;
+  const x2 = forward ? b.x : b.x + b.w, y2 = b.y + b.h/2;
+  const mx = (x1 + x2) / 2;
+  const p = el('path', {
+    class: 'edge' + (forward ? '' : ' back'),
+    d: 'M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2,
   });
+  p.dataset.from = e.from; p.dataset.to = e.to;
+  gEdges.appendChild(p); edgeEls.push(p);
+});
 
-  // Nodes
-  nodes.forEach(drawNode);
+/* nodes */
+const nodeEls = {};
+D.nodes.forEach(n => {
+  const p = pos[n.id], c = COLOR(n.layer);
+  const g = el('g', {class:'node', tabindex:'0', role:'button'});
+  g.appendChild(el('rect', {x:p.x, y:p.y, width:p.w, height:p.h,
+                            fill:'var(--panel-2)', stroke:c}));
+  g.appendChild(el('rect', {x:p.x, y:p.y, width:3, height:p.h, fill:c, rx:1.5}));
+  const short = n.id.replace(/^tools\./,'').replace(/^scripts\./,'');
+  const t1 = el('text', {class:'n', x:p.x+11, y:p.y+13}); t1.textContent = short;
+  const t2 = el('text', {class:'l', x:p.x+11, y:p.y+25});
+  t2.textContent = n.lines + ' lines · ' + n.defs + ' defs';
+  g.appendChild(t1); g.appendChild(t2);
+  g.addEventListener('mouseenter', () => focus(n.id));
+  g.addEventListener('mouseleave', () => focus(null));
+  g.addEventListener('focus',      () => { focus(n.id); select(n.id); });
+  g.addEventListener('click',      () => select(n.id));
+  svg.appendChild(g); nodeEls[n.id] = g;
+});
 
-  time++;
-  requestAnimationFrame(draw);
+function focus(id){
+  const all = Object.values(nodeEls);
+  if (!id) { all.forEach(g => g.classList.remove('dim'));
+             edgeEls.forEach(p => p.classList.remove('dim','on','out')); return; }
+  const near = new Set([id]);
+  D.edges.forEach(e => { if (e.from === id) near.add(e.to); if (e.to === id) near.add(e.from); });
+  D.nodes.forEach(n => nodeEls[n.id].classList.toggle('dim', !near.has(n.id)));
+  edgeEls.forEach(p => {
+    const hit = p.dataset.from === id || p.dataset.to === id;
+    p.classList.toggle('dim', !hit);
+    p.classList.toggle('on', hit);
+    p.classList.toggle('out', hit && p.dataset.from === id);
+  });
 }
 
-// Interaction
-canvas.addEventListener('mousemove', e => {
-  const n = getNodeAt(e.clientX, e.clientY);
-  hoveredNode = n;
-  canvas.style.cursor = n ? 'pointer' : (dragging ? 'grabbing' : 'grab');
+const detail = document.getElementById('detail');
+function select(id){
+  const n = D.nodes.find(x => x.id === id);
+  if (!n) { detail.innerHTML = '<p class="none">Hover a module to trace its dependencies; click to pin the detail here.</p>'; return; }
+  const out = D.edges.filter(e => e.from === id).map(e => e.to).sort();
+  const inc = D.edges.filter(e => e.to === id).map(e => e.from).sort();
+  const link = m => '<li><button data-go="'+esc(m)+'">'+esc(m)+'</button></li>';
+  const list = (arr, empty) => arr.length ? '<ul>'+arr.map(link).join('')+'</ul>'
+                                          : '<p class="none">'+empty+'</p>';
+  detail.innerHTML =
+    '<h2>'+esc(n.id)+'</h2><div class="path">'+esc(n.file)+'</div>'
+    + '<div class="stat"><span><b>'+n.lines+'</b> lines</span><span><b>'+n.defs+'</b> defs</span>'
+    + '<span style="color:'+COLOR(n.layer)+'">'+esc(LABELS[n.layer])+'</span></div>'
+    + (n.desc ? '<p>'+esc(n.desc)+'</p>'
+              : '<p class="none">No note yet — add one in docs/repo_map_notes.json.</p>')
+    + '<h3>Imports ('+out.length+')</h3>' + list(out, 'nothing first-party')
+    + '<h3>Imported by ('+inc.length+')</h3>' + list(inc, 'nothing — an entry point or unused');
+  detail.querySelectorAll('[data-go]').forEach(b =>
+    b.addEventListener('click', () => { select(b.dataset.go); focus(b.dataset.go); }));
+}
+select(null);
 
-  if (n) {
-    tooltip.style.display = 'block';
-    tooltip.style.left = (e.clientX + 16) + 'px';
-    tooltip.style.top = (e.clientY - 10) + 'px';
-    tooltip.querySelector('.name').textContent = n.file;
-    tooltip.querySelector('.desc').textContent = n.desc;
-    tooltip.querySelector('.role').textContent = '→ ' + n.role;
-  } else {
-    tooltip.style.display = 'none';
-  }
+/* ---- tool catalog ------------------------------------------------------- */
+document.getElementById('toolrows').innerHTML = D.tools.map(t => {
+  const impl = t.impl.length
+    ? t.impl.map(i => '<b>'+esc(i.fn)+'</b>()' + (i.module ? '<br>'+esc(i.module) : '')).join('<br>')
+    : '<span style="opacity:.5">no branch in execute_tool</span>';
+  const params = t.params.length
+    ? '<div class="pm">' + t.params.map(p =>
+        (t.required.includes(p) ? '<span>'+esc(p)+'*</span>' : esc(p))).join(' · ') + '</div>'
+    : '';
+  return '<tr data-name="'+esc(t.name)+'"><td class="nm">'+esc(t.name)+'</td>'
+       + '<td class="ds">'+esc(t.desc)+params+'</td>'
+       + '<td class="im">'+impl+'</td></tr>';
+}).join('');
 
-  if (dragging) {
-    pan.x = panStart.x + (e.clientX - dragStart.x);
-    pan.y = panStart.y + (e.clientY - dragStart.y);
-  }
+/* ---- tabs + filter ------------------------------------------------------ */
+const tabs = {modules:'view-modules', tools:'view-tools'};
+Object.keys(tabs).forEach(k => {
+  document.getElementById('tab-'+k).addEventListener('click', () => {
+    Object.keys(tabs).forEach(j => {
+      const on = j === k;
+      document.getElementById('tab-'+j).setAttribute('aria-selected', on);
+      document.getElementById(tabs[j]).classList.toggle('hidden', !on);
+    });
+  });
 });
 
-canvas.addEventListener('mousedown', e => {
-  dragging = true;
-  dragStart = { x: e.clientX, y: e.clientY };
-  panStart = { x: pan.x, y: pan.y };
-  canvas.style.cursor = 'grabbing';
+document.getElementById('q').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  D.nodes.forEach(n => nodeEls[n.id].classList.toggle('dim', !!q && !n.id.toLowerCase().includes(q)));
+  document.querySelectorAll('#toolrows tr').forEach(r =>
+    r.classList.toggle('hidden', !!q && !r.dataset.name.toLowerCase().includes(q)));
 });
-
-canvas.addEventListener('mouseup', () => { dragging = false; });
-canvas.addEventListener('mouseleave', () => { dragging = false; tooltip.style.display = 'none'; });
-
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  const factor = e.deltaY < 0 ? 1.1 : 0.91;
-  const wx = (e.clientX - pan.x) / zoom;
-  const wy = (e.clientY - pan.y) / zoom;
-  zoom *= factor;
-  zoom = Math.max(0.2, Math.min(3, zoom));
-  pan.x = e.clientX - wx * zoom;
-  pan.y = e.clientY - wy * zoom;
-}, { passive: false });
-
-window.addEventListener('resize', () => {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-});
-
-// Center pan on load
-pan.x = 0; pan.y = 0;
-
-draw();
 </script>
 </body>
 </html>
