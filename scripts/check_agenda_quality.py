@@ -39,6 +39,7 @@ import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -54,6 +55,26 @@ from tools.agenda_generator import (  # noqa: E402
     _session_count_range,
     generate_agenda,
 )
+
+def _brief(value, limit=220):
+    """Render a call's return value small enough to sit in a table cell."""
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        body = ", ".join(f"{k}: {_brief(v, 60)}" for k, v in list(value.items())[:6])
+        more = f", +{len(value) - 6} more" if len(value) > 6 else ""
+        text = "{" + body + more + "}"
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+        if not items:
+            return "[]"
+        body = ", ".join(_brief(v, 40) for v in items[:8])
+        more = f", +{len(items) - 8} more" if len(items) > 8 else ""
+        text = "[" + body + more + "]"
+    else:
+        text = str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
 
 CASES = []
 
@@ -77,11 +98,28 @@ class Run:
         self.elapsed = elapsed
         self._pool_cache = None
         self._wider_cache = None
+        # Every deterministic call this run makes to establish truth, in order,
+        # so the report can show the check beside the call that settled it
+        # rather than asking anyone to take a verdict on faith.
+        self.calls = []
+        self._current = None
         self.meeting = (context or {}).get("meeting_details") or {}
         self.attendees = (context or {}).get("attendees") or []
         self.topics = [t for t in ((context or {}).get("available_topics") or []) if t]
         self.sessions = result.get("sessions") or []
         self.num_days = _event_num_days(self.meeting) or 1
+
+    def record(self, call, output, *, note=""):
+        """Log one truth-establishing call and what it returned."""
+        self.calls.append({
+            "check": self._current,
+            "call": call,
+            "output": output if isinstance(output, str) else _brief(output),
+            "note": note,
+        })
+
+    def evidence_for(self, check):
+        return [c for c in self.calls if c["check"] == check]
 
     def by_day(self):
         days = defaultdict(list)
@@ -249,6 +287,8 @@ def _ok(r):
 
 @case("structure", "every day of the event carries at least one session")
 def _all_days(r):
+    r.record(f"_event_num_days(meeting)  # event {r.event_id}", r.num_days,
+             note="from the event record's duration field")
     if r.num_days <= 1:
         return None, "single-day event"
     days = set(r.by_day())
@@ -286,6 +326,10 @@ def _inside_window(r):
         if not start_ms or not end_ms:
             continue
         checked += 1
+        r.record(f"_briefing_window(meeting, day_index={day})",
+                 f"{datetime.fromtimestamp(start_ms/1000, tz):%Y-%m-%d %H:%M} \u2192 "
+                 f"{datetime.fromtimestamp(end_ms/1000, tz):%H:%M} {tz}",
+                 note="the hours actually reserved for this day")
         lo = datetime.fromtimestamp(start_ms / 1000, tz)
         hi = datetime.fromtimestamp(end_ms / 1000, tz)
         lo_min, hi_min = lo.hour * 60 + lo.minute, hi.hour * 60 + hi.minute
@@ -307,7 +351,10 @@ def _count_range(r):
         if not start_ms or not end_ms:
             continue
         checked += 1
-        lo, hi = _session_count_range((end_ms - start_ms) // 60000, r.num_days)
+        window_min = (end_ms - start_ms) // 60000
+        lo, hi = _session_count_range(window_min, r.num_days)
+        r.record(f"_session_count_range(window_minutes={window_min}, num_days={r.num_days})",
+                 f"({lo}, {hi})  \u2190 day {day} has {len(sessions)} sessions")
         if not lo <= len(sessions) <= hi:
             off.append(f"day{day}: {len(sessions)} not in {lo}-{hi}")
     if not checked:
@@ -350,6 +397,8 @@ def _lunch(r):
 @case("accuracy", "the company matches the event record")
 def _company(r):
     truth = (r.meeting.get("company_name") or "").strip()
+    r.record(f"_fetch_meeting_context(event_id={r.event_id!r})[\"meeting_details\"][\"company_name\"]",
+             truth or "(absent)")
     if not truth:
         return None, "no company on the event record"
     got = (r.result.get("company") or "").strip()
@@ -359,6 +408,8 @@ def _company(r):
 @case("accuracy", "the industry matches the event record")
 def _industry(r):
     truth = (r.meeting.get("industry") or "").strip()
+    r.record(f"_fetch_meeting_context(event_id={r.event_id!r})[\"meeting_details\"][\"industry\"]",
+             truth or "(absent)")
     if not truth:
         return None, "no industry on the event record"
     got = (r.result.get("industry") or "").strip()
@@ -367,6 +418,8 @@ def _industry(r):
 
 @case("accuracy", "the attendee count matches the attendee list")
 def _attendee_count(r):
+    r.record(f"len(_fetch_meeting_context(event_id={r.event_id!r})[\"attendees\"])",
+             f"{len(r.attendees)}  \u2192 " + _brief([a.get("name") for a in r.attendees]))
     if not r.attendees:
         return None, "no attendees on the event record"
     return r.result.get("attendee_count") == len(r.attendees), \
@@ -384,6 +437,9 @@ def _topics_real(r):
     failure — a weaker fault, and worth naming separately so the count is not
     misread.
     """
+    r.record("_available_topics(ACTIVITIES_INDEX, limit=150)",
+             f"{len(r.topics)} topics \u2192 " + _brief(r.topics),
+             note="exactly the list the prompt carried")
     if not r.topics:
         return None, "no topic vocabulary reached the prompt"
     shown = {t.strip().lower() for t in r.topics}
@@ -406,6 +462,10 @@ def _topics_real(r):
 @case("accuracy", "every presenter is a real person from the source data")
 def _presenters_real(r):
     known = r.known_people()
+    r.record(f"get_suggested_presenters(event_id={r.event_id!r}, limit=100)"
+             " + attendees + ranking rationale",
+             f"{len(known)} known names \u2192 " + _brief(sorted(known)),
+             note="every person the source data knows")
     if not known:
         return None, "no presenter pool to check against"
     invented = []
@@ -478,6 +538,8 @@ def _all_days_checked(r):
     # The scheduler folds this into result["scheduling"], not the top level.
     avail = ((r.result.get("scheduling") or {}).get("availability_checked")
              or r.result.get("availability") or {})
+    r.record('result["scheduling"]["availability_checked"]', avail or "(absent)",
+             note="what the scheduler reports it checked")
     unchecked = avail.get("days_without_availability_check")
     if unchecked is None:
         return None, "no availability summary on the result"
@@ -506,7 +568,14 @@ def _presenters_free(r):
             conflicts = _check_presenter_conflicts(
                 [email], bounds[0], bounds[1], exclude_event_id=str(r.event_id)
             )
-            for hit in conflicts.get(email, []):
+            hits = conflicts.get(email, [])
+            r.record(
+                f"_check_presenter_conflicts([{email!r}], {bounds[0]}, {bounds[1]}, "
+                f"exclude_event_id={str(r.event_id)!r})",
+                "free" if not hits else "BUSY: " + _brief([h.get("event_name") for h in hits]),
+                note=f"{name} \u2014 day {s.get('day')} {s.get('time_slot')} \u2014 {s.get('title')}",
+            )
+            for hit in hits:
                 busy.append(f"{name} at {s.get('time_slot')} day{s.get('day')} "
                             f"— {hit.get('event_name')}")
     if not checked:
@@ -531,8 +600,16 @@ def _backups_free(r):
             if not email:
                 continue
             checked += 1
-            if _check_presenter_conflicts([email], bounds[0], bounds[1],
-                                          exclude_event_id=str(r.event_id)).get(email):
+            hits = _check_presenter_conflicts(
+                [email], bounds[0], bounds[1], exclude_event_id=str(r.event_id)).get(email)
+            r.record(
+                f"_check_presenter_conflicts([{email!r}], {bounds[0]}, {bounds[1]}, "
+                f"exclude_event_id={str(r.event_id)!r})",
+                "free" if not hits else "BUSY: " + _brief([h.get("event_name") for h in hits]),
+                note=f"backup {backup.get('presenter_name')} \u2014 day {s.get('day')} "
+                     f"{s.get('time_slot')}",
+            )
+            if hits:
                 busy.append(f"{backup.get('presenter_name')} @ {s.get('time_slot')}")
     if not checked:
         return None, "no backups carrying a resolvable email"
@@ -576,12 +653,208 @@ def do_run(event_id):
 def judge(run):
     rows = []
     for group, label, fn in CASES:
+        run._current = label
         try:
             verdict, detail = fn(run)
         except Exception as exc:
             verdict, detail = False, f"raised {type(exc).__name__}: {exc}"
         rows.append((group, label, verdict, detail))
+    run._current = None
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+REPORT_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda Verification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#0B0E14; --panel:#141922; --panel-2:#1B2230; --rule:#232B39;
+  --ink:#C6CEDA; --ink-dim:#7C8798; --ink-bright:#EDF1F6;
+  --pass:#4ED8A0; --fail:#FF6B7A; --skip:#FFB454; --claim:#5AC8FA;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+header{padding:22px 24px 18px;border-bottom:1px solid var(--rule)}
+h1{margin:0 0 8px;font-size:17px;font-weight:600;color:var(--ink-bright);letter-spacing:-.01em}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);
+      display:flex;gap:18px;flex-wrap:wrap}
+.meta b{color:var(--ink);font-weight:500}
+.tally{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.pill{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:99px;
+      border:1px solid currentColor}
+.pill.p{color:var(--pass)} .pill.f{color:var(--fail)} .pill.s{color:var(--skip)}
+main{padding:20px 24px 60px;max-width:1500px}
+.runs{display:flex;gap:2px;margin-bottom:18px;flex-wrap:wrap}
+.runs button{appearance:none;background:var(--panel);border:1px solid var(--rule);
+  color:var(--ink-dim);font-family:var(--mono);font-size:11.5px;padding:6px 13px;
+  cursor:pointer;border-radius:6px}
+.runs button:hover{color:var(--ink)}
+.runs button[aria-selected="true"]{color:var(--ink-bright);border-color:var(--claim);
+  background:var(--panel-2)}
+.runs button:focus-visible{outline:2px solid var(--claim);outline-offset:2px}
+.summary{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  padding:13px 16px;margin-bottom:16px;font-family:var(--mono);font-size:11.5px;
+  color:var(--ink-dim);display:flex;gap:20px;flex-wrap:wrap}
+.summary b{color:var(--ink);font-weight:500}
+.grp{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-dim);margin:22px 0 8px}
+.card{border:1px solid var(--rule);border-radius:10px;background:var(--panel);
+  margin-bottom:8px;overflow:hidden}
+.card.fail{border-color:color-mix(in srgb, var(--fail) 45%, var(--rule))}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:0}
+@media(max-width:900px){.row{grid-template-columns:minmax(0,1fr)}}
+.left{padding:13px 16px}
+.right{padding:13px 16px;border-left:1px solid var(--rule);background:var(--panel-2)}
+@media(max-width:900px){.right{border-left:0;border-top:1px solid var(--rule)}}
+.vtag{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;font-weight:600;
+  padding:2px 7px;border-radius:4px;display:inline-block;margin-bottom:7px}
+.vtag.PASS{color:var(--pass);background:color-mix(in srgb, var(--pass) 13%, transparent)}
+.vtag.FAIL{color:var(--fail);background:color-mix(in srgb, var(--fail) 13%, transparent)}
+.vtag.SKIP{color:var(--skip);background:color-mix(in srgb, var(--skip) 13%, transparent)}
+.claimtxt{color:var(--ink-bright);font-size:13px}
+.detail{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:7px;
+  word-break:break-word}
+.card.fail .detail{color:color-mix(in srgb, var(--fail) 72%, var(--ink))}
+.ev{margin-bottom:11px}
+.ev:last-child{margin-bottom:0}
+.ev .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-dim);margin-bottom:3px}
+.ev pre{margin:0 0 4px;font-family:var(--mono);font-size:11px;color:var(--claim);
+  white-space:pre-wrap;word-break:break-word}
+.ev .out{font-family:var(--mono);font-size:11px;color:var(--ink);white-space:pre-wrap;
+  word-break:break-word}
+.ev .out.busy{color:var(--fail)}
+.ev .note{font-size:11px;color:var(--ink-dim);margin-top:2px}
+.none{font-family:var(--mono);font-size:11px;color:var(--ink-dim);font-style:italic}
+.hidden{display:none!important}
+.legend{font-size:12px;color:var(--ink-dim);margin:0 0 16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agenda verification — event <span id="ev"></span></h1>
+  <div class="meta">
+    <span><b id="m-runs"></b> runs</span>
+    <span><b id="m-props"></b> properties each</span>
+    <span id="m-gen"></span>
+  </div>
+  <div class="tally" id="tally"></div>
+</header>
+<main>
+  <p class="legend">Left: what the generated agenda claims. Right: the deterministic call
+  that settled it, and what that call returned. Nothing on the right went near the model.</p>
+  <div class="runs" id="runs"></div>
+  <div class="summary" id="summary"></div>
+  <div id="checks"></div>
+</main>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const mark = v => v === true ? 'PASS' : (v === null ? 'SKIP' : 'FAIL');
+
+document.getElementById('ev').textContent = D.event;
+document.getElementById('m-runs').textContent = D.runs.length;
+document.getElementById('m-props').textContent = D.runs.length ? D.runs[0].checks.length : 0;
+document.getElementById('m-gen').textContent = D.generated;
+
+const flat = D.runs.flatMap(r => r.checks);
+const n = v => flat.filter(c => mark(c.verdict) === v).length;
+document.getElementById('tally').innerHTML =
+    '<span class="pill p">' + n('PASS') + ' passed</span>'
+  + '<span class="pill f">' + n('FAIL') + ' failed</span>'
+  + '<span class="pill s">' + n('SKIP') + ' skipped</span>';
+
+document.getElementById('runs').innerHTML = D.runs.map((r, i) => {
+  const f = r.checks.filter(c => c.verdict === false).length;
+  return '<button role="tab" data-i="' + i + '" aria-selected="' + (i === 0) + '">run '
+       + (i + 1) + (f ? ' · ' + f + ' failed' : ' · clean') + '</button>';
+}).join('');
+
+function render(i){
+  const r = D.runs[i];
+  document.getElementById('summary').innerHTML =
+      '<span><b>' + r.sessions + '</b> sessions</span>'
+    + '<span>days <b>[' + r.days.join(', ') + ']</b></span>'
+    + '<span><b>' + r.elapsed.toFixed(1) + 's</b></span>'
+    + '<span>ebd <b>' + esc(r.ebd) + '</b></span>'
+    + '<span>confidence <b>' + esc(r.confidence) + '</b></span>';
+
+  let html = '', group = null;
+  r.checks.forEach(c => {
+    if (c.group !== group) { group = c.group; html += '<div class="grp">' + esc(group) + '</div>'; }
+    const m = mark(c.verdict);
+    const ev = (c.evidence || []).length
+      ? c.evidence.map(e =>
+          '<div class="ev"><div class="lbl">call</div><pre>' + esc(e.call) + '</pre>'
+          + '<div class="out' + (/^BUSY/.test(e.output) ? ' busy' : '') + '">'
+          + esc(e.output) + '</div>'
+          + (e.note ? '<div class="note">' + esc(e.note) + '</div>' : '')
+          + '</div>').join('')
+      : '<div class="none">no external call — checked against the agenda itself</div>';
+    html += '<div class="card ' + (c.verdict === false ? 'fail' : '') + '"><div class="row">'
+          + '<div class="left"><span class="vtag ' + m + '">' + m + '</span>'
+          + '<div class="claimtxt">' + esc(c.label) + '</div>'
+          + '<div class="detail">' + esc(c.detail) + '</div></div>'
+          + '<div class="right">' + ev + '</div></div></div>';
+  });
+  document.getElementById('checks').innerHTML = html;
+  document.querySelectorAll('#runs button').forEach(b =>
+    b.setAttribute('aria-selected', String(Number(b.dataset.i) === i)));
+}
+document.getElementById('runs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) render(Number(b.dataset.i));
+});
+render(0);
+</script>
+</body>
+</html>
+"""
+
+
+def build_report(event, runs, all_rows):
+    """Fold the runs into the shape the report page renders."""
+    payload = {
+        "event": str(event),
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "runs": [],
+    }
+    for run, rows in zip(runs, all_rows):
+        conf = run.result.get("confidence")
+        payload["runs"].append({
+            "elapsed": round(run.elapsed, 1),
+            "sessions": len(run.sessions),
+            "days": sorted(run.by_day()),
+            "ebd": run.result.get("ebd_status") or "-",
+            "confidence": (f"{conf.get('score')} ({conf.get('level')})"
+                           if isinstance(conf, dict) else str(conf)),
+            "checks": [{
+                "group": group,
+                "label": label,
+                "verdict": verdict,
+                "detail": detail,
+                "evidence": run.evidence_for(label),
+            } for group, label, verdict, detail in rows],
+        })
+    return payload
+
+
+def write_report(path, payload):
+    Path(path).write_text(REPORT_TEMPLATE.replace("__DATA__", json.dumps(payload, indent=1)))
 
 
 def main() -> int:
@@ -591,6 +864,9 @@ def main() -> int:
                     help="generate N times; agenda generation is stochastic and "
                          "some failures only show up across runs")
     ap.add_argument("--json", metavar="PATH", help="write the full results here")
+    ap.add_argument("--html", metavar="PATH",
+                    help="write a report page showing each claim beside the call "
+                         "that verified it")
     args = ap.parse_args()
 
     all_rows, runs = [], []
@@ -646,6 +922,10 @@ def main() -> int:
                                    for g, l, v, d in rows]}
                        for r, rows in zip(runs, all_rows)], fh, indent=2)
         print(f"wrote {args.json}")
+
+    if args.html:
+        write_report(args.html, build_report(args.event, runs, all_rows))
+        print(f"wrote {args.html}")
 
     return 1 if total_fail else 0
 
