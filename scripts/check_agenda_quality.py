@@ -630,10 +630,70 @@ def _reasons(r):
 # Runner
 # ---------------------------------------------------------------------------
 
-def do_run(event_id):
-    started = time.time()
-    result = generate_agenda(event_id=str(event_id), include_provenance=True)
-    elapsed = time.time() - started
+AGENDA_MARKERS = ("sessions", "session_count", "agenda_markdown", "agenda_structured")
+
+
+def find_agenda(payload):
+    """Dig a generate_agenda result out of whatever it arrived wrapped in.
+
+    An agenda reaches people through several envelopes — the raw tool return,
+    the {"generate_agenda": ...} the handler emits, a whole API response, a
+    saved SSE frame — and asking anyone to unwrap it by hand before they can
+    check it is how a verification step stops being used. Anything carrying an
+    agenda's own keys counts, whatever it is nested inside.
+    """
+    seen = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if sum(1 for k in AGENDA_MARKERS if k in node) >= 2:
+                seen.append(node)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    if not seen:
+        return None
+    # The outermost match is the real result; anything nested inside it is a
+    # fragment of the same agenda.
+    return max(seen, key=lambda d: len(d))
+
+
+def event_id_of(result, fallback=None):
+    """The event this agenda was built for, if it says so."""
+    for key in ("event_id", "eventId"):
+        if result.get(key):
+            return str(result[key])
+    prov = (result.get("provenance") or {}).get("summary") or {}
+    if prov.get("event_id"):
+        return str(prov["event_id"])
+    return fallback
+
+
+def load_run(path, event_id=None):
+    """Check an agenda that was generated somewhere else, by someone else."""
+    payload = json.loads(Path(path).read_text())
+    result = find_agenda(payload)
+    if result is None:
+        raise SystemExit(
+            f"{path}: no agenda in this file. Expected a generate_agenda result, "
+            f'or anything containing one (a {{"generate_agenda": ...}} wrapper, '
+            f"an API response, a saved SSE frame)."
+        )
+    resolved = event_id_of(result, event_id)
+    if not resolved:
+        raise SystemExit(
+            f"{path}: the agenda does not name its event, so there is nothing to "
+            f"check it against. Pass --event <id> as well."
+        )
+    return build_run(resolved, result, elapsed=0.0)
+
+
+def build_run(event_id, result, elapsed):
+    """Attach the source data an agenda has to be judged against."""
     try:
         context = _fetch_meeting_context(event_id=str(event_id))
         try:
@@ -648,6 +708,13 @@ def do_run(event_id):
         print(f"  ! could not fetch ground truth: {exc}")
         context = {}
     return Run(event_id, result, context, elapsed)
+
+
+def do_run(event_id):
+    started = time.time()
+    result = generate_agenda(event_id=str(event_id), include_provenance=True)
+    elapsed = time.time() - started
+    return build_run(event_id, result, elapsed)
 
 
 def judge(run):
@@ -859,7 +926,11 @@ def write_report(path, payload):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Property checks on a generated agenda.")
-    ap.add_argument("--event", required=True, help="event id to generate against")
+    ap.add_argument("--event", help="event id to generate an agenda against")
+    ap.add_argument("--agenda", metavar="PATH",
+                    help="check an agenda that already exists instead of generating "
+                         "one: a saved generate_agenda result, or any JSON containing "
+                         "one. No model call is made.")
     ap.add_argument("--repeat", type=int, default=1,
                     help="generate N times; agenda generation is stochastic and "
                          "some failures only show up across runs")
@@ -869,16 +940,25 @@ def main() -> int:
                          "that verified it")
     args = ap.parse_args()
 
+    if not args.event and not args.agenda:
+        ap.error("give --event to generate an agenda, or --agenda to check an existing one")
+
     all_rows, runs = [], []
-    for i in range(args.repeat):
-        print(f"\n=== run {i + 1}/{args.repeat} — event {args.event} ===")
-        run = do_run(args.event)
+    sources = ([args.agenda] if args.agenda else [None] * args.repeat)
+    for i, source in enumerate(sources):
+        if source:
+            run = load_run(source, args.event)
+            print(f"\n=== checking {source} — event {run.event_id} ===")
+        else:
+            print(f"\n=== run {i + 1}/{len(sources)} — event {args.event} ===")
+            run = do_run(args.event)
         rows = judge(run)
         runs.append(run)
         all_rows.append(rows)
 
         days = sorted(run.by_day())
-        print(f"  {len(run.sessions)} sessions over days {days} in {run.elapsed:.1f}s "
+        took = f" in {run.elapsed:.1f}s" if run.elapsed else ""
+        print(f"  {len(run.sessions)} sessions over days {days}{took} "
               f"· ebd={run.result.get('ebd_status')} "
               f"· confidence={run.result.get('confidence')}")
         group = None
@@ -892,8 +972,8 @@ def main() -> int:
                 print(f"            {detail}")
 
     print("\n" + "=" * 70)
-    if args.repeat > 1:
-        print(f"across {args.repeat} runs:")
+    if len(runs) > 1:
+        print(f"across {len(runs)} runs:")
         for idx, (group, label, _fn) in enumerate(CASES):
             verdicts = [rows[idx][2] for rows in all_rows]
             fails = sum(1 for v in verdicts if v is False)
@@ -904,7 +984,7 @@ def main() -> int:
                     bits.append(f"{fails} failed")
                 if skips:
                     bits.append(f"{skips} skipped")
-                print(f"  {label}\n      {', '.join(bits)} of {args.repeat}")
+                print(f"  {label}\n      {', '.join(bits)} of {len(runs)}")
         if not any(v is False for rows in all_rows for _g, _l, v, _d in rows):
             print("  every property held on every run")
 
@@ -912,7 +992,7 @@ def main() -> int:
     total_pass = sum(1 for rows in all_rows for _g, _l, v, _d in rows if v is True)
     total_skip = sum(1 for rows in all_rows for _g, _l, v, _d in rows if v is None)
     print(f"\n{total_pass} passed, {total_fail} failed, {total_skip} skipped "
-          f"({len(CASES)} properties x {args.repeat} runs)")
+          f"({len(CASES)} properties x {len(runs)} runs)")
 
     if args.json:
         with open(args.json, "w") as fh:
@@ -924,7 +1004,7 @@ def main() -> int:
         print(f"wrote {args.json}")
 
     if args.html:
-        write_report(args.html, build_report(args.event, runs, all_rows))
+        write_report(args.html, build_report(runs[0].event_id, runs, all_rows))
         print(f"wrote {args.html}")
 
     return 1 if total_fail else 0
