@@ -1,0 +1,451 @@
+<title>Agenda Request Trace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ink:#070B12; --panel:#0C1320; --panel2:#111A2A;
+    --rule:#1C2839; --trace:#3D5878; --traceHot:#F2B138;
+    --text:#DCE7F5; --label:#93A9C6; --dim:#5F7492;
+    --signal:#F2B138; --llm:#6FE3C4; --store:#6FA8DC; --warn:#E8785F; --ok:#8FD694;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ink); color:var(--text); font-family:var(--sans);
+    background-image:
+      linear-gradient(rgba(120,160,220,.045) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(120,160,220,.045) 1px,transparent 1px);
+    background-size:34px 34px;
+  }
+  header{
+    position:sticky; top:0; z-index:20; backdrop-filter:blur(10px);
+    background:linear-gradient(180deg,rgba(7,11,18,.96),rgba(7,11,18,.82));
+    border-bottom:1px solid var(--rule);
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:13px 22px;
+  }
+  h1{
+    font-size:15px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+    margin:0; color:var(--text);
+  }
+  .tag{
+    font-family:var(--mono); font-size:10.5px; color:var(--dim);
+    border:1px solid var(--rule); border-radius:3px; padding:3px 7px; letter-spacing:.04em;
+  }
+  .spacer{flex:1}
+  button{
+    font-family:var(--sans); font-size:11.5px; font-weight:600; letter-spacing:.09em;
+    text-transform:uppercase; color:var(--text); background:var(--panel2);
+    border:1px solid var(--rule); border-radius:4px; padding:7px 13px; cursor:pointer;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  button:hover{border-color:var(--trace); background:#16223a}
+  button.on{border-color:var(--signal); color:var(--signal)}
+  button:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+
+  .wrap{display:grid; grid-template-columns:minmax(0,1fr) 336px; gap:0; align-items:start}
+  @media (max-width:1080px){ .wrap{grid-template-columns:minmax(0,1fr)} .side{position:static !important; border-left:none !important; border-top:1px solid var(--rule)} }
+
+  .stage{overflow-x:auto; padding:20px 22px 70px}
+  svg{display:block; min-width:1180px; width:100%; height:auto}
+
+  .side{
+    position:sticky; top:53px; border-left:1px solid var(--rule);
+    height:calc(100vh - 53px); overflow-y:auto; padding:22px 20px 60px;
+    background:linear-gradient(180deg,rgba(12,19,32,.7),rgba(7,11,18,.7));
+  }
+  .side h2{
+    font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim);
+    margin:0 0 12px; font-weight:600;
+  }
+  #detTitle{font-size:19px; font-weight:700; margin:0 0 4px; line-height:1.22; text-wrap:balance}
+  #detRef{font-family:var(--mono); font-size:11.5px; color:var(--signal); margin:0 0 16px; word-break:break-all}
+  #detBody{font-size:13.4px; line-height:1.66; color:var(--label)}
+  #detBody p{margin:0 0 12px}
+  #detBody code{font-family:var(--mono); font-size:12px; color:var(--text); background:var(--panel2); padding:1px 5px; border-radius:3px}
+  #detBody .kv{display:flex; gap:10px; padding:6px 0; border-top:1px solid var(--rule); font-size:12.4px}
+  #detBody .kv b{color:var(--label); font-weight:500; min-width:104px; flex:none}
+  #detBody .kv span{color:var(--text); font-family:var(--mono); font-size:11.6px}
+  .hint{font-size:12.4px; color:var(--dim); line-height:1.6}
+
+  /* ---- graph primitives ---- */
+  .nodeBox{fill:var(--panel); stroke:var(--rule); stroke-width:1.25; rx:5;
+    transition:stroke .25s, fill .25s}
+  .node:hover .nodeBox{stroke:var(--trace); fill:var(--panel2); cursor:pointer}
+  .node.sel .nodeBox{stroke:var(--signal); fill:#16203a}
+  .node.hot .nodeBox{stroke:var(--signal); fill:#1a2540}
+  .node text{pointer-events:none}
+  .nTitle{font-family:var(--sans); font-size:12.6px; font-weight:600; fill:var(--text)}
+  .nSub{font-family:var(--mono); font-size:10.2px; fill:var(--dim)}
+  .accent{transition:opacity .25s}
+  .node.hot .accent{opacity:1}
+
+  .edge{fill:none; stroke:var(--trace); stroke-width:1.4; opacity:.55; transition:opacity .25s, stroke .25s}
+  .edge.loop{stroke-dasharray:5 4}
+  .edge.hot{stroke:var(--signal); opacity:1}
+  .eLabel{font-family:var(--mono); font-size:9.6px; fill:var(--dim); letter-spacing:.02em}
+
+  .laneRule{stroke:var(--rule); stroke-width:1; stroke-dasharray:2 6}
+  .laneName{font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.19em;
+    text-transform:uppercase; fill:var(--dim)}
+  .laneNum{font-family:var(--mono); font-size:10.5px; fill:#33455e}
+
+  .pulse{fill:var(--signal); filter:url(#glow)}
+  @media (prefers-reduced-motion:reduce){ .pulse{display:none} }
+</style>
+
+<header>
+  <h1>Agenda Request Trace</h1>
+  <span class="tag" id="cap">28 tools · 15 iterations max · claude-sonnet-5</span>
+  <span class="spacer"></span>
+  <button id="play" class="on">▶ Run trace</button>
+  <button id="speed">Pace · Slow</button>
+  <button id="reset">Reset</button>
+</header>
+
+<div class="wrap">
+  <div class="stage"><svg id="g" viewBox="0 0 1180 2260" role="img" aria-label="Flow graph of an agenda request"></svg></div>
+  <aside class="side">
+    <h2>Node detail</h2>
+    <p id="detTitle">Nothing selected</p>
+    <p id="detRef"></p>
+    <div id="detBody"><p class="hint">Click any node to see the function it maps to, the file and line it lives at, and what it actually does. Press <b>Run trace</b> to watch a request travel the graph — timings come from the Tata Motors run in prod at 10:39 today (121.8&nbsp;s end to end).</p></div>
+  </aside>
+</div>
+
+<script>
+const NODES = [
+ // ---------- LANE 1 : INGRESS ----------
+ {id:"client", lane:0, x:40,  y:74,  w:250, h:56, t:"Browser", s:"briefings.briefingiq.com",
+  ref:"POST /process_query",
+  d:"<p>The briefing app posts the user's typed question. Almost all real context rides in headers, not the body.</p>"+
+    "<div class='kv'><b>x-ai-event-id</b><span>B7F8A9E8-…21A28</span></div>"+
+    "<div class='kv'><b>x-ai-category-id</b><span>D06189A1-…7589D427</span></div>"+
+    "<div class='kv'><b>x-ai-scope</b><span>event | category</span></div>"+
+    "<div class='kv'><b>authorization</b><span>Bearer &lt;jwt&gt;</span></div>"},
+
+ {id:"api", lane:0, x:40, y:170, w:250, h:74, t:"FastAPI route", s:"api.py:65 / :196",
+  ref:"api.py:65  ·  api.py:196",
+  d:"<p>Two doors onto the same engine. <code>/process_query</code> returns one JSON blob; <code>/process_query_stream</code> returns Server-Sent Events.</p>"+
+    "<p>Body headers are merged over HTTP headers, so the event id survives either transport. The event id from the header always beats anything the model tries to extract from the text.</p>"+
+    "<p><b>Known gap:</b> the stream endpoint discards <code>handle_query</code>'s return value — it forwards <code>_emit</code> events and closes with <code>event: done</code> carrying <code>{}</code>.</p>"},
+
+ {id:"hq", lane:0, x:40, y:284, w:250, h:56, t:"handle_query", s:"query_processor.py:649",
+  ref:"query_processor.py:649 → :187",
+  d:"<p>Thin wrapper. Loads session history, then delegates to <code>process_query</code> at line 187, passing <code>on_event</code> through so the stream endpoint can watch.</p>"},
+
+ // ---------- LANE 2 : AGENT LOOP ----------
+ {id:"prompt", lane:1, x:40, y:432, w:284, h:90, t:"Assemble system prompt", s:"AI_INSTRUCTIONS + context",
+  ref:"query_processor.py:160",
+  d:"<p>Four things concatenated, in this order:</p>"+
+    "<div class='kv'><b>AI_INSTRUCTIONS</b><span>persona, privacy, format</span></div>"+
+    "<div class='kv'><b>SCHEMA_REFERENCE</b><span>OpenSearch field map</span></div>"+
+    "<div class='kv'><b>time block</b><span>user timezone, today</span></div>"+
+    "<div class='kv'><b>page scope</b><span>CURRENT_EVENT binding</span></div>"+
+    "<p>The scope block is what teaches the model to write <code>CURRENT_EVENT</code> as a placeholder; the backend substitutes the real id before any query runs, so the model never sees or invents one.</p>"},
+
+ {id:"llm", lane:1, x:398, y:432, w:262, h:90, t:"Bedrock converse", s:"claude-sonnet-5", kind:"llm",
+  ref:"query_processor.py:436  ·  bedrock_llm.py:20",
+  d:"<p>The planning call. Tool schemas are translated from OpenAI shape to Bedrock's by <code>openai_tools_to_bedrock</code>, and the prompt prefix is cache-marked so later iterations read it back instead of re-paying.</p>"+
+    "<div class='kv'><b>model</b><span>us.anthropic.claude-sonnet-5</span></div>"+
+    "<div class='kv'><b>prod run</b><span>in 6 240 · out 5 254</span></div>"+
+    "<div class='kv'><b>cache</b><span>write 4 044 → read 4 044</span></div>"},
+
+ {id:"stop", lane:1, x:734, y:436, w:200, h:82, t:"stop_reason?", s:"tool_use / end_turn", kind:"branch",
+  ref:"query_processor.py:494",
+  d:"<p>The fork the whole loop turns on.</p>"+
+    "<p><code>tool_use</code> → collect every requested call, run them, append results, iterate again.</p>"+
+    "<p>anything else → the assistant is done talking; pull the text blocks out and return.</p>"+
+    "<p>Ceiling is <code>MAX_ITERATIONS = 15</code>; hitting it returns an apology rather than looping forever.</p>"},
+
+ {id:"disp", lane:1, x:398, y:592, w:262, h:74, t:"Tool dispatch", s:"tools/handlers.py:586",
+  ref:"tools/handlers.py:586",
+  d:"<p>One long <code>elif</code> ladder keyed on tool name. For <code>generate_agenda</code> it overrides whatever the model passed with the header's event id — line 199 in the prod log: <em>“Prioritizing event_id from header”</em>.</p>"+
+    "<p>Result is wrapped as <code>{\"generate_agenda\": result}</code> and handed back to the model as a tool result — so every field in that dict is visible to it.</p>"},
+
+ {id:"tools", lane:1, x:734, y:592, w:200, h:74, t:"28 tools", s:"tools/definitions.py",
+  ref:"tools/definitions.py",
+  d:"<p>The catalogue the model picks from. Grouped roughly:</p>"+
+    "<div class='kv'><b>read</b><span>search_opensearch, count_opensearch, list_rooms, list_event_activities, get_resource_schedule, get_briefing</span></div>"+
+    "<div class='kv'><b>plan</b><span>generate_agenda, suggest_presenters, find_vacant_slots, research_company</span></div>"+
+    "<div class='kv'><b>write</b><span>block_calendar, push_agenda_to_briefingiq, push_briefing, change_briefing_state, reschedule_briefing</span></div>"+
+    "<div class='kv'><b>render</b><span>generate_report, generate_pdf, format_chart, draft_confirmation_email, draft_catering_sheet</span></div>"},
+
+ // ---------- LANE 3 : GENERATE_AGENDA ----------
+ {id:"ctx", lane:2, x:40, y:790, w:288, h:96, t:"Step 1 · Gather context", s:"_fetch_meeting_context_os",
+  ref:"tools/agenda_generator.py:3030 → :809",
+  d:"<p>One event document out of OpenSearch, unpacked into the six things the model will see. Everything below <code>eventFormData.VISIT_INFO</code> — which is a <em>list</em>, so the first element is taken.</p>"+
+    "<div class='kv'><b>subject</b><span>visitFocus · meetingObjective</span></div>"+
+    "<div class='kv'><b>framing</b><span>salesPlay · pillars · customerIndustry · lineOfBusiness</span></div>"+
+    "<div class='kv'><b>clock</b><span>startTime · endTime · timezone · duration</span></div>"+
+    "<p><code>visitFocus</code> and <code>meetingObjective</code> are the only free-text fields describing what the customer wants. They carry most of the weight.</p>"},
+
+ {id:"os", lane:2, x:392, y:768, w:210, h:64, t:"OpenSearch", s:"events · activities", kind:"store",
+  ref:"opensearch_client.py",
+  d:"<p>Two indices, different shapes — a recurring source of bugs.</p>"+
+    "<div class='kv'><b>events</b><span>flat startTime / endTime</span></div>"+
+    "<div class='kv'><b>activities</b><span>startTime.utcMs</span></div>"+
+    "<div class='kv'><b>customer</b><span>eventFormData.VISIT_INFO.customerName</span></div>"+
+    "<div class='kv'><b>presenter</b><span>activityData.topic_presenter.presenter.presenterName</span></div>"},
+
+ {id:"att", lane:2, x:392, y:850, w:210, h:56, t:"Attendees", s:"EXTERNAL + INTERNAL",
+  ref:"tools/agenda_generator.py:882",
+  d:"<p>Both arrays concatenated and tagged. Per attendee the model sees name, <code>businessTitle</code>, <code>chiefOfficerTitle</code>, and the flags <code>decisionMaker</code>, <code>influencer</code>, <code>isTechnical</code>, <code>isRemote</code>.</p>"+
+    "<p>The remote count is what makes it choose hybrid formats; the C-level count shapes how much executive framing it writes.</p>"},
+
+ {id:"hist", lane:2, x:392, y:924, w:210, h:56, t:"History + peers",
+  s:"previous · similar",
+  ref:"tools/agenda_generator.py:905, :943",
+  d:"<p>Two extra queries. <b>Previous meetings</b> for the same customer, so it avoids repeating topics. <b>Similar briefings</b> matched on industry, focus and pillars — other customers' days used as a shape reference.</p>"+
+    "<p>On the traced run: 0 previous, 5 similar.</p>"},
+
+ {id:"pool", lane:2, x:392, y:998, w:210, h:56, t:"Presenter pool", s:"get_suggested_presenters",
+  ref:"tools/presenter_suggest.py:937",
+  d:"<p>Presenters mined from the activities index, ranked, then sorted free-first against a <em>day-one</em> availability window.</p>"+
+    "<p>That window is deliberately day one only: the ranking collapses it into a single available / unavailable flag, and a briefing-wide window would mark the entire pool unavailable. Real per-day conflict checking happens later, in phase 3.</p>"+
+    "<div class='kv'><b>traced run</b><span>24 presenters, 2 conflicts</span></div>"},
+
+ {id:"vocab", lane:2, x:392, y:1072, w:210, h:56, t:"Topic vocabulary", s:"_available_topics(150)",
+  ref:"tools/presenter_suggest.py:318",
+  d:"<p>The tenant's real topic names. Sessions must be tagged from this list or phase 2 can match nobody.</p>"+
+    "<p>The helper defaults to 40, which silently hid most of a 266-topic vocabulary; it is called with an explicit 150 — about 1 KB of prompt.</p>"},
+
+ {id:"ebd", lane:2, x:40, y:938, w:288, h:96, t:"Step 2 · Briefing document", s:"_resolve_ebd → quality gate",
+  ref:"tools/agenda_generator.py:3064",
+  d:"<p>A resolver chain — database, URL, local file, default — first hit wins. The database arm pulls a blob from Oracle and reads it.</p>"+
+    "<div class='kv'><b>sniff</b><span>magic number first</span></div>"+
+    "<div class='kv'><b>parse</b><span>pdf · pptx · docx · text</span></div>"+
+    "<div class='kv'><b>gate</b><span>≥100 words, &lt;50% noise</span></div>"+
+    "<p>The filename is checked second, because 8 of 42 stored documents carry a <code>.doc</code>/<code>.ppt</code> extension over an OOXML payload.</p>"+
+    "<p><b>Reality check:</b> every document in the table is a title-only placeholder, so the gate rejects all of them and <code>ebd_status</code> comes back <code>unusable</code>.</p>"},
+
+ {id:"oracle", lane:2, x:392, y:1146, w:210, h:56, t:"Oracle", s:"VW_EVENT_DOCUMENT_REPORT", kind:"store",
+  ref:"database.py",
+  d:"<p>Holds the briefing document blob plus filename, content type and size. Keyed on the <em>numeric</em> event id, so the UUID from the header must be resolved first — comparing them directly matched nothing, and every lookup used to return “not found”.</p>"},
+
+ {id:"gen", lane:2, x:40, y:1086, w:288, h:96, t:"Step 3 · Draft the agenda", s:"_generate_agenda_with_llm", kind:"llm",
+  ref:"tools/agenda_generator.py:3103 → :2624",
+  d:"<p>The expensive call, and the one that decides everything downstream. Structure is forced by handing Bedrock the pydantic schema as a <code>toolSpec</code>, so the reply arrives as validated JSON rather than prose to be parsed.</p>"+
+    "<div class='kv'><b>schema</b><span>GeneratedAgenda.model_json_schema()</span></div>"+
+    "<div class='kv'><b>max out</b><span>16 000 tokens</span></div>"+
+    "<div class='kv'><b>traced</b><span>~45 s of the 122 s total</span></div>"+
+    "<p>It writes titles, descriptions, durations, day numbers and topic tags. It does <em>not</em> write clock times — those are stripped and recomputed in phase 3.</p>"},
+
+ {id:"cap", lane:2, x:40, y:1238, w:288, h:74, t:"Enforce session cap", s:"_enforce_session_cap · 24",
+  ref:"tools/agenda_generator.py:2144",
+  d:"<p>Trims to 24 sessions by pulling from the <em>fullest</em> day, from the middle, skipping opens, lunches, closes and pinned sessions.</p>"+
+    "<p>It used to be <code>sessions[:24]</code>. Sessions arrive in day order, so every drop came off the tail — a 4-day Subaru briefing landed 7/8/8/1, with day 4 reduced to a single 15-minute kickoff.</p>"+
+    "<div class='kv'><b>traced run</b><span>25 → 24, leaving 8/8/8</span></div>"},
+
+ {id:"conf", lane:2, x:40, y:1364, w:288, h:64, t:"Score completeness", s:"_compute_confidence",
+  ref:"tools/agenda_generator.py:2915",
+  d:"<p>0–100 over five factors: critical fields (25), attendees (20), briefing document (15), presenter recommendations (10), meeting history.</p>"+
+    "<p>Whatever is absent lands in <code>missing[]</code>, which reaches the model — that is how it can tell the user what the agenda was built without.</p>"},
+
+ {id:"p2", lane:2, x:40, y:1480, w:288, h:74, t:"Phase 2 · Match presenters", s:"_assign_presenters_by_topic",
+  ref:"tools/agenda_generator.py:1448",
+  d:"<p>Each session's topic tag is looked up against the activities index and the best-fitting presenter is assigned — overriding whatever name the drafting model put there.</p>"+
+    "<p>Attendees are explicitly barred from being promoted into presenter slots. <code>TBD</code> is a correct answer when nobody fits.</p>"+
+    "<div class='kv'><b>traced run</b><span>11 topics → 14 sessions reassigned</span></div>"},
+
+ {id:"p3", lane:2, x:40, y:1606, w:288, h:96, t:"Phase 3 · Put it on the clock", s:"_schedule_agenda_sessions",
+  ref:"tools/agenda_generator.py:1863",
+  d:"<p>Lays sessions against the hours actually booked, then checks every presenter against their real calendar — <b>one availability query per briefing day</b>.</p>"+
+    "<p>Per day, not one wide window, because the conflict scan caps at 1 000 hits; widening it drops bookings past the cut and reports a busy presenter as free. Sequential, not concurrent — measured 1.2–2.0 s against 2.2–2.6 s, because the OpenSearch client pool is size 1.</p>"+
+    "<div class='kv'><b>traced run</b><span>day1 0 · day2 9 · day3 4</span></div>"+
+    "<p>Before this, one day-one map was reused for all days. <code>_is_free</code> compares absolute epoch milliseconds, so a day-2 clash could never overlap it — days 2+ were structurally unable to report a conflict.</p>"},
+
+ {id:"prov", lane:2, x:40, y:1754, w:288, h:64, t:"Record the evidence", s:"build_provenance",
+  ref:"tools/agenda_provenance.py",
+  d:"<p>Writes down why each presenter was picked and which days were genuinely checked. <code>checked_days</code> is authoritative — one day's lookup can fail while its neighbours succeed, and a failed day must not inherit their coverage and read as verified.</p>"},
+
+ {id:"valid", lane:2, x:40, y:1854, w:288, h:64, t:"Validate", s:"_validate_agenda_sessions",
+  ref:"tools/agenda_generator.py:1788",
+  d:"<p>Last pass over the finished object: day coverage against expected duration, sessions inside booked hours, no presenter double-booked. Findings go out as <code>validation_issues</code> rather than raising.</p>"},
+
+ // ---------- LANE 4 : EGRESS ----------
+ {id:"result", lane:3, x:392, y:1970, w:250, h:82, t:"Tool result", s:"~15 keys → the model",
+  ref:"tools/agenda_generator.py:3128",
+  d:"<p>Everything the model gets back about its own agenda.</p>"+
+    "<div class='kv'><b>content</b><span>sessions · presenters · strategic_notes</span></div>"+
+    "<div class='kv'><b>quality</b><span>confidence · validation_issues</span></div>"+
+    "<div class='kv'><b>sourcing</b><span>ebd_used · ebd_status · data_source</span></div>"+
+    "<div class='kv'><b>audit</b><span>scheduling · provenance</span></div>"+
+    "<p>Because this is all visible, the assistant can tell the user the agenda was built without a usable briefing document — that note is generated from <code>ebd_status</code>, not hardcoded.</p>"},
+
+ {id:"final", lane:3, x:40, y:1970, w:288, h:82, t:"Synthesis pass", s:"markdown for the user", kind:"llm",
+  ref:"query_processor.py:494",
+  d:"<p>The loop turns once more. With the tool result in hand the model stops calling tools and writes prose — compact bullets, bold metrics, no tables unless asked.</p>"+
+    "<p>On the traced run this is where the line appeared: <em>“This agenda was built from the event record and attendee list without an executive briefing document on file.”</em></p>"},
+
+ {id:"out", lane:3, x:734, y:1970, w:200, h:82, t:"Response", s:"JSON · or SSE done",
+  ref:"api.py:181  ·  api.py:267",
+  d:"<p><code>/process_query</code> returns the whole result object.</p>"+
+    "<p><code>/process_query_stream</code> has been forwarding <code>query_start</code>, <code>llm_start</code>, <code>llm_end</code> and <code>query_end</code> the whole time, then closes with <code>event: done</code> — carrying <code>{}</code>, because the return value is dropped.</p>"+
+    "<div class='kv'><b>traced total</b><span>121.8 s</span></div>"}
+];
+
+const EDGES = [
+ ["client","api"],["api","hq"],["hq","prompt"],
+ ["prompt","llm"],["llm","stop"],
+ ["stop","disp","","tool_use"],["disp","tools"],
+ ["tools","llm","loop","result → iterate (≤15)"],
+ ["disp","ctx","","generate_agenda"],
+ ["ctx","os"],["ctx","att"],["ctx","hist"],["ctx","pool"],["ctx","vocab"],
+ ["ctx","ebd"],["ebd","oracle"],["ebd","gen"],
+ ["gen","cap"],["cap","conf"],["conf","p2"],["p2","p3"],["p3","prov"],["prov","valid"],
+ ["valid","result"],["result","final","loop","tool result → synthesis"],["final","out"],
+ ["stop","final","loop","end_turn"]
+];
+
+const LANES = [
+ {y:44,  n:"01", t:"Ingress"},
+ {y:400, n:"02", t:"Agent loop"},
+ {y:730, n:"03", t:"generate_agenda pipeline"},
+ {y:1938,n:"04", t:"Egress"}
+];
+
+const TRACE = ["client","api","hq","prompt","llm","stop","disp","ctx","os","att","hist","pool","vocab",
+               "ebd","oracle","gen","cap","conf","p2","p3","prov","valid","result","final","out"];
+
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("g");
+const byId=Object.fromEntries(NODES.map(n=>[n.id,n]));
+const el=(n,a={})=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+// defs
+const defs=el("defs");
+defs.innerHTML=`<filter id="glow" x="-140%" y="-140%" width="380%" height="380%">
+  <feGaussianBlur stdDeviation="4.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#3D5878"/></marker>
+<marker id="arH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#F2B138"/></marker>`;
+svg.appendChild(defs);
+
+// lanes
+LANES.forEach(l=>{
+  svg.appendChild(el("line",{x1:0,y1:l.y,x2:1180,y2:l.y,class:"laneRule"}));
+  const num=el("text",{x:1140,y:l.y-9,class:"laneNum","text-anchor":"end"}); num.textContent=l.n;
+  const nm=el("text",{x:40,y:l.y-9,class:"laneName"}); nm.textContent=l.t;
+  svg.appendChild(nm); svg.appendChild(num);
+});
+
+// ---- edge routing -------------------------------------------------------
+function anchors(a,b){
+  const ac={x:a.x+a.w/2,y:a.y+a.h/2}, bc={x:b.x+b.w/2,y:b.y+b.h/2};
+  const dx=bc.x-ac.x, dy=bc.y-ac.y;
+  if(Math.abs(dy)>Math.abs(dx)*0.75){
+    return dy>0 ? [{x:ac.x,y:a.y+a.h},{x:bc.x,y:b.y},"v"] : [{x:ac.x,y:a.y},{x:bc.x,y:b.y+b.h},"v"];
+  }
+  return dx>0 ? [{x:a.x+a.w,y:ac.y},{x:b.x,y:bc.y},"h"] : [{x:a.x,y:ac.y},{x:b.x+b.w,y:bc.y},"h"];
+}
+function pathFor(a,b,loop){
+  const [p,q,dir]=anchors(a,b);
+  if(loop){
+    // arc wide of the boxes so return edges never trace over forward ones
+    const off = dir==="h" ? 0 : (p.x>600?150:-150);
+    const mx=(p.x+q.x)/2+off, my=(p.y+q.y)/2;
+    return `M${p.x},${p.y} Q${mx},${my} ${q.x},${q.y}`;
+  }
+  if(dir==="v"){const m=(p.y+q.y)/2; return `M${p.x},${p.y} C${p.x},${m} ${q.x},${m} ${q.x},${q.y}`;}
+  const m=(p.x+q.x)/2; return `M${p.x},${p.y} C${m},${p.y} ${m},${q.y} ${q.x},${q.y}`;
+}
+
+const edgeEls={};
+EDGES.forEach(([f,t,kind,label])=>{
+  const a=byId[f],b=byId[t]; if(!a||!b)return;
+  const d=pathFor(a,b,kind==="loop");
+  const p=el("path",{d,class:"edge"+(kind==="loop"?" loop":""),"marker-end":"url(#ar)"});
+  svg.appendChild(p);
+  (edgeEls[f+">"+t]=p);
+  if(label){
+    const tmp=el("path",{d}); svg.appendChild(tmp);
+    const mid=tmp.getPointAtLength(tmp.getTotalLength()*0.5); tmp.remove();
+    const bg=el("rect",{x:mid.x-label.length*2.7-5,y:mid.y-8,width:label.length*5.4+10,height:14,rx:2,fill:"#070B12"});
+    const tx=el("text",{x:mid.x,y:mid.y+2.5,class:"eLabel","text-anchor":"middle"}); tx.textContent=label;
+    svg.appendChild(bg); svg.appendChild(tx);
+  }
+});
+
+// ---- nodes --------------------------------------------------------------
+const nodeEls={};
+NODES.forEach(n=>{
+  const g=el("g",{class:"node",tabindex:"0",role:"button","aria-label":n.t});
+  const accent={llm:"var(--llm)",store:"var(--store)",branch:"var(--warn)"}[n.kind]||"var(--signal)";
+  g.appendChild(el("rect",{class:"nodeBox",x:n.x,y:n.y,width:n.w,height:n.h}));
+  g.appendChild(el("rect",{class:"accent",x:n.x,y:n.y,width:3,height:n.h,fill:accent,opacity:n.kind?".95":".3",rx:1.5}));
+  const t=el("text",{x:n.x+16,y:n.y+(n.s?25:n.h/2+4),class:"nTitle"}); t.textContent=n.t; g.appendChild(t);
+  if(n.s){const s=el("text",{x:n.x+16,y:n.y+42,class:"nSub"}); s.textContent=n.s; g.appendChild(s);}
+  svg.appendChild(g); nodeEls[n.id]=g;
+  const open=()=>select(n.id);
+  g.addEventListener("click",open);
+  g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
+});
+
+// ---- selection ----------------------------------------------------------
+let sel=null;
+function select(id){
+  if(sel)nodeEls[sel].classList.remove("sel");
+  sel=id; nodeEls[id].classList.add("sel");
+  const n=byId[id];
+  document.getElementById("detTitle").textContent=n.t;
+  document.getElementById("detRef").textContent=n.ref||"";
+  document.getElementById("detBody").innerHTML=n.d||"";
+}
+
+// ---- trace animation ----------------------------------------------------
+let timer=null,step=0,running=false;
+// Higher = slower. The trace is meant to be read while it runs, not raced
+// through, so even the fastest setting dwells long enough to finish a node's
+// subtitle before moving on.
+const PACES=[{k:1,n:"Slow"},{k:1.7,n:"Slower"},{k:2.8,n:"Slowest"}];
+let paceIx=0, PACE=PACES[0].k;
+const pulse=el("circle",{r:4.5,class:"pulse",opacity:0}); svg.appendChild(pulse);
+const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function clearHot(){
+  Object.values(nodeEls).forEach(g=>g.classList.remove("hot"));
+  Object.values(edgeEls).forEach(p=>{p.classList.remove("hot");p.setAttribute("marker-end","url(#ar)");});
+}
+function travel(fromId,toId,ms,done){
+  const p=edgeEls[fromId+">"+toId];
+  if(!p||reduce){done();return;}
+  p.classList.add("hot"); p.setAttribute("marker-end","url(#arH)");
+  const len=p.getTotalLength(); const t0=performance.now();
+  pulse.setAttribute("opacity","1");
+  (function frame(now){
+    const k=Math.min(1,(now-t0)/ms);
+    const pt=p.getPointAtLength(len*k);
+    pulse.setAttribute("cx",pt.x); pulse.setAttribute("cy",pt.y);
+    if(k<1&&running)requestAnimationFrame(frame);
+    else{pulse.setAttribute("opacity","0");done();}
+  })(t0);
+}
+function advance(){
+  if(!running)return;
+  if(step>=TRACE.length){stop();return;}
+  const id=TRACE[step], prev=step>0?TRACE[step-1]:null;
+  const go=()=>{
+    nodeEls[id].classList.add("hot"); select(id);
+    const el2=nodeEls[id].getBoundingClientRect();
+    if(el2.top<70||el2.bottom>innerHeight) nodeEls[id].scrollIntoView({block:"center",behavior:"smooth"});
+    // The drafting call is ~45 s of the real 122 s, so it holds proportionally
+    // longer here too rather than ticking past like any other node.
+    step++; timer=setTimeout(advance, (id==="gen"?3400:1600)*PACE);
+  };
+  if(prev&&edgeEls[prev+">"+id]) travel(prev,id,950*PACE,go); else go();
+}
+function start(){running=true;step=0;clearHot();document.getElementById("play").textContent="⏸ Pause";advance();}
+function stop(){running=false;clearTimeout(timer);pulse.setAttribute("opacity","0");document.getElementById("play").textContent="▶ Run trace";}
+document.getElementById("play").addEventListener("click",()=>running?stop():start());
+document.getElementById("reset").addEventListener("click",()=>{stop();clearHot();step=0;});
+document.getElementById("speed").addEventListener("click",e=>{
+  paceIx=(paceIx+1)%PACES.length; PACE=PACES[paceIx].k;
+  e.currentTarget.textContent="Pace · "+PACES[paceIx].n;
+  e.currentTarget.classList.toggle("on",paceIx>0);
+});
+select("client");
+</script>

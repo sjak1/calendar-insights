@@ -3,7 +3,12 @@
 Test report flow: format_report with mock data, then generate_report with real DSL if OpenSearch is available.
 """
 import json
-from tools.report import format_report, build_report_rows, generate_report
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tools.report import format_report, build_report_rows, generate_report  # noqa: E402
 
 def test_format_report():
     """Test formatter with mock rows (no OpenSearch)."""
