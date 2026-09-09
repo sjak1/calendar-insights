@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda Verification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#0B0E14; --panel:#141922; --panel-2:#1B2230; --rule:#232B39;
+  --ink:#C6CEDA; --ink-dim:#7C8798; --ink-bright:#EDF1F6;
+  --pass:#4ED8A0; --fail:#FF6B7A; --skip:#FFB454; --claim:#5AC8FA; --model:#BC8CFF;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+header{padding:18px 22px;border-bottom:1px solid var(--rule);position:sticky;top:0;
+       background:var(--ground);z-index:20}
+.top{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+h1{margin:0;font-size:15px;font-weight:600;color:var(--ink-bright);white-space:nowrap}
+.searchwrap{position:relative;flex:1;min-width:260px;max-width:460px}
+input[type=search]{width:100%;background:var(--panel);border:1px solid var(--rule);
+  border-radius:7px;color:var(--ink);font-family:var(--mono);font-size:12.5px;padding:8px 12px}
+input[type=search]:focus{outline:none;border-color:var(--claim)}
+.drop{position:absolute;left:0;right:0;top:calc(100% + 5px);background:var(--panel);
+  border:1px solid var(--rule);border-radius:8px;max-height:320px;overflow:auto;z-index:30;
+  box-shadow:0 12px 34px rgba(0,0,0,.55)}
+.drop button{display:block;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--rule);color:var(--ink);padding:9px 12px;cursor:pointer;
+  font-family:var(--sans);font-size:13px}
+.drop button:last-child{border-bottom:0}
+.drop button:hover,.drop button:focus{background:var(--panel-2);color:var(--ink-bright);outline:none}
+.drop .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:2px}
+.status{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);
+  display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.status b{color:var(--ink);font-weight:500}
+.pill{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:99px;
+  border:1px solid currentColor}
+.pill.p{color:var(--pass)} .pill.f{color:var(--fail)} .pill.s{color:var(--skip)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--claim);
+  animation:pulse 1.1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:0;
+  min-height:calc(100vh - 74px)}
+@media(max-width:960px){main{grid-template-columns:minmax(0,1fr)}}
+.pane{padding:18px 22px 60px}
+.pane + .pane{border-left:1px solid var(--rule);background:#0D111A}
+@media(max-width:960px){.pane + .pane{border-left:0;border-top:1px solid var(--rule)}}
+.panehead{display:flex;align-items:baseline;gap:9px;margin-bottom:14px}
+.panehead h2{margin:0;font-size:11px;font-family:var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-dim);font-weight:500}
+.panehead .who{font-size:11px;color:var(--ink-dim)}
+.panehead .who.m{color:var(--model)} .panehead .who.v{color:var(--claim)}
+.day{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-dim);margin:16px 0 7px;padding-bottom:5px;border-bottom:1px solid var(--rule)}
+.sess{display:grid;grid-template-columns:88px minmax(0,1fr);gap:11px;padding:8px 0;
+  border-bottom:1px solid rgba(35,43,57,.55)}
+.sess .t{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding-top:2px}
+.sess .ti{color:var(--ink-bright);font-size:13px}
+.sess .pr{font-family:var(--mono);font-size:11px;color:var(--model);margin-top:2px}
+.sess .tp{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:2px}
+.chk{border:1px solid var(--rule);border-radius:9px;background:var(--panel);
+  margin-bottom:7px;overflow:hidden;animation:in .28s ease both}
+@keyframes in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.chk.fail{border-color:color-mix(in srgb, var(--fail) 48%, var(--rule))}
+.chk summary{padding:10px 13px;cursor:pointer;display:flex;gap:9px;align-items:flex-start;
+  list-style:none}
+.chk summary::-webkit-details-marker{display:none}
+.chk summary:focus-visible{outline:2px solid var(--claim);outline-offset:-2px}
+.vt{font-family:var(--mono);font-size:9px;letter-spacing:.08em;font-weight:600;
+  padding:2px 6px;border-radius:4px;flex:none;margin-top:1px}
+.vt.PASS{color:var(--pass);background:color-mix(in srgb,var(--pass) 13%,transparent)}
+.vt.FAIL{color:var(--fail);background:color-mix(in srgb,var(--fail) 13%,transparent)}
+.vt.SKIP{color:var(--skip);background:color-mix(in srgb,var(--skip) 13%,transparent)}
+.chk .lb{color:var(--ink-bright);font-size:12.5px}
+.chk .dt{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:3px;
+  word-break:break-word}
+.chk.fail .dt{color:color-mix(in srgb,var(--fail) 70%,var(--ink))}
+.ev{padding:0 13px 12px 13px;border-top:1px solid var(--rule);margin-top:2px;padding-top:11px}
+.ev .row{margin-bottom:10px}
+.ev .row:last-child{margin-bottom:0}
+.ev .k{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-dim);margin-bottom:3px}
+.ev pre{margin:0 0 3px;font-family:var(--mono);font-size:10.5px;color:var(--claim);
+  white-space:pre-wrap;word-break:break-word}
+.ev .o{font-family:var(--mono);font-size:10.5px;color:var(--ink);white-space:pre-wrap;
+  word-break:break-word}
+.ev .o.busy{color:var(--fail)}
+.ev .n{font-size:10.5px;color:var(--ink-dim);margin-top:2px}
+.ev .none{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);font-style:italic}
+.grp{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-dim);margin:16px 0 7px}
+.empty{color:var(--ink-dim);font-size:13px;padding:26px 0;max-width:44ch}
+.err{color:var(--fail);font-family:var(--mono);font-size:12px;padding:12px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Agenda verification</h1>
+    <div class="searchwrap">
+      <input type="search" id="q" placeholder="company or event name…" autocomplete="off">
+      <div id="drop" class="drop" hidden></div>
+    </div>
+    <div class="status" id="status"><span>idle</span></div>
+  </div>
+</header>
+
+<main>
+  <section class="pane">
+    <div class="panehead"><h2>Agenda</h2><span class="who m">what the model wrote</span></div>
+    <div id="agenda"><p class="empty">Search for a company above and pick an event.
+      The agenda appears here as soon as the model returns it.</p></div>
+  </section>
+  <section class="pane">
+    <div class="panehead"><h2>Verification</h2><span class="who v">deterministic, no model</span></div>
+    <div id="checks"><p class="empty">Each property reports here as it is decided, with the
+      call that settled it. Open a row to see the call and what it returned.</p></div>
+  </section>
+</main>
+
+<script>
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const mark = v => v === true ? 'PASS' : (v === null ? 'SKIP' : 'FAIL');
+const $ = id => document.getElementById(id);
+
+/* ---- event search ------------------------------------------------------ */
+let timer = null;
+$('q').addEventListener('input', () => {
+  clearTimeout(timer);
+  const term = $('q').value.trim();
+  if (term.length < 2) { $('drop').hidden = true; return; }
+  timer = setTimeout(() => search(term), 260);
+});
+$('q').addEventListener('keydown', e => { if (e.key === 'Escape') $('drop').hidden = true; });
+document.addEventListener('click', e => {
+  if (!e.target.closest('.searchwrap')) $('drop').hidden = true;
+});
+
+async function search(term){
+  try {
+    const r = await fetch('/events?q=' + encodeURIComponent(term));
+    const d = await r.json();
+    const list = d.events || [];
+    if (!list.length) {
+      $('drop').innerHTML = '<button disabled>' +
+        esc(d.error ? 'lookup failed: ' + d.error : 'nothing matches') + '</button>';
+    } else {
+      $('drop').innerHTML = list.map(e =>
+        '<button data-id="' + esc(e.event_id) + '">'
+        + esc(e.customer || e.name || 'untitled')
+        + '<div class="sub">' + esc(e.name || '') + ' · ' + e.days + ' day'
+        + (e.days === 1 ? '' : 's') + ' · ' + esc(e.event_id) + '</div></button>').join('');
+    }
+    $('drop').hidden = false;
+  } catch (err) {
+    $('drop').innerHTML = '<button disabled>' + esc(String(err)) + '</button>';
+    $('drop').hidden = false;
+  }
+}
+
+$('drop').addEventListener('click', e => {
+  const b = e.target.closest('button[data-id]');
+  if (b) { $('drop').hidden = true; run(b.dataset.id); }
+});
+
+/* ---- run + stream ------------------------------------------------------ */
+let busy = false;
+async function run(eventId){
+  if (busy) return;
+  busy = true;
+  $('agenda').innerHTML = '';
+  $('checks').innerHTML = '';
+  const counts = {PASS:0, FAIL:0, SKIP:0};
+  let group = null;
+  setStatus('<span class="dot"></span><span>resolving <b>' + esc(eventId) + '</b></span>');
+
+  try {
+    const resp = await fetch('/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event_id: eventId}),
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const frames = buf.split('\n\n');
+      buf = frames.pop();
+      for (const frame of frames) {
+        const line = frame.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        handle(ev);
+      }
+    }
+  } catch (err) {
+    $('checks').insertAdjacentHTML('beforeend', '<p class="err">' + esc(String(err)) + '</p>');
+  }
+  busy = false;
+
+  function setStatus(html){ $('status').innerHTML = html; }
+
+  function handle(ev){
+    if (ev.stage === 'generating') {
+      setStatus('<span class="dot"></span><span>generating the agenda — this takes a minute</span>');
+    } else if (ev.stage === 'agenda') {
+      renderAgenda(ev);
+      setStatus('<span class="dot"></span><span>agenda in <b>' + ev.elapsed
+        + 's</b></span><span>fetching source data</span>');
+    } else if (ev.stage === 'truth') {
+      setStatus('<span class="dot"></span><span>checking against source data</span>');
+    } else if (ev.stage === 'check') {
+      const m = mark(ev.verdict); counts[m]++;
+      if (ev.group !== group) {
+        group = ev.group;
+        $('checks').insertAdjacentHTML('beforeend', '<div class="grp">' + esc(group) + '</div>');
+      }
+      $('checks').insertAdjacentHTML('beforeend', checkHtml(ev, m));
+      setStatus(tally() + '<span class="dot"></span>');
+    } else if (ev.stage === 'done') {
+      setStatus(tally());
+    } else if (ev.stage === 'error') {
+      setStatus('<span class="pill f">error</span>');
+      $('checks').insertAdjacentHTML('beforeend', '<p class="err">' + esc(ev.message) + '</p>');
+    }
+  }
+
+  function tally(){
+    return '<span class="pill p">' + counts.PASS + ' passed</span>'
+         + '<span class="pill f">' + counts.FAIL + ' failed</span>'
+         + '<span class="pill s">' + counts.SKIP + ' skipped</span>';
+  }
+}
+
+function checkHtml(ev, m){
+  const rows = (ev.evidence || []).length
+    ? ev.evidence.map(e =>
+        '<div class="row"><div class="k">call</div><pre>' + esc(e.call) + '</pre>'
+        + '<div class="o' + (/^BUSY/.test(e.output) ? ' busy' : '') + '">'
+        + esc(e.output) + '</div>'
+        + (e.note ? '<div class="n">' + esc(e.note) + '</div>' : '') + '</div>').join('')
+    : '<div class="none">no external call — checked against the agenda itself</div>';
+  return '<details class="chk ' + (ev.verdict === false ? 'fail' : '') + '"'
+       + (ev.verdict === false ? ' open' : '') + '>'
+       + '<summary><span class="vt ' + m + '">' + m + '</span><span>'
+       + '<span class="lb">' + esc(ev.label) + '</span>'
+       + '<div class="dt">' + esc(ev.detail) + '</div></span></summary>'
+       + '<div class="ev">' + rows + '</div></details>';
+}
+
+function renderAgenda(ev){
+  if (!ev.success) {
+    $('agenda').innerHTML = '<p class="err">generation failed: ' + esc(ev.error || 'unknown')
+      + '</p>';
+    return;
+  }
+  const days = {};
+  (ev.sessions || []).forEach(s => { (days[s.day || 1] = days[s.day || 1] || []).push(s); });
+  let html = '<div class="status" style="margin-bottom:6px">'
+    + '<span><b>' + esc(ev.company || '') + '</b></span>'
+    + '<span>' + (ev.sessions || []).length + ' sessions</span>'
+    + '<span>' + ev.elapsed + 's</span>'
+    + '<span>ebd ' + esc(ev.ebd_status) + '</span></div>';
+  Object.keys(days).sort((a, b) => a - b).forEach(d => {
+    html += '<div class="day">day ' + esc(d) + ' · ' + days[d].length + ' sessions</div>';
+    days[d].forEach(s => {
+      html += '<div class="sess"><div class="t">' + esc(s.time_slot || '—') + '</div><div>'
+        + '<div class="ti">' + esc(s.title) + '</div>'
+        + '<div class="pr">' + esc(s.presenter || '—') + '</div>'
+        + (s.topic ? '<div class="tp">' + esc(s.topic) + '</div>' : '')
+        + '</div></div>';
+    });
+  });
+  $('agenda').innerHTML = html;
+}
+</script>
+</body>
+</html>
