@@ -585,10 +585,21 @@ tools = [
                         "properties": {
                             "title": {"type": "string", "description": "Session title."},
                             "time_slot": {"type": "string", "description": "Time range e.g. '10:00 AM - 10:45 AM'."},
+                            "day": {
+                                "type": "integer",
+                                "description": (
+                                    "Which day of the briefing this session belongs to (1-based), "
+                                    "copied from the generate_agenda session. Omit for single-day events. "
+                                    "Days are assumed consecutive from event_date."
+                                ),
+                            },
                         },
                         "required": ["title", "time_slot"],
                     },
-                    "description": "List of agenda sessions from generate_agenda output.",
+                    "description": (
+                        "List of agenda sessions from generate_agenda output. "
+                        "Pass every day's sessions in one call and keep each session's day number."
+                    ),
                 },
                 "resource_id": {
                     "type": "string",

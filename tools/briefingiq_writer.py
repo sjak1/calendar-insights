@@ -222,6 +222,43 @@ def _parse_time_slot(time_slot: str, event_date: str) -> Tuple[str, str, int]:
     return start_iso, end_iso, duration
 
 
+def _date_for_day(
+    event_date: str,
+    day: Any,
+    day_dates: Optional[Dict[Any, str]] = None,
+) -> str:
+    """
+    Resolve which calendar date a session belongs to.
+
+    Sessions carry a 1-based `day` from the agenda generator. Without this the
+    whole agenda lands on `event_date` and a multi-day briefing stacks every
+    day on top of day one.
+
+    `day_dates` wins when the caller knows the real dates (an event that skips
+    a weekend); otherwise days are assumed consecutive from `event_date`.
+    """
+    try:
+        day_num = int(day)
+    except (TypeError, ValueError):
+        day_num = 1
+    if day_num < 1:
+        day_num = 1
+
+    if day_dates:
+        explicit = day_dates.get(day_num) or day_dates.get(str(day_num))
+        if explicit:
+            return str(explicit)[:10]
+
+    if day_num == 1:
+        return event_date
+    try:
+        start = datetime.strptime(event_date[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        logger.warning(f"_date_for_day: unparseable event_date {event_date!r}, using it as-is")
+        return event_date
+    return (start + timedelta(days=day_num - 1)).strftime("%Y-%m-%d")
+
+
 # ── Core steps ───────────────────────────────────────────────────────────────
 
 def _create_activity(headers: Dict, event_id: str, event_date: str, start_iso: str, end_iso: str, duration: int, resource_id: Optional[str] = None) -> Optional[str]:
@@ -334,6 +371,7 @@ def push_agenda_to_app(
     presenter_emails: Optional[List[str]] = None,
     resource_id: Optional[str] = None,
     schedule_headers: Optional[Dict] = None,
+    day_dates: Optional[Dict[Any, str]] = None,
 ) -> Dict[str, Any]:
     """
     Push AI-generated agenda sessions into the BriefingIQ app.
@@ -342,11 +380,15 @@ def push_agenda_to_app(
         event_id:        BriefingIQ event UUID
         event_date:      Date string "YYYY-MM-DD" (start date of event)
         sessions:        List of session dicts from generate_agenda output
-                         Each must have 'time_slot' and 'title'.
+                         Each must have 'time_slot' and 'title'. An optional
+                         1-based 'day' places the session on a later date;
+                         missing means day 1.
         token:           Bearer token from request headers
         presenter_emails: Optional list of presenter emails to add to every session
         resource_id:     Optional room resourceId to assign activities to (shows in calendar)
         schedule_headers: Incoming request headers (used for tenant/category context)
+        day_dates:       Optional {day_number: "YYYY-MM-DD"} override for events whose
+                         days are not consecutive. Defaults to event_date + (day - 1).
 
     Returns:
         Dict with success count, failures, and created activity IDs
@@ -380,7 +422,8 @@ def push_agenda_to_app(
     if resource_id and existing_bookings:
         for i, session in enumerate(sessions):
             time_slot = session.get("time_slot", "")
-            start_iso, end_iso, _ = _parse_time_slot(time_slot, event_date)
+            session_date = _date_for_day(event_date, session.get("day"), day_dates)
+            start_iso, end_iso, _ = _parse_time_slot(time_slot, session_date)
             s_ms = _iso_to_ms(start_iso)
             e_ms = _iso_to_ms(end_iso)
             for bk in existing_bookings:
@@ -388,6 +431,7 @@ def push_agenda_to_app(
                     conflicts.append({
                         "session": session.get("title") or session.get("name") or f"Session {i+1}",
                         "session_slot": time_slot,
+                        "session_date": session_date,
                         "conflicting_booking": bk.get("comments") or bk.get("kind", "BLOCKED"),
                         "conflicting_kind": bk.get("kind", "BLOCKED"),
                         "conflicting_start_utc_ms": bk["start_utc_ms"],
@@ -413,13 +457,14 @@ def push_agenda_to_app(
         title = session.get("title") or session.get("name") or f"Session {i+1}"
         time_slot = session.get("time_slot", "")
 
-        # Parse time
-        start_iso, end_iso, duration = _parse_time_slot(time_slot, event_date)
+        # Parse time against this session's own day, not the event start date
+        session_date = _date_for_day(event_date, session.get("day"), day_dates)
+        start_iso, end_iso, duration = _parse_time_slot(time_slot, session_date)
 
         # Step 1: create activity (with optional room assignment)
-        activity_id = _create_activity(headers, event_id, event_date, start_iso, end_iso, duration, resource_id=resource_id)
+        activity_id = _create_activity(headers, event_id, session_date, start_iso, end_iso, duration, resource_id=resource_id)
         if not activity_id:
-            failed.append({"session": title, "reason": "failed to create activity"})
+            failed.append({"session": title, "date": session_date, "reason": "failed to create activity"})
             continue
 
         # Step 2: match or create topic, then set it
@@ -440,18 +485,26 @@ def push_agenda_to_app(
             "activity_id": activity_id,
             "title": title,
             "time_slot": time_slot,
+            "date": session_date,
             "matched_topic": matched_topic["name"] if matched_topic else None,
             "resource_id": resource_id,
         })
 
     result = {
-        "success": True,
+        # A push that dropped sessions is not a success. Callers branch on this.
+        "success": not failed,
         "event_id": event_id,
         "created_count": len(created),
         "failed_count": len(failed),
+        "dates": sorted({c["date"] for c in created}),
         "created": created,
         "failed": failed,
     }
+    if failed:
+        result["status"] = "partial" if created else "failed"
+        result["message"] = (
+            f"{len(failed)} of {len(created) + len(failed)} session(s) could not be created."
+        )
     logger.info(f"push_agenda_to_app: {len(created)} created, {len(failed)} failed for event {event_id}")
     return result
 
