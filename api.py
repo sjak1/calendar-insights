@@ -2,11 +2,12 @@ import asyncio
 import json
 import queue
 import re
+import requests
 import threading
 import time
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from query_processor import handle_query
 from pydantic import BaseModel
 import os
@@ -277,3 +278,95 @@ async def process_query_stream(payload: QueryPayload, request: Request):
             "Connection": "keep-alive",
         },
     )
+
+
+class LiveSessionPayload(BaseModel):
+    sdp: str
+
+
+# Instructions for GPT-Live. It runs the conversation only; every question about
+# real calendar data is handed to /process_query, which is the same pipeline the
+# text chat uses.
+LIVE_INSTRUCTIONS = """
+You are the voice of BriefingIQ, a calendar and events assistant.
+
+## Voice conversation context
+Transcripts contain mistakes, unfinished phrases, and later corrections. Use the
+latest context. If a needed detail is still unclear, ask for that detail instead
+of guessing.
+
+## What you know
+Nothing about events, agendas, presenters, locations, schedules or bookings. You
+have no calendar data of your own. Never invent a name, date, time or location.
+
+## Delegation policy
+The backend can query the live events database and can schedule meetings and
+generate reports.
+Delegate when the user asks about anything in the calendar: agendas, sessions,
+presenters, locations, timings, availability, bookings, summaries, or reports.
+Delegate before answering. Do not guess the result while waiting.
+Do not delegate greetings, small talk, confirmations, or requests to repeat or
+rephrase something you already said.
+
+## While work is running
+Say briefly that you are looking it up, then stay quiet and wait. Do not fill the
+silence with invented detail. When the result arrives, give it conversationally
+and keep it short enough to listen to: lead with the answer, then a couple of
+supporting details. Offer more rather than reading a long list aloud.
+
+## Interruption
+Stop speaking when the user interrupts, and listen.
+""".strip()
+
+
+@app.post("/live/session")
+async def create_live_session(payload: LiveSessionPayload):
+    """Exchange a browser SDP offer for a GPT-Live session.
+
+    The API key stays here; the browser only ever receives an SDP answer. Uses a
+    plain HTTPS call rather than the OpenAI SDK because the pinned openai==2.26.0
+    predates the Live API and the rest of the project depends on that version.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return JSONResponse(
+            status_code=503, content={"error": "Set OPENAI_API_KEY in the environment"}
+        )
+    if not payload.sdp.strip():
+        return JSONResponse(
+            status_code=400, content={"error": "An SDP offer is required"}
+        )
+
+    try:
+        upstream = requests.post(
+            "https://api.openai.com/v1/live/sessions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "session": {
+                    "model": "gpt-live-1",
+                    "instructions": LIVE_INSTRUCTIONS,
+                    # Our own backend answers; OpenAI just runs the conversation.
+                    "delegation": {"type": "client"},
+                },
+                "transport": {"type": "webrtc", "sdp": payload.sdp},
+            },
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        logger.error(f"Live session creation failed: {e}")
+        return JSONResponse(status_code=502, content={"error": "Upstream unreachable"})
+
+    if upstream.status_code != 201:
+        logger.error(
+            f"Live session creation failed: {upstream.status_code} {upstream.text[:300]}"
+        )
+        return JSONResponse(
+            status_code=upstream.status_code,
+            content={"error": "Live session creation failed"},
+        )
+
+    logger.info("Live session created")
+    return JSONResponse(status_code=201, content=upstream.json())

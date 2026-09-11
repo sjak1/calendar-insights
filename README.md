@@ -44,8 +44,9 @@ runnable locally as a FastAPI service.
 
 Key modules:
 
-- [api.py](api.py) — FastAPI app with `/process_query` (JSON) and
-  `/process_query_stream` (SSE waterfall of LLM + tool events).
+- [api.py](api.py) — FastAPI app with `/process_query` (JSON),
+  `/process_query_stream` (SSE waterfall of LLM + tool events), and
+  `/live/session` (GPT-Live voice, see [Voice UI](#voice-ui-local)).
 - [query_processor.py](query_processor.py) — agent loop, Bedrock/OpenAI dispatch,
   prompt caching, parallel tool execution.
 - [bedrock_llm.py](bedrock_llm.py) — Bedrock Converse wrapper, OpenAI-tools →
@@ -121,6 +122,40 @@ curl -X POST http://localhost:8000/process_query \
 Open `http://localhost:8000/` for the bundled chat UI (served from
 [static/](static/)). It also renders a live latency waterfall via the SSE
 endpoint.
+
+## Voice UI (local)
+
+`http://localhost:8000/static/voice.html` is a speak-to-it front end for the
+same agent. It needs `OPENAI_API_KEY` in `.env` (a project key with GPT-Live
+access) and a browser on localhost or HTTPS.
+
+```
+  🎤 ──▶ browser ◀── WebRTC audio ──▶ GPT-Live 1     (conversation only,
+          │                            │              no calendar data)
+          │  session.delegation.created│
+          ▼                            │
+     POST /process_query ──▶ handle_query()  (Bedrock + OpenSearch, unchanged)
+          │                            ▲
+          └── session.commentary.append ┘   (spoken answer)
+```
+
+GPT-Live runs the conversation and knows nothing about events. Anything about
+agendas, presenters, locations or timings is delegated to the browser, which
+calls `/process_query` — the same endpoint the text chat uses, with the same
+`session_id` from `localStorage`, so voice and text share one conversation.
+
+Notes:
+
+- Session creation is a plain `requests` POST to `/v1/live/sessions`; the pinned
+  `openai==2.26.0` predates the Live API and is not used for this.
+- Voice costs $0.05/min on top of normal Bedrock query cost. A WebRTC session
+  bills 15s at creation, credited against the running session.
+- `handle_query()` takes ~20s, so the page sends `session.thinking.append`
+  progress at 6s and 14s to stop the model inventing an answer while it waits.
+  Switching the delegation handler to `/process_query_stream` would cut the
+  time-to-first-word; it currently waits for the whole answer.
+- Replies are trimmed to ~1500 chars before being spoken (appends cap at 500
+  tokens, and a long report is unlistenable anyway).
 
 ## Configuration
 
