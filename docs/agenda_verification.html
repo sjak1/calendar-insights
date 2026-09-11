@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda Verification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --ground:#0B0E14; --panel:#141922; --panel-2:#1B2230; --rule:#232B39;
+  --ink:#C6CEDA; --ink-dim:#7C8798; --ink-bright:#EDF1F6;
+  --pass:#4ED8A0; --fail:#FF6B7A; --skip:#FFB454; --claim:#5AC8FA;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+header{padding:22px 24px 18px;border-bottom:1px solid var(--rule)}
+h1{margin:0 0 8px;font-size:17px;font-weight:600;color:var(--ink-bright);letter-spacing:-.01em}
+.meta{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);
+      display:flex;gap:18px;flex-wrap:wrap}
+.meta b{color:var(--ink);font-weight:500}
+.tally{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.pill{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:99px;
+      border:1px solid currentColor}
+.pill.p{color:var(--pass)} .pill.f{color:var(--fail)} .pill.s{color:var(--skip)}
+main{padding:20px 24px 60px;max-width:1500px}
+.runs{display:flex;gap:2px;margin-bottom:18px;flex-wrap:wrap}
+.runs button{appearance:none;background:var(--panel);border:1px solid var(--rule);
+  color:var(--ink-dim);font-family:var(--mono);font-size:11.5px;padding:6px 13px;
+  cursor:pointer;border-radius:6px}
+.runs button:hover{color:var(--ink)}
+.runs button[aria-selected="true"]{color:var(--ink-bright);border-color:var(--claim);
+  background:var(--panel-2)}
+.runs button:focus-visible{outline:2px solid var(--claim);outline-offset:2px}
+.summary{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  padding:13px 16px;margin-bottom:16px;font-family:var(--mono);font-size:11.5px;
+  color:var(--ink-dim);display:flex;gap:20px;flex-wrap:wrap}
+.summary b{color:var(--ink);font-weight:500}
+.grp{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-dim);margin:22px 0 8px}
+.card{border:1px solid var(--rule);border-radius:10px;background:var(--panel);
+  margin-bottom:8px;overflow:hidden}
+.card.fail{border-color:color-mix(in srgb, var(--fail) 45%, var(--rule))}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:0}
+@media(max-width:900px){.row{grid-template-columns:minmax(0,1fr)}}
+.left{padding:13px 16px}
+.right{padding:13px 16px;border-left:1px solid var(--rule);background:var(--panel-2)}
+@media(max-width:900px){.right{border-left:0;border-top:1px solid var(--rule)}}
+.vtag{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;font-weight:600;
+  padding:2px 7px;border-radius:4px;display:inline-block;margin-bottom:7px}
+.vtag.PASS{color:var(--pass);background:color-mix(in srgb, var(--pass) 13%, transparent)}
+.vtag.FAIL{color:var(--fail);background:color-mix(in srgb, var(--fail) 13%, transparent)}
+.vtag.SKIP{color:var(--skip);background:color-mix(in srgb, var(--skip) 13%, transparent)}
+.claimtxt{color:var(--ink-bright);font-size:13px}
+.detail{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:7px;
+  word-break:break-word}
+.card.fail .detail{color:color-mix(in srgb, var(--fail) 72%, var(--ink))}
+.ev{margin-bottom:11px}
+.ev:last-child{margin-bottom:0}
+.ev .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-dim);margin-bottom:3px}
+.ev pre{margin:0 0 4px;font-family:var(--mono);font-size:11px;color:var(--claim);
+  white-space:pre-wrap;word-break:break-word}
+.ev .out{font-family:var(--mono);font-size:11px;color:var(--ink);white-space:pre-wrap;
+  word-break:break-word}
+.ev .out.busy{color:var(--fail)}
+.ev .note{font-size:11px;color:var(--ink-dim);margin-top:2px}
+.none{font-family:var(--mono);font-size:11px;color:var(--ink-dim);font-style:italic}
+.hidden{display:none!important}
+.legend{font-size:12px;color:var(--ink-dim);margin:0 0 16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agenda verification — event <span id="ev"></span></h1>
+  <div class="meta">
+    <span><b id="m-runs"></b> runs</span>
+    <span><b id="m-props"></b> properties each</span>
+    <span id="m-gen"></span>
+  </div>
+  <div class="tally" id="tally"></div>
+</header>
+<main>
+  <p class="legend">Left: what the generated agenda claims. Right: the deterministic call
+  that settled it, and what that call returned. Nothing on the right went near the model.</p>
+  <div class="runs" id="runs"></div>
+  <div class="summary" id="summary"></div>
+  <div id="checks"></div>
+</main>
+<script id="data" type="application/json">{
+ "event": "A099BB8D-6207-482D-9914-ABE03B7D2F62",
+ "generated": "2026-09-09 11:55",
+ "runs": [
+  {
+   "elapsed": 79.7,
+   "sessions": 24,
+   "days": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "ebd": "unusable",
+   "confidence": "38 (low)",
+   "checks": [
+    {
+     "group": "structure",
+     "label": "the call succeeded",
+     "verdict": true,
+     "detail": "ok",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "every day of the event carries at least one session",
+     "verdict": true,
+     "detail": "4 days, empty: none",
+     "evidence": [
+      {
+       "check": "every day of the event carries at least one session",
+       "call": "_event_num_days(meeting)  # event A099BB8D-6207-482D-9914-ABE03B7D2F62",
+       "output": "4",
+       "note": "from the event record's duration field"
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "no two sessions on a day overlap",
+     "verdict": true,
+     "detail": "clean",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "every session has a time slot",
+     "verdict": true,
+     "detail": "0 unslotted: []",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "sessions sit inside the hours actually booked",
+     "verdict": true,
+     "detail": "4 day windows honoured",
+     "evidence": [
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=1)",
+       "output": "2026-12-14 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=2)",
+       "output": "2026-12-15 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=3)",
+       "output": "2026-12-16 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=4)",
+       "output": "2026-12-17 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "sessions per day land inside the range the prompt asked for",
+     "verdict": true,
+     "detail": "all days in range",
+     "evidence": [
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 1 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 2 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 3 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 4 has 6 sessions",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "the total respects the whole-briefing ceiling",
+     "verdict": true,
+     "detail": "24 sessions vs cap 24",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "session_count matches the sessions actually returned",
+     "verdict": true,
+     "detail": "reported 24, got 24",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "a full day includes a break over the middle of it",
+     "verdict": true,
+     "detail": "days without a break: none",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "the company matches the event record",
+     "verdict": true,
+     "detail": "agenda 'Intel' vs record 'Intel'",
+     "evidence": [
+      {
+       "check": "the company matches the event record",
+       "call": "_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"meeting_details\"][\"company_name\"]",
+       "output": "Intel",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "the industry matches the event record",
+     "verdict": null,
+     "detail": "no industry on the event record",
+     "evidence": [
+      {
+       "check": "the industry matches the event record",
+       "call": "_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"meeting_details\"][\"industry\"]",
+       "output": "(absent)",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "the attendee count matches the attendee list",
+     "verdict": true,
+     "detail": "agenda 5 vs 5 on record",
+     "evidence": [
+      {
+       "check": "the attendee count matches the attendee list",
+       "call": "len(_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"attendees\"])",
+       "output": "5  \u2192 [Mr Craig Brooks, Ms Bonnie Little, , , ]",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "every topic tag is copied from the list the model was shown",
+     "verdict": true,
+     "detail": "9 distinct tags, all copied from the 150 shown",
+     "evidence": [
+      {
+       "check": "every topic tag is copied from the list the model was shown",
+       "call": "_available_topics(ACTIVITIES_INDEX, limit=150)",
+       "output": "150 topics \u2192 [Java Embedded, Operating Systems, Enterprise SD-WAN, BPM, Exalogic Elastic Cloud, Oracle Solaris/Linux Tools, Oracle Database Lifecycle Management Pa\u2026, Asset Lifecycle Management, +142 more]",
+       "note": "exactly the list the prompt carried"
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "every presenter is a real person from the source data",
+     "verdict": true,
+     "detail": "74 known people, none invented",
+     "evidence": [
+      {
+       "check": "every presenter is a real person from the source data",
+       "call": "get_suggested_presenters(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62', limit=100) + attendees + ranking rationale",
+       "output": "74 known names \u2192 [adrian lopez, aiden chavez, ann boyd, arron james, barry mccoy, ben harvey, bessie sims, brandie stevens, +66 more]",
+       "note": "every person the source data knows"
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "no presenter was invented for a session nothing verified",
+     "verdict": true,
+     "detail": "13 unverified sessions, all names known",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "the header presenter list is drawn from the same pool",
+     "verdict": true,
+     "detail": "7 listed, all real",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "ebd_status is a real verdict and agrees with ebd_used",
+     "verdict": true,
+     "detail": "status=unusable used=False",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "a briefing built without a usable document records its assumptions",
+     "verdict": true,
+     "detail": "5 assumptions recorded",
+     "evidence": []
+    },
+    {
+     "group": "availability",
+     "label": "no day was scheduled without an availability check",
+     "verdict": true,
+     "detail": "27 presenters checked, all days covered",
+     "evidence": [
+      {
+       "check": "no day was scheduled without an availability check",
+       "call": "result[\"scheduling\"][\"availability_checked\"]",
+       "output": "{presenters_checked: 27, presenters_with_conflicts: 15, days_without_availability_check: [], note: Every scheduled day fell inside the checked window.}",
+       "note": "what the scheduler reports it checked"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every assigned presenter is genuinely free at their slot",
+     "verdict": true,
+     "detail": "14 assignments re-checked, all free",
+     "evidence": [
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['brian.jenkins@briefingiq.com'], 1797278400000, 1797279600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Brian Jenkins \u2014 day 1 12:00 PM - 12:20 PM \u2014 Welcome & Executive Introductions"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['gilbert.watson@briefingiq.com'], 1797280500000, 1797284100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Gilbert Watson \u2014 day 1 12:35 PM - 1:35 PM \u2014 Oracle & Intel: Strategic Partnership Vision"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['roberta.kennedy@briefingiq.com'], 1797285000000, 1797288600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Roberta Kennedy \u2014 day 1 1:50 PM - 2:50 PM \u2014 Digital Transformation Roadmap Discussion"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['gilbert.watson@briefingiq.com'], 1797294000000, 1797297600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Gilbert Watson \u2014 day 1 4:20 PM - 5:20 PM \u2014 Operational Excellence & Cloud Management"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['emily.hunter@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Emily Hunter \u2014 day 2 12:30 PM - 1:30 PM \u2014 Autonomous Database Deep-Dive"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['roberta.kennedy@briefingiq.com'], 1797371100000, 1797373800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Roberta Kennedy \u2014 day 2 1:45 PM - 2:30 PM \u2014 Big Data & Analytics Architecture"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['dan.castro@briefingiq.com'], 1797379200000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Dan Castro \u2014 day 2 4:00 PM - 5:00 PM \u2014 Container Cloud & Modern App Development"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['troy.welch@briefingiq.com'], 1797453000000, 1797456600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Troy Welch \u2014 day 3 12:30 PM - 1:30 PM \u2014 Enterprise Security & Identity Strategy"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['tonya.peters@briefingiq.com'], 1797457500000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Tonya Peters \u2014 day 3 1:45 PM - 2:30 PM \u2014 Database Security & Data Safe"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['julio.perry@briefingiq.com'], 1797465600000, 1797468300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Julio Perry \u2014 day 3 4:00 PM - 4:45 PM \u2014 Networking Systems Software Deep-Dive"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['robert.allen@briefingiq.com'], 1797539400000, 1797543000000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Robert Allen \u2014 day 4 12:30 PM - 1:30 PM \u2014 Enterprise Data Management Strategy"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['irene.taylor@briefingiq.com'], 1797543900000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Irene Taylor \u2014 day 4 1:45 PM - 2:30 PM \u2014 SCM Analytics & Supply Chain Insights"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['brian.jenkins@briefingiq.com'], 1797552000000, 1797554520000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Brian Jenkins \u2014 day 4 4:00 PM - 4:42 PM \u2014 Executive Q&A and Open Discussion"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['brian.jenkins@briefingiq.com'], 1797555420000, 1797556320000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Brian Jenkins \u2014 day 4 4:57 PM - 5:12 PM \u2014 Closing Remarks & Next Steps"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every backup presenter is free at the slot they back up",
+     "verdict": true,
+     "detail": "21 backups re-checked, all free",
+     "evidence": [
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.carlson@briefingiq.com'], 1797280500000, 1797284100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Carlson \u2014 day 1 12:35 PM - 1:35 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['everett.brown@briefingiq.com'], 1797285000000, 1797288600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Everett Brown \u2014 day 1 1:50 PM - 2:50 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.douglas@briefingiq.com'], 1797285000000, 1797288600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Douglas \u2014 day 1 1:50 PM - 2:50 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.carlson@briefingiq.com'], 1797294000000, 1797297600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Carlson \u2014 day 1 4:20 PM - 5:20 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['joe.chambers@briefingiq.com'], 1797294000000, 1797297600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Joe Chambers \u2014 day 1 4:20 PM - 5:20 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['aiden.chavez@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Aiden Chavez \u2014 day 2 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['nathan.little@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Nathan Little \u2014 day 2 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['everett.brown@briefingiq.com'], 1797371100000, 1797373800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Everett Brown \u2014 day 2 1:45 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.douglas@briefingiq.com'], 1797371100000, 1797373800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Douglas \u2014 day 2 1:45 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['willie.austin@briefingiq.com'], 1797379200000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Willie Austin \u2014 day 2 4:00 PM - 5:00 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['jeanne.gonzalez@briefingiq.com'], 1797379200000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Jeanne Gonzalez \u2014 day 2 4:00 PM - 5:00 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ryan.garrett@briefingiq.com'], 1797453000000, 1797456600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ryan Garrett \u2014 day 3 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['daniel.meyer@briefingiq.com'], 1797453000000, 1797456600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Daniel Meyer \u2014 day 3 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['joel.steeves@briefingiq.com'], 1797457500000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Joel Steeves \u2014 day 3 1:45 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['devon.fields@briefingiq.com'], 1797457500000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Devon Fields \u2014 day 3 1:45 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['jacqueline.green@briefingiq.com'], 1797465600000, 1797468300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Jacqueline Green \u2014 day 3 4:00 PM - 4:45 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['melinda.austin@briefingiq.com'], 1797465600000, 1797468300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Melinda Austin \u2014 day 3 4:00 PM - 4:45 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['fred.ray@briefingiq.com'], 1797539400000, 1797543000000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Fred Ray \u2014 day 4 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ben.harvey@briefingiq.com'], 1797539400000, 1797543000000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ben Harvey \u2014 day 4 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['noah.bryant@briefingiq.com'], 1797543900000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Noah Bryant \u2014 day 4 1:45 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['carolyn.arnold@briefingiq.com'], 1797543900000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Carolyn Arnold \u2014 day 4 1:45 PM - 2:30 PM"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every topic-matched presenter says why they were picked",
+     "verdict": true,
+     "detail": "0 without a reason: []",
+     "evidence": []
+    }
+   ]
+  },
+  {
+   "elapsed": 74.2,
+   "sessions": 24,
+   "days": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "ebd": "unusable",
+   "confidence": "38 (low)",
+   "checks": [
+    {
+     "group": "structure",
+     "label": "the call succeeded",
+     "verdict": true,
+     "detail": "ok",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "every day of the event carries at least one session",
+     "verdict": true,
+     "detail": "4 days, empty: none",
+     "evidence": [
+      {
+       "check": "every day of the event carries at least one session",
+       "call": "_event_num_days(meeting)  # event A099BB8D-6207-482D-9914-ABE03B7D2F62",
+       "output": "4",
+       "note": "from the event record's duration field"
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "no two sessions on a day overlap",
+     "verdict": true,
+     "detail": "clean",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "every session has a time slot",
+     "verdict": true,
+     "detail": "0 unslotted: []",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "sessions sit inside the hours actually booked",
+     "verdict": true,
+     "detail": "4 day windows honoured",
+     "evidence": [
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=1)",
+       "output": "2026-12-14 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=2)",
+       "output": "2026-12-15 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=3)",
+       "output": "2026-12-16 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      },
+      {
+       "check": "sessions sit inside the hours actually booked",
+       "call": "_briefing_window(meeting, day_index=4)",
+       "output": "2026-12-17 12:00 \u2192 19:00 America/Los_Angeles",
+       "note": "the hours actually reserved for this day"
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "sessions per day land inside the range the prompt asked for",
+     "verdict": true,
+     "detail": "all days in range",
+     "evidence": [
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 1 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 2 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 3 has 6 sessions",
+       "note": ""
+      },
+      {
+       "check": "sessions per day land inside the range the prompt asked for",
+       "call": "_session_count_range(window_minutes=420, num_days=4)",
+       "output": "(5, 6)  \u2190 day 4 has 6 sessions",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "structure",
+     "label": "the total respects the whole-briefing ceiling",
+     "verdict": true,
+     "detail": "24 sessions vs cap 24",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "session_count matches the sessions actually returned",
+     "verdict": true,
+     "detail": "reported 24, got 24",
+     "evidence": []
+    },
+    {
+     "group": "structure",
+     "label": "a full day includes a break over the middle of it",
+     "verdict": true,
+     "detail": "days without a break: none",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "the company matches the event record",
+     "verdict": true,
+     "detail": "agenda 'Intel' vs record 'Intel'",
+     "evidence": [
+      {
+       "check": "the company matches the event record",
+       "call": "_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"meeting_details\"][\"company_name\"]",
+       "output": "Intel",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "the industry matches the event record",
+     "verdict": null,
+     "detail": "no industry on the event record",
+     "evidence": [
+      {
+       "check": "the industry matches the event record",
+       "call": "_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"meeting_details\"][\"industry\"]",
+       "output": "(absent)",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "the attendee count matches the attendee list",
+     "verdict": true,
+     "detail": "agenda 5 vs 5 on record",
+     "evidence": [
+      {
+       "check": "the attendee count matches the attendee list",
+       "call": "len(_fetch_meeting_context(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')[\"attendees\"])",
+       "output": "5  \u2192 [Mr Craig Brooks, Ms Bonnie Little, , , ]",
+       "note": ""
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "every topic tag is copied from the list the model was shown",
+     "verdict": true,
+     "detail": "10 distinct tags, all copied from the 150 shown",
+     "evidence": [
+      {
+       "check": "every topic tag is copied from the list the model was shown",
+       "call": "_available_topics(ACTIVITIES_INDEX, limit=150)",
+       "output": "150 topics \u2192 [Java Embedded, Operating Systems, Enterprise SD-WAN, BPM, Exalogic Elastic Cloud, Oracle Solaris/Linux Tools, Oracle Database Lifecycle Management Pa\u2026, Asset Lifecycle Management, +142 more]",
+       "note": "exactly the list the prompt carried"
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "every presenter is a real person from the source data",
+     "verdict": true,
+     "detail": "78 known people, none invented",
+     "evidence": [
+      {
+       "check": "every presenter is a real person from the source data",
+       "call": "get_suggested_presenters(event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62', limit=100) + attendees + ranking rationale",
+       "output": "78 known names \u2192 [adrian lopez, ann boyd, arron james, barry mccoy, bessie sims, brandie stevens, brett fox, brian jenkins, +70 more]",
+       "note": "every person the source data knows"
+      }
+     ]
+    },
+    {
+     "group": "accuracy",
+     "label": "no presenter was invented for a session nothing verified",
+     "verdict": true,
+     "detail": "14 unverified sessions, all names known",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "the header presenter list is drawn from the same pool",
+     "verdict": true,
+     "detail": "7 listed, all real",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "ebd_status is a real verdict and agrees with ebd_used",
+     "verdict": true,
+     "detail": "status=unusable used=False",
+     "evidence": []
+    },
+    {
+     "group": "accuracy",
+     "label": "a briefing built without a usable document records its assumptions",
+     "verdict": true,
+     "detail": "5 assumptions recorded",
+     "evidence": []
+    },
+    {
+     "group": "availability",
+     "label": "no day was scheduled without an availability check",
+     "verdict": true,
+     "detail": "29 presenters checked, all days covered",
+     "evidence": [
+      {
+       "check": "no day was scheduled without an availability check",
+       "call": "result[\"scheduling\"][\"availability_checked\"]",
+       "output": "{presenters_checked: 29, presenters_with_conflicts: 16, days_without_availability_check: [], note: Every scheduled day fell inside the checked window.}",
+       "note": "what the scheduler reports it checked"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every assigned presenter is genuinely free at their slot",
+     "verdict": true,
+     "detail": "20 assignments re-checked, all free",
+     "evidence": [
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797278400000, 1797279600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 1 12:00 PM - 12:20 PM \u2014 Welcome & Briefing Objectives"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['brian.jenkins@briefingiq.com'], 1797280500000, 1797284100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Brian Jenkins \u2014 day 1 12:35 PM - 1:35 PM \u2014 Intel & Oracle: Strategic Vision Alignment"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['gilbert.watson@briefingiq.com'], 1797285000000, 1797288000000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Gilbert Watson \u2014 day 1 1:50 PM - 2:40 PM \u2014 Digital Transformation & Cloud Strategy Overview"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['ida.ellis@briefingiq.com'], 1797293400000, 1797296100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Ida Ellis \u2014 day 1 4:10 PM - 4:55 PM \u2014 Financial Value & Investment Framework"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797297000000, 1797298800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 1 5:10 PM - 5:40 PM \u2014 Day 1 Recap & Open Discussion"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797364800000, 1797365700000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 2 12:00 PM - 12:15 PM \u2014 Day 2 Kickoff: Technical Deep-Dive Agenda"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['ruben.fernandez@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Ruben Fernandez \u2014 day 2 12:30 PM - 1:30 PM \u2014 Database Technology & Lifecycle Management"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['roberta.kennedy@briefingiq.com'], 1797371100000, 1797374400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Roberta Kennedy \u2014 day 2 1:45 PM - 2:40 PM \u2014 Big Data & Advanced Analytics Capabilities"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['tonya.peters@briefingiq.com'], 1797379800000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Tonya Peters \u2014 day 2 4:10 PM - 5:00 PM \u2014 Database Security & Data Safe Working Session"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['chad.henry@briefingiq.com'], 1797383700000, 1797385200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Chad Henry \u2014 day 2 5:15 PM - 5:40 PM \u2014 Day 2 Recap & Technical Q&A"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797451200000, 1797452100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 3 12:00 PM - 12:15 PM \u2014 Day 3 Kickoff: Operations & Integration Focus"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['jessie.hunter@briefingiq.com'], 1797453000000, 1797456300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Jessie Hunter \u2014 day 3 12:30 PM - 1:25 PM \u2014 Cloud Integration & Application Modernization"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['douglas.carlson@briefingiq.com'], 1797457200000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Douglas Carlson \u2014 day 3 1:40 PM - 2:30 PM \u2014 Operational Excellence: Continuous Delivery & DevOps"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['jar.carter@briefingiq.com'], 1797465600000, 1797468900000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Jar Carter \u2014 day 3 4:00 PM - 4:55 PM \u2014 Hands-On Working Session: Architecture Whiteboarding"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['ethel.walker@briefingiq.com'], 1797469800000, 1797471300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Ethel Walker \u2014 day 3 5:10 PM - 5:35 PM \u2014 Day 3 Recap & Priorities Check-In"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797537600000, 1797538500000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 4 12:00 PM - 12:15 PM \u2014 Day 4 Kickoff: Roadmap & Next Steps Focus"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['jeanne.gonzalez@briefingiq.com'], 1797539400000, 1797542400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Jeanne Gonzalez \u2014 day 4 12:30 PM - 1:20 PM \u2014 IoT & Emerging Technology Landscape"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['johnny.wallace@briefingiq.com'], 1797543300000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Johnny Wallace \u2014 day 4 1:35 PM - 2:30 PM \u2014 Enterprise Architecture Roadmap Working Session"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['brian.jenkins@briefingiq.com'], 1797552000000, 1797554700000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Brian Jenkins \u2014 day 4 4:00 PM - 4:45 PM \u2014 Executive Roundtable: Strategic Priorities & Commitments"
+      },
+      {
+       "check": "every assigned presenter is genuinely free at their slot",
+       "call": "_check_presenter_conflicts(['katie.west@briefingiq.com'], 1797555600000, 1797556800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "Katie West \u2014 day 4 5:00 PM - 5:20 PM \u2014 Closing Summary & Next Steps"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every backup presenter is free at the slot they back up",
+     "verdict": true,
+     "detail": "19 backups re-checked, all free",
+     "evidence": [
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.carlson@briefingiq.com'], 1797285000000, 1797288000000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Carlson \u2014 day 1 1:50 PM - 2:40 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['tomothy.schmidt@briefingiq.com'], 1797293400000, 1797296100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Tomothy Schmidt \u2014 day 1 4:10 PM - 4:55 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['peter.chapman@briefingiq.com'], 1797293400000, 1797296100000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Peter Chapman \u2014 day 1 4:10 PM - 4:55 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['scott.kelly@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Scott Kelly \u2014 day 2 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['marsha.alvarez@briefingiq.com'], 1797366600000, 1797370200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Marsha Alvarez \u2014 day 2 12:30 PM - 1:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['everett.brown@briefingiq.com'], 1797371100000, 1797374400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Everett Brown \u2014 day 2 1:45 PM - 2:40 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['ricardo.douglas@briefingiq.com'], 1797371100000, 1797374400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Ricardo Douglas \u2014 day 2 1:45 PM - 2:40 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['joel.steeves@briefingiq.com'], 1797379800000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Joel Steeves \u2014 day 2 4:10 PM - 5:00 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['devon.fields@briefingiq.com'], 1797379800000, 1797382800000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Devon Fields \u2014 day 2 4:10 PM - 5:00 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['judith.hayes@briefingiq.com'], 1797453000000, 1797456300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Judith Hayes \u2014 day 3 12:30 PM - 1:25 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['carter.brown@briefingiq.com'], 1797453000000, 1797456300000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Carter Brown \u2014 day 3 12:30 PM - 1:25 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['guy.williamson@briefingiq.com'], 1797457200000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Guy Williamson \u2014 day 3 1:40 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['brett.fox@briefingiq.com'], 1797457200000, 1797460200000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Brett Fox \u2014 day 3 1:40 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['guy.johnson@briefingiq.com'], 1797465600000, 1797468900000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Guy Johnson \u2014 day 3 4:00 PM - 4:55 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['jessie.hunter@briefingiq.com'], 1797465600000, 1797468900000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Jessie Hunter \u2014 day 3 4:00 PM - 4:55 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['darrell.alexander@briefingiq.com'], 1797539400000, 1797542400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Darrell Alexander \u2014 day 4 12:30 PM - 1:20 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['robert.allen@briefingiq.com'], 1797539400000, 1797542400000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Robert Allen \u2014 day 4 12:30 PM - 1:20 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['tracy.taylor@briefingiq.com'], 1797543300000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Tracy Taylor \u2014 day 4 1:35 PM - 2:30 PM"
+      },
+      {
+       "check": "every backup presenter is free at the slot they back up",
+       "call": "_check_presenter_conflicts(['robert.gutierrez@briefingiq.com'], 1797543300000, 1797546600000, exclude_event_id='A099BB8D-6207-482D-9914-ABE03B7D2F62')",
+       "output": "free",
+       "note": "backup Robert Gutierrez \u2014 day 4 1:35 PM - 2:30 PM"
+      }
+     ]
+    },
+    {
+     "group": "availability",
+     "label": "every topic-matched presenter says why they were picked",
+     "verdict": true,
+     "detail": "0 without a reason: []",
+     "evidence": []
+    }
+   ]
+  }
+ ]
+}</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const mark = v => v === true ? 'PASS' : (v === null ? 'SKIP' : 'FAIL');
+
+document.getElementById('ev').textContent = D.event;
+document.getElementById('m-runs').textContent = D.runs.length;
+document.getElementById('m-props').textContent = D.runs.length ? D.runs[0].checks.length : 0;
+document.getElementById('m-gen').textContent = D.generated;
+
+const flat = D.runs.flatMap(r => r.checks);
+const n = v => flat.filter(c => mark(c.verdict) === v).length;
+document.getElementById('tally').innerHTML =
+    '<span class="pill p">' + n('PASS') + ' passed</span>'
+  + '<span class="pill f">' + n('FAIL') + ' failed</span>'
+  + '<span class="pill s">' + n('SKIP') + ' skipped</span>';
+
+document.getElementById('runs').innerHTML = D.runs.map((r, i) => {
+  const f = r.checks.filter(c => c.verdict === false).length;
+  return '<button role="tab" data-i="' + i + '" aria-selected="' + (i === 0) + '">run '
+       + (i + 1) + (f ? ' · ' + f + ' failed' : ' · clean') + '</button>';
+}).join('');
+
+function render(i){
+  const r = D.runs[i];
+  document.getElementById('summary').innerHTML =
+      '<span><b>' + r.sessions + '</b> sessions</span>'
+    + '<span>days <b>[' + r.days.join(', ') + ']</b></span>'
+    + '<span><b>' + r.elapsed.toFixed(1) + 's</b></span>'
+    + '<span>ebd <b>' + esc(r.ebd) + '</b></span>'
+    + '<span>confidence <b>' + esc(r.confidence) + '</b></span>';
+
+  let html = '', group = null;
+  r.checks.forEach(c => {
+    if (c.group !== group) { group = c.group; html += '<div class="grp">' + esc(group) + '</div>'; }
+    const m = mark(c.verdict);
+    const ev = (c.evidence || []).length
+      ? c.evidence.map(e =>
+          '<div class="ev"><div class="lbl">call</div><pre>' + esc(e.call) + '</pre>'
+          + '<div class="out' + (/^BUSY/.test(e.output) ? ' busy' : '') + '">'
+          + esc(e.output) + '</div>'
+          + (e.note ? '<div class="note">' + esc(e.note) + '</div>' : '')
+          + '</div>').join('')
+      : '<div class="none">no external call — checked against the agenda itself</div>';
+    html += '<div class="card ' + (c.verdict === false ? 'fail' : '') + '"><div class="row">'
+          + '<div class="left"><span class="vtag ' + m + '">' + m + '</span>'
+          + '<div class="claimtxt">' + esc(c.label) + '</div>'
+          + '<div class="detail">' + esc(c.detail) + '</div></div>'
+          + '<div class="right">' + ev + '</div></div></div>';
+  });
+  document.getElementById('checks').innerHTML = html;
+  document.querySelectorAll('#runs button').forEach(b =>
+    b.setAttribute('aria-selected', String(Number(b.dataset.i) === i)));
+}
+document.getElementById('runs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) render(Number(b.dataset.i));
+});
+render(0);
+</script>
+</body>
+</html>

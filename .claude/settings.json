@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /Users/jyothiraditya/projects-main/calender-insights *)",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__evaluate_script"
+    ],
+    "additionalDirectories": [
+      "/Users/jyothiraditya/projects-main/calender-insights"
+    ]
+  }
+}

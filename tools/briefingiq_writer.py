@@ -80,7 +80,7 @@ def _make_headers(
     ctx_tz = _hget(sh, "x-cloud-context-timezone") or "America/Los_Angeles"
     req_tz = _hget(sh, "x-cloud-requested-timezone") or ctx_tz
     client_tz = _hget(sh, "x-cloud-client-timezone") or ctx_tz
-    user_email = _hget(sh, "x_cloud_user", "x-cloud-user") or "supportuser@allianceit.com"
+    user_email = _hget(sh, "x_cloud_user", "x-cloud-user") or "supportuser@briefingiq.com"
 
     # event_id arg wins, else fall back to request header
     eid = event_id or _hget(sh, "x-cloud-eventid", "x-cloud-event-id") or ""
@@ -259,6 +259,96 @@ def _date_for_day(
     return (start + timedelta(days=day_num - 1)).strftime("%Y-%m-%d")
 
 
+def _fetch_event_days(headers: Dict[str, str], event_id: str) -> List[Dict[str, str]]:
+    """
+    Fetch the event's real scheduled days.
+
+    Each day carries two dates that are *not* interchangeable:
+
+      * ``eventDate``      — which calendar day the session belongs to
+      * ``eventStartTime`` — the date the clock times are anchored to
+
+    On an ordinary event these are the same date, so the distinction is
+    invisible.  Reschedule an event and they drift apart: the app keeps
+    ``eventDate`` on the new day while start/end times stay pinned to the
+    original one.  Send the wrong date and the activity is created fine but
+    lands on a day the agenda screen never queries, so it renders nowhere.
+    """
+    url = f"{BASE_URL}/events/{event_id}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+    except requests.RequestException as exc:
+        logger.warning(f"_fetch_event_days: request failed for {event_id}: {exc}")
+        return []
+    if resp.status_code != 200:
+        logger.warning(f"_fetch_event_days: {resp.status_code} for event {event_id}")
+        return []
+
+    def _iso_date(node: Optional[Dict]) -> str:
+        """Pull a plain YYYY-MM-DD out of one of BriefingIQ's date envelopes."""
+        if not isinstance(node, dict):
+            return ""
+        raw = (
+            node.get("isoDate")
+            or (node.get("client") or {}).get("clientZoneDate")
+            or node.get("zoneDate")
+            or ""
+        )
+        return str(raw)[:10]
+
+    days: List[Dict[str, str]] = []
+    for i, d in enumerate(resp.json().get("activityDays") or [], start=1):
+        event_date = _iso_date(d.get("eventDate"))
+        if not event_date:
+            continue
+        days.append({
+            "day": i,
+            "event_date": event_date,
+            # Falling back to event_date keeps ordinary events working when the
+            # start-time envelope is missing.
+            "clock_date": _iso_date(d.get("eventStartTime")) or event_date,
+            "activity_day_id": d.get("eventDateId") or "",
+        })
+    logger.info(f"_fetch_event_days: {len(days)} day(s) for event {event_id}")
+    return days
+
+
+def _dates_for_session(
+    day: Any,
+    event_days: List[Dict[str, str]],
+    event_date: str,
+    day_dates: Optional[Dict[Any, str]] = None,
+) -> Tuple[str, str]:
+    """
+    Resolve ``(activity_date, clock_date)`` for one session.
+
+    The event's own days win whenever we could fetch them — they are the only
+    source that stays correct across a reschedule.  Without them we fall back
+    to the previous behaviour (caller override, else consecutive days), which
+    is a guess: it assumes the two dates are the same and the days run back to
+    back.
+    """
+    try:
+        day_num = int(day)
+    except (TypeError, ValueError):
+        day_num = 1
+    if day_num < 1:
+        day_num = 1
+
+    for d in event_days:
+        if d["day"] == day_num:
+            return d["event_date"], d["clock_date"]
+
+    if event_days:
+        logger.warning(
+            f"_dates_for_session: day {day_num} is outside the event's "
+            f"{len(event_days)} scheduled day(s); falling back to date arithmetic"
+        )
+
+    guessed = _date_for_day(event_date, day_num, day_dates)
+    return guessed, guessed
+
+
 # ── Core steps ───────────────────────────────────────────────────────────────
 
 def _create_activity(headers: Dict, event_id: str, event_date: str, start_iso: str, end_iso: str, duration: int, resource_id: Optional[str] = None) -> Optional[str]:
@@ -387,14 +477,18 @@ def push_agenda_to_app(
         presenter_emails: Optional list of presenter emails to add to every session
         resource_id:     Optional room resourceId to assign activities to (shows in calendar)
         schedule_headers: Incoming request headers (used for tenant/category context)
-        day_dates:       Optional {day_number: "YYYY-MM-DD"} override for events whose
-                         days are not consecutive. Defaults to event_date + (day - 1).
+        day_dates:       Optional {day_number: "YYYY-MM-DD"} fallback for events whose
+                         days are not consecutive. Only consulted when the event's
+                         own days could not be fetched; the event is authoritative.
 
     Returns:
         Dict with success count, failures, and created activity IDs
     """
     headers = _make_headers(token, event_id, schedule_headers)
     topics = _fetch_topics(headers)
+    # The event's real days. Empty means we could not reach it; the date
+    # helpers then fall back to arithmetic rather than refusing the push.
+    event_days = _fetch_event_days(headers, event_id)
 
     # ── Pre-flight: check room conflicts if a room is specified ──────────
     conflicts = []
@@ -422,8 +516,10 @@ def push_agenda_to_app(
     if resource_id and existing_bookings:
         for i, session in enumerate(sessions):
             time_slot = session.get("time_slot", "")
-            session_date = _date_for_day(event_date, session.get("day"), day_dates)
-            start_iso, end_iso, _ = _parse_time_slot(time_slot, session_date)
+            session_date, clock_date = _dates_for_session(
+                session.get("day"), event_days, event_date, day_dates
+            )
+            start_iso, end_iso, _ = _parse_time_slot(time_slot, clock_date)
             s_ms = _iso_to_ms(start_iso)
             e_ms = _iso_to_ms(end_iso)
             for bk in existing_bookings:
@@ -457,9 +553,12 @@ def push_agenda_to_app(
         title = session.get("title") or session.get("name") or f"Session {i+1}"
         time_slot = session.get("time_slot", "")
 
-        # Parse time against this session's own day, not the event start date
-        session_date = _date_for_day(event_date, session.get("day"), day_dates)
-        start_iso, end_iso, duration = _parse_time_slot(time_slot, session_date)
+        # `session_date` says which event day this belongs to; `clock_date` is
+        # what the start/end times hang off. They differ on a rescheduled event.
+        session_date, clock_date = _dates_for_session(
+            session.get("day"), event_days, event_date, day_dates
+        )
+        start_iso, end_iso, duration = _parse_time_slot(time_slot, clock_date)
 
         # Step 1: create activity (with optional room assignment)
         activity_id = _create_activity(headers, event_id, session_date, start_iso, end_iso, duration, resource_id=resource_id)
