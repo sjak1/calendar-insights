@@ -6,6 +6,7 @@ import requests
 import threading
 import time
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from query_processor import handle_query
@@ -18,6 +19,35 @@ setup_logging()
 logger = get_logger(__name__)
 
 app = FastAPI()
+
+# Browser origins allowed to call this API. The voice UI runs on the frontend
+# domain while the API lives on the Lambda URL, so those calls are cross-origin
+# and need this. Override with CORS_ALLOW_ORIGINS (comma-separated) to add an
+# origin without a redeploy — it is read at import, so the Lambda only needs a
+# config update and a cold start.
+_default_origins = [
+    "https://briefings.briefingiq.com",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "http://localhost:8080",
+]
+allowed_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ALLOW_ORIGINS", ",".join(_default_origins)).split(",")
+    if o.strip()
+]
+logger.info(f"CORS allowed origins: {allowed_origins}")
+
+# Note: this only unblocks browsers. It is not access control — a non-browser
+# client ignores CORS entirely, so /live/session still needs its own auth.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+    max_age=3600,
+)
 
 # Mount static files directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")
