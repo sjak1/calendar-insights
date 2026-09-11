@@ -5,7 +5,7 @@ import re
 import requests
 import threading
 import time
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from query_processor import handle_query
@@ -317,6 +317,19 @@ supporting details. Offer more rather than reading a long list aloud.
 ## Interruption
 Stop speaking when the user interrupts, and listen.
 """.strip()
+
+
+@app.options("/live/session")
+async def live_session_preflight() -> Response:
+    """Answer the CORS preflight with a success status.
+
+    The load balancer in front of this app already attaches the CORS headers,
+    but it only short-circuits OPTIONS for routes in its own config. This route
+    is not in it, so the preflight reaches the app, which would otherwise 405
+    and fail the check. Deliberately sets no CORS headers of its own: a second
+    Access-Control-Allow-Origin makes the browser reject the response.
+    """
+    return Response(status_code=204)
 
 
 @app.post("/live/session")
